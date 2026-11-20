@@ -1,0 +1,510 @@
+"""HTTP routes of the acceptance review console.
+
+A separate page from ``/tester`` on purpose: the tester serves the batch a browser started and is
+scoped to that browser's cookie, while acceptance works across every batch of a window and its unit
+of work is one case × protocol verdict plus a human decision. It never starts a run; the tester and
+the run console stay the place where a failing case is re-executed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final
+
+from eval.osp.catalog import CaseCatalog
+from langfuse_export.config import Config
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.routing import Route
+
+from demo.web.review.export import (
+    build_payload,
+    build_trace_payload,
+    payload_json,
+    payload_yaml,
+    report_markdown,
+)
+from demo.web.review.service import (
+    FETCH_CONCURRENCY,
+    MAX_TRACE_IDS,
+    PROTOCOLS,
+    STATUSES,
+    ReviewService,
+)
+from demo.web.review.store import CATEGORIES, DECISIONS, ReviewStore
+from demo.web.review.traces import TraceStore
+
+#: Directory of the console page assets.
+REVIEW_DIR: Final[Path] = Path(__file__).resolve().parent
+
+#: Anonymous operator identity, shared with the tester and the annotation console.
+CLIENT_COOKIE: Final[str] = "a2at_tester_client"
+
+#: Two days is enough for the acceptance batches; a wider window mostly re-reads stale evidence.
+DEFAULT_DAYS: Final[float] = 2.0
+MAX_DAYS: Final[float] = 90.0
+MAX_BATCHES: Final[int] = 500
+
+
+def build_review_routes(
+    *,
+    catalog: CaseCatalog,
+    runs_dir: Path,
+    client_db_path: Path | None,
+    store_path: Path | None = None,
+    trace_store: TraceStore | None = None,
+    trace_config: Config | None = None,
+    trace_fetch_enabled: bool = True,
+) -> list[Route]:
+    """Build the acceptance review routes.
+
+    ``trace_store`` defaults to ``<runs-dir>/review/langfuse``; ``trace_fetch_enabled`` lets the
+    standalone read-only instance forbid Langfuse calls.
+    """
+    resolved_store = ReviewStore(store_path if store_path is not None else Path(runs_dir) / "review" / "review.sqlite3")
+    resolved_store.ensure()
+    resolved_trace_store = trace_store if trace_store is not None else TraceStore(Path(runs_dir))
+    service = ReviewService(
+        store=resolved_store,
+        catalog=catalog,
+        runs_dir=Path(runs_dir),
+        client_db_path=client_db_path,
+        trace_store=resolved_trace_store,
+        trace_config=trace_config,
+        trace_fetch_enabled=trace_fetch_enabled,
+    )
+
+    async def page(request: Request) -> Response:
+        """Serve the console shell."""
+        del request
+        return FileResponse(REVIEW_DIR / "index.html", headers={"Cache-Control": "no-store"})
+
+    async def stylesheet(request: Request) -> Response:
+        """Serve the console stylesheet."""
+        del request
+        return FileResponse(
+            REVIEW_DIR / "app.css",
+            media_type="text/css",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def script(request: Request) -> Response:
+        """Serve the console module."""
+        del request
+        return FileResponse(
+            REVIEW_DIR / "main.js",
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def meta(request: Request) -> Response:
+        """Describe what the console may offer."""
+        del request
+        return JSONResponse(
+            {
+                "protocols": list(PROTOCOLS),
+                "statuses": list(STATUSES),
+                "decisions": list(DECISIONS),
+                "categories": list(CATEGORIES),
+                "runsDir": str(runs_dir),
+                "clientDb": str(client_db_path) if client_db_path is not None else None,
+                "store": str(resolved_store.path),
+                # Every trace fetch is explicit; the page uses these to enable the buttons and say
+                # where snapshots live, so a reviewer can hand the acceptance pack to the customer.
+                "traceFetchEnabled": trace_fetch_enabled,
+                "traceConcurrency": FETCH_CONCURRENCY,
+                "traceConfigured": service.trace_configured(),
+                "traceStore": str(resolved_trace_store.root),
+                "corpusVersion": catalog.version,
+                "defaultDays": DEFAULT_DAYS,
+                "maxDays": MAX_DAYS,
+                "maxBatches": MAX_BATCHES,
+                "maxTraceIds": MAX_TRACE_IDS,
+            }
+        )
+
+    async def cases(request: Request) -> Response:
+        """Return every case with its two protocol verdicts and decisions."""
+        rows = await asyncio.to_thread(service.cases)
+        progress = await asyncio.to_thread(service.progress, rows)
+        return JSONResponse({"cases": rows, **progress})
+
+    async def batches(request: Request) -> Response:
+        """Return the ingested batches, newest first, without judging them."""
+        rows = await asyncio.to_thread(service.batches)
+        return JSONResponse({"batches": rows})
+
+    async def batch(request: Request) -> Response:
+        """Return every case × protocol judged against one batch, optionally one of its rounds."""
+        batch_id = str(request.path_params.get("batch_id") or "")
+        round_param = request.query_params.get("round")
+        round_value: int | None = None
+        if round_param not in (None, ""):
+            try:
+                round_value = max(1, int(round_param))
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+        try:
+            payload = await asyncio.to_thread(service.batch_rows, batch_id, round_value)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse(payload)
+
+    async def scan(request: Request) -> Response:
+        """Collect the evidence of the recent tester batches."""
+        days = min(MAX_DAYS, max(0.05, _float_param(request, "days", DEFAULT_DAYS)))
+        limit = max(1, min(MAX_BATCHES, _int_param(request, "maxBatches", MAX_BATCHES)))
+        summary = await asyncio.to_thread(service.scan, days=days, max_batches=limit)
+        rows = await asyncio.to_thread(service.cases)
+        progress = await asyncio.to_thread(service.progress, rows)
+        return JSONResponse({"scan": summary, **progress})
+
+    async def detail(request: Request) -> Response:
+        """Return every round of one case × protocol, judged, plus its decision."""
+        try:
+            case_id = int(request.path_params["case_id"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
+        protocol = request.path_params["protocol"]
+        if protocol not in PROTOCOLS:
+            return JSONResponse({"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400)
+        try:
+            payload = await asyncio.to_thread(service.detail, case_id, protocol)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse(payload)
+
+    async def decision(request: Request) -> Response:
+        """Record one human decision for a case × protocol."""
+        try:
+            case_id = int(request.path_params["case_id"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
+        protocol = request.path_params["protocol"]
+        if protocol not in PROTOCOLS:
+            return JSONResponse({"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400)
+        body = await _json_body(request)
+        status = str(body.get("status") or "")
+        category = str(body.get("category") or "")
+        note = body.get("note")
+        try:
+            payload = await asyncio.to_thread(
+                service.set_decision,
+                case_id,
+                protocol,
+                status=status,
+                category=category,
+                note=note if isinstance(note, str) else "",
+                reviewer=_actor(request),
+                actor=_actor(request),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "detail": payload})
+
+    async def fetch_trace(request: Request) -> Response:
+        """Fetch one round's trace snapshot from Langfuse (explicit opt-in).
+
+        The body names the round the reviewer is looking at. An empty body still works and means
+        "the newest round", which keeps older callers usable.
+        """
+        try:
+            case_id = int(request.path_params["case_id"])
+        except (KeyError, TypeError, ValueError):
+            return JSONResponse({"error": "caseId 必须是整数。"}, status_code=400)
+        protocol = request.path_params["protocol"]
+        if protocol not in PROTOCOLS:
+            return JSONResponse({"error": f"protocol 只能是 {', '.join(PROTOCOLS)}。"}, status_code=400)
+        options = await _json_body(request)
+        round_value = options.get("round")
+        source_round: int | None = None
+        if round_value is not None and round_value != "":
+            if isinstance(round_value, bool) or not isinstance(round_value, (int, str)):
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+            try:
+                source_round = max(1, int(round_value))
+            except ValueError:
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+        try:
+            payload = await asyncio.to_thread(
+                service.fetch_trace,
+                case_id,
+                protocol,
+                trace_id=_optional_text(options.get("traceId")),
+                run_id=_optional_text(options.get("runId")),
+                batch_id=_optional_text(options.get("batchId")),
+                source_round=source_round,
+                force=options.get("force") is True,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "trace": payload})
+
+    async def fetch_batch_traces(request: Request) -> Response:
+        """Fetch every trace of one batch round (two requests in flight by default).
+
+        One action for the round page: the service skips snapshots already on disk, attaches every
+        fetched snapshot to its evidence row, and stops at the first 429 instead of retrying.
+        """
+        batch_id = str(request.path_params.get("batch_id") or "").strip()
+        if not batch_id:
+            return JSONResponse({"error": "batchId 不能为空。"}, status_code=400)
+        options = await _json_body(request)
+        round_value = options.get("round")
+        source_round: int | None = None
+        if round_value is not None and round_value != "":
+            if isinstance(round_value, bool) or not isinstance(round_value, (int, str)):
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+            try:
+                source_round = max(1, int(round_value))
+            except ValueError:
+                return JSONResponse({"error": "round 必须是整数。"}, status_code=400)
+        concurrency_value = options.get("concurrency")
+        concurrency = FETCH_CONCURRENCY
+        if concurrency_value not in (None, ""):
+            if isinstance(concurrency_value, bool) or not isinstance(concurrency_value, (int, str)):
+                return JSONResponse({"error": "concurrency 必须是整数。"}, status_code=400)
+            try:
+                concurrency = max(1, int(concurrency_value))
+            except ValueError:
+                return JSONResponse({"error": "concurrency 必须是整数。"}, status_code=400)
+        try:
+            summary = await asyncio.to_thread(
+                service.fetch_round_traces,
+                batch_id,
+                source_round,
+                force=options.get("force") is True,
+                concurrency=concurrency,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "summary": summary})
+
+    async def export_batch_traces(request: Request) -> Response:
+        """Download the raw Langfuse observations of one batch round as a zip.
+
+        Only snapshots already on disk are packed; missing traces are listed in ``_missing.txt``
+        inside the archive. The page's "抓取本轮轨迹" action fills the cache first.
+        """
+        batch_id = str(request.path_params.get("batch_id") or "").strip()
+        if not batch_id:
+            return JSONResponse({"error": "batchId 不能为空。"}, status_code=400)
+        round_value = request.query_params.get("round")
+        source_round: int | None = None
+        if round_value not in (None, ""):
+            try:
+                source_round = int(round_value)
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "round 必须是正整数。"}, status_code=400)
+            if source_round < 1:
+                return JSONResponse({"error": "round 必须是正整数。"}, status_code=400)
+        try:
+            path = await asyncio.to_thread(
+                service.export_trace_archive,
+                batch_id,
+                source_round,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
+    async def traces(request: Request) -> Response:
+        """Resolve a pasted list of trace ids / run ids to judged evidence.
+
+        This lookup ignores the scan window: it may ingest a tester item the window missed, which
+        is the same write ``scan`` performs. Rows that cannot support the six-dimension verdict
+        come back as ``client`` / ``trace`` instead of a guessed pass or fail.
+        """
+        body = await _json_body(request)
+        raw = _ids_from_body(body)
+        if raw is None:
+            return JSONResponse(
+                {"error": "ids 不能为空：传字符串或字符串数组。"},
+                status_code=400,
+            )
+        try:
+            payload = await asyncio.to_thread(service.resolve_traces, raw)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(payload)
+
+    async def trace(request: Request) -> Response:
+        """Return one run's judged detail, or its run / snapshot facts."""
+        trace_id = str(request.path_params.get("trace_id") or "").strip()
+        if not trace_id:
+            return JSONResponse({"error": "traceId 不能为空。"}, status_code=400)
+        run_id = _optional_text(request.query_params.get("runId"))
+        try:
+            payload = await asyncio.to_thread(
+                service.trace_detail,
+                trace_id,
+                run_id=run_id,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse(payload)
+
+    async def fetch_trace_by_id(request: Request) -> Response:
+        """Fetch one trace snapshot without requiring an ingested case row."""
+        trace_id = str(request.path_params.get("trace_id") or "").strip()
+        if not trace_id:
+            return JSONResponse({"error": "traceId 不能为空。"}, status_code=400)
+        options = await _json_body(request)
+        try:
+            payload = await asyncio.to_thread(
+                service.fetch_trace_by_id,
+                trace_id,
+                run_id=_optional_text(options.get("runId")),
+                force=options.get("force") is True,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "trace": payload})
+
+    async def export_traces(request: Request) -> Response:
+        """Export the hand-picked trace / run list as a portable document."""
+        body = await _json_body(request)
+        raw = _ids_from_body(body)
+        if raw is None:
+            return JSONResponse({"error": "ids 不能为空。"}, status_code=400)
+        result = await asyncio.to_thread(service.export_traces, raw)
+        payload = build_trace_payload(result, corpus_version=service.catalog.version)
+        if str(body.get("format") or "json").lower() == "yaml":
+            return Response(
+                payload_yaml(payload),
+                media_type="application/yaml; charset=utf-8",
+                headers={
+                    "Content-Disposition": 'attachment; filename="osp-review-traces.yaml"'
+                },
+            )
+        return Response(
+            payload_json(payload),
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": 'attachment; filename="osp-review-traces.json"'
+            },
+        )
+
+    async def export_all_json(request: Request) -> Response:
+        """Return the review payload as JSON."""
+        del request
+        payload = await asyncio.to_thread(_payload, service)
+        return Response(payload_json(payload), media_type="application/json; charset=utf-8")
+
+    async def export_all_yaml(request: Request) -> Response:
+        """Return the review payload as YAML."""
+        del request
+        payload = await asyncio.to_thread(_payload, service)
+        return Response(
+            payload_yaml(payload),
+            media_type="application/yaml; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="osp-review.yaml"'},
+        )
+
+    async def report(request: Request) -> Response:
+        """Return the acceptance report as Markdown."""
+        del request
+        payload = await asyncio.to_thread(_payload, service)
+        body = report_markdown(payload, window=service.last_scan)
+        return Response(
+            body,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="osp-review-report.md"'},
+        )
+
+    return [
+        Route("/review", page),
+        Route("/review/app.css", stylesheet),
+        Route("/review/main.js", script),
+        Route("/api/review/meta", meta),
+        Route("/api/review/cases", cases),
+        Route("/api/review/batches", batches),
+        Route("/api/review/batch/{batch_id}", batch),
+        Route(
+            "/api/review/batch/{batch_id}/traces",
+            fetch_batch_traces,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/review/batch/{batch_id}/export.traces.zip",
+            export_batch_traces,
+        ),
+        Route("/api/review/scan", scan, methods=["POST"]),
+        Route("/api/review/traces", traces, methods=["POST"]),
+        Route("/api/review/traces/export", export_traces, methods=["POST"]),
+        Route("/api/review/trace/{trace_id}", trace),
+        Route("/api/review/trace/{trace_id}/fetch", fetch_trace_by_id, methods=["POST"]),
+        Route("/api/review/case/{case_id}/{protocol}", detail),
+        Route(
+            "/api/review/case/{case_id}/{protocol}/decision",
+            decision,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/review/case/{case_id}/{protocol}/trace",
+            fetch_trace,
+            methods=["POST"],
+        ),
+        Route("/api/review/export.json", export_all_json),
+        Route("/api/review/export.yaml", export_all_yaml),
+        Route("/api/review/report.md", report),
+    ]
+
+
+def _payload(service: ReviewService) -> dict[str, object]:
+    """Build the export payload from one consistent projection."""
+    rows = service.export_cases()
+    progress = service.progress(rows)
+    return build_payload(rows, counts=progress, corpus_version=service.catalog.version)
+
+
+async def _json_body(request: Request) -> Mapping[str, object]:
+    """Return the request body as a mapping."""
+    try:
+        payload = json.loads((await request.body()) or b"{}")
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _optional_text(value: object) -> str | None:
+    """Return a non-empty string from a JSON body field, or ``None``."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _ids_from_body(body: Mapping[str, object]) -> str | list[str] | None:
+    """Return the trace ids of one request body, accepting a string or a string array."""
+    value = body.get("ids")
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, list):
+        rows = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return rows or None
+    return None
+
+
+def _actor(request: Request) -> str:
+    """Return the operator identity the console records with a decision."""
+    return (request.cookies.get(CLIENT_COOKIE) or "").strip()
+
+
+def _int_param(request: Request, name: str, default: int) -> int:
+    """Return one integer query parameter, falling back to the default."""
+    try:
+        return int(request.query_params.get(name, ""))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_param(request: Request, name: str, default: float) -> float:
+    """Return one float query parameter, falling back to the default."""
+    try:
+        return float(request.query_params.get(name, ""))
+    except (TypeError, ValueError):
+        return default
+
+
+__all__ = ["REVIEW_DIR", "build_review_routes"]

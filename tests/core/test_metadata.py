@@ -10,10 +10,13 @@ import pytest
 
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
+    NEGOTIATION_T_EXTENSION_URI,
     TEMPLATE_URI_METADATA_KEY,
     MetadataContent,
     NegotiationContext,
     NegotiationPerformative,
+    decode_extension_value,
+    extension_value,
 )
 from a2a_t.core.standard_templates import INFORMATION_NEGOTIATION_PROPOSE_URI
 
@@ -317,3 +320,75 @@ def test_metadata_content_equality_takes_the_negotiation_context_into_account(
         "https://example/ext",
         NegotiationContext("session-id", 1, 5, performative),
     )
+
+
+# ---------------------------------------------------------------- extension value decoding
+
+
+def test_decode_extension_value_reads_a_json_object_string() -> None:
+    assert decode_extension_value('{"message": []}') == {"message": []}
+
+
+def test_decode_extension_value_reads_a_json_array_string() -> None:
+    assert decode_extension_value('[{"message": []}]') == [{"message": []}]
+
+
+def test_decode_extension_value_reads_a_padded_json_document() -> None:
+    assert decode_extension_value('  [{"message": []}]\n') == [{"message": []}]
+
+
+def test_decode_extension_value_keeps_rendered_prompt_text() -> None:
+    prompt = "## Task Context\nReduce the rate to 2 Mbps."
+    assert decode_extension_value(prompt) == prompt
+
+
+def test_decode_extension_value_keeps_malformed_json() -> None:
+    truncated = '[{"message": [{"text": "## Feasibility Negotiation"}]}'
+    assert decode_extension_value(truncated) == truncated
+
+
+@pytest.mark.parametrize("value", ['"123"', "123", "true", "null"], ids=["string", "number", "bool", "null"])
+def test_decode_extension_value_keeps_json_scalars(value: str) -> None:
+    assert decode_extension_value(value) == value
+
+
+def test_decode_extension_value_passes_structured_values_through() -> None:
+    payload = {"message": []}
+
+    assert decode_extension_value(payload) is payload
+    assert decode_extension_value([payload]) == [payload]
+    assert decode_extension_value(None) is None
+
+
+def test_extension_value_decodes_the_named_extension() -> None:
+    metadata = {
+        NEGOTIATION_T_EXTENSION_URI: '[{"message": []}]',
+        TEMPLATE_URI_METADATA_KEY: "Negotiation-T/info-negotiation/propose/v1",
+    }
+
+    assert extension_value(metadata, NEGOTIATION_T_EXTENSION_URI) == [{"message": []}]
+
+
+def test_extension_value_returns_none_for_a_missing_key_or_map() -> None:
+    assert extension_value(None, NEGOTIATION_T_EXTENSION_URI) is None
+    assert extension_value({}, NEGOTIATION_T_EXTENSION_URI) is None
+
+
+def test_extension_value_reads_the_protobuf_struct_of_an_a2a_message() -> None:
+    from google.protobuf.struct_pb2 import Struct
+
+    metadata = Struct()
+    metadata.update({NEGOTIATION_T_EXTENSION_URI: '[{"message": []}]'})
+
+    assert extension_value(metadata, NEGOTIATION_T_EXTENSION_URI) == [{"message": []}]
+
+
+def test_extension_value_returns_none_for_an_unsupported_container() -> None:
+    assert extension_value([NEGOTIATION_T_EXTENSION_URI], NEGOTIATION_T_EXTENSION_URI) is None
+
+
+def test_decode_extension_value_keeps_deeply_nested_json() -> None:
+    """``json`` raises ``RecursionError`` on a peer-controlled deep document; never propagate it."""
+    deeply_nested = "[" * 5000 + "]" * 5000
+
+    assert decode_extension_value(deeply_nested) == deeply_nested

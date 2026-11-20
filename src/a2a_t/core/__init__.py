@@ -16,6 +16,8 @@ from a2a_t.core.metadata import (
     MetadataContent,
     NegotiationContext,
     NegotiationPerformative,
+    decode_extension_value,
+    extension_value,
 )
 from a2a_t.core.path_segments import (
     is_simple_segment,
@@ -57,6 +59,8 @@ __all__ = [
     "TemplateUri",
     "ValidationPipeline",
     "ValidationResult",
+    "decode_extension_value",
+    "extension_value",
     "is_simple_segment",
     "require_simple_relative_path",
     "require_simple_segment",

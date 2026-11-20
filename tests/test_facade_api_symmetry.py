@@ -117,15 +117,12 @@ _CLIENT_ONLY_PROMPT_SIDE_METHODS: dict[str, str] = {
 #: Server-only methods of the Java contract: task-prompt compliance and the three extension
 #: content validators. Java ``A2ATServer`` owns ``checkTaskPrompt`` and
 #: ``validate{Task,Notification,Auth}PromptAndDataFilling``; the client facade has no counterpart
-#: (it owns the generation side instead). Skipped in the server-to-client sweep.
+#: (it owns the generation side instead). ``validate_task_prompt_and_data_filling`` is no longer
+#: listed: the Python client exposes it too, so the server-to-client sweep must cover it.
 _SERVER_ONLY_VALIDATION_METHODS: dict[str, str] = {
     "check_task_prompt": (
         "server-only in the Java contract: task prompt compliance (the client facade generates "
         "task prompts instead of checking them)"
-    ),
-    "validate_task_prompt_and_data_filling": (
-        "server-only extension content validator in the Java contract "
-        "(Java A2ATServer validateTaskPromptAndDataFilling)"
     ),
     "validate_notification_prompt_and_data_filling": (
         "server-only extension content validator in the Java contract "
@@ -275,9 +272,10 @@ def test_every_client_public_method_is_symmetric_on_the_server(method: str) -> N
 def test_every_server_public_method_is_symmetric_on_the_client(method: str) -> None:
     """Every server facade public method exists on the client facade with the identical signature.
 
-    Task-prompt compliance and the three extension content validators are the documented
+    Task-prompt compliance and the Notification/Authorization content validators are the documented
     server-only exception of the Java contract and are skipped with their reason; every other
-    server method must stay symmetric.
+    server method must stay symmetric (including the Task-T validator, which the client also
+    exposes).
     """
     _assert_symmetric_signatures(A2ATServer, A2ATClient, method)
 

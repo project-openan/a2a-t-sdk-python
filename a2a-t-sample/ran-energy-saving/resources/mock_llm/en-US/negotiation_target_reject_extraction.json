@@ -1,0 +1,5 @@
+{
+  "conclusion": "Reject",
+  "confirmed_intent": null,
+  "failure_reason": "The revised target cannot be accepted because it does not keep the required throughput margin."
+}

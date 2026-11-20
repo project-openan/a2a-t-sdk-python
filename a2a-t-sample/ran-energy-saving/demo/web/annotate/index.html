@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>A2A / A2A-T · 预期标注</title>
+  <link rel="stylesheet" href="/annotate/app.css">
+  <script type="module" src="/annotate/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">A2A-T</span>
+      <div class="brand-text">
+        <small>RAN 节能 · 用例语料</small>
+        <h1>预期标注</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/">演示页面</a>
+      <a class="ghost" href="/tester">评测控制台</a>
+      <a class="ghost" href="/runs">Run 控制台</a>
+    </nav>
+    <div class="top-actions">
+      <label class="inline" for="config-days">时间窗
+        <select id="config-days">
+          <option value="0.25">6 小时</option>
+          <option value="1" selected>最近 1 天</option>
+          <option value="3">3 天</option>
+          <option value="7">7 天</option>
+        </select>
+      </label>
+      <button class="primary" id="scan-button" type="button">采集候选</button>
+      <span class="summary" id="progress"></span>
+      <a class="button" href="/api/annotate/export.yaml">导出 overlay YAML</a>
+      <a class="button" href="/api/annotate/export.json">导出 overlay JSON</a>
+    </div>
+  </header>
+
+  <main class="main">
+    <details class="card trace-adopt" id="trace-adopt">
+      <summary>
+        <span>按 traceId / runId 批量采纳</span>
+        <span class="summary">填入已确认的运行标识，把对应观测一次性采纳为预期（默认直接确认）</span>
+      </summary>
+      <div class="trace-form">
+        <textarea id="trace-ids" spellcheck="false"
+          placeholder="每行一个 traceId 或 runId，也可用逗号/空格分隔"></textarea>
+        <div class="trace-controls">
+          <label class="inline">协议
+            <select id="trace-protocol">
+              <option value="">全部</option>
+              <option value="a2a-t">A2A-T</option>
+              <option value="a2a">A2A</option>
+            </select>
+          </label>
+          <label class="inline">子任务
+            <select id="trace-dimension">
+              <option value="">全部</option>
+              <option value="slot_errors">拦截 slot_errors</option>
+              <option value="messages">协商报文</option>
+            </select>
+          </label>
+          <label class="check"><input id="trace-confirm" type="checkbox" checked> 采纳后直接确认</label>
+          <label class="check"><input id="trace-replace" type="checkbox"> 覆盖已有采纳/期望</label>
+          <button class="primary" id="trace-adopt-button" type="button">自动采纳</button>
+        </div>
+        <div class="notice" id="trace-note" hidden></div>
+      </div>
+    </details>
+
+    <div class="notice" id="scan-note" hidden></div>
+
+    <div class="layout">
+      <aside class="card sidebar">
+        <div class="card-head">
+          <h2>用例</h2>
+          <span class="summary" id="case-count"></span>
+        </div>
+        <div class="filters">
+          <input id="filter-query" type="search" placeholder="搜索编号或名称">
+          <select id="filter-protocol">
+            <option value="">全部协议</option>
+            <option value="a2a-t">A2A-T</option>
+            <option value="a2a">A2A</option>
+          </select>
+          <select id="filter-subtask">
+            <option value="">全部子任务</option>
+            <option value="slot_errors">拦截 slot_errors</option>
+            <option value="messages">协商报文</option>
+          </select>
+          <select id="filter-status">
+            <option value="">全部状态</option>
+            <option value="pending">未采集</option>
+            <option value="draft">草稿</option>
+            <option value="confirmed">已确认</option>
+          </select>
+          <select id="filter-candidates">
+            <option value="">候选：全部</option>
+            <option value="with">有候选</option>
+            <option value="without">无候选</option>
+          </select>
+          <label class="check"><input id="hide-none" type="checkbox" checked> 隐藏“无需标注”</label>
+        </div>
+        <div class="case-list" id="case-list"></div>
+      </aside>
+
+      <div class="content" id="detail">
+        <section class="card empty">
+          <p>从左侧选择用例与协议，右侧按运行轮次查看候选。</p>
+          <p class="muted">候选来自本机已落盘的 tester 批次与 run 存储；默认只看真机 + live 的最新一轮，
+            只有与用例现有预期一致的观测可以采纳。</p>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

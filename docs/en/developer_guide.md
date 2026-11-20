@@ -344,7 +344,7 @@ Sample client AgentCard definition reference:
       "description": "Transmission network O&M management agent, providing O&M capabilities such as circuit recovery verification, base station outage root cause analysis, and network element hidden danger inspection",
       "supportedInterfaces": [
         {
-          "url": "http://10.xx.xx.xx:26335/a2a/v1",
+          "url": "http://10.xx.xx.xx:26335/a2a/json",
           "protocolBinding": "HTTP+JSON",
           "protocolVersion": "1.0"
         }
@@ -1204,7 +1204,7 @@ After starting the client or the server, confirm and troubleshoot as follows:
 2. **Content not updated**: changes to local files do not take effect without a restart; restart the SDK process and reconstruct.
 3. **LLM instructions and error messages cannot be customized**: `prompts/` and `errors/` are read only from the built-in resources; local copies are ignored with a warning.
 
-> Once your custom template is in place and you want the negotiation capability on top of it, see the [ran-energy-saving sample README](../../a2a-t-sample/ran-energy-saving/README.md) — its Negotiation-T chapter (§4) walks the end-to-end negotiation integration path per negotiation kind (what the reference code does, what you can copy as-is, what you must write yourself), together with the client negotiation-response provider, the error-code mapping, the transports, and the demo-to-production checklist, with the sample as the worked example.
+> Once your custom template is in place and you want the negotiation capability on top of it, see the [ran-energy-saving sample README](../../a2a-t-sample/ran-energy-saving/README.md) — its definitions of the five negotiation scenarios (§4) and its A2A-T negotiation integration chapter (§6) walk the end-to-end negotiation path (the gate, the deterministic policy, the client decision providers, the four performatives, round ownership, and the sample-only `sampleProposal` convention), together with the demo-to-production replace checklist in §7, with the sample as the worked example.
 
 ## 1.6 Logging Configuration and Integration Guide
 
@@ -1511,7 +1511,7 @@ The sample configuration file provided by the SDK is `env.example`; copy it to `
 | `A2AT_LLM_MODEL`                      | Model name                                                     |
 | `A2AT_LLM_API_KEY`                    | LLM API key                                                  |
 | `A2AT_LLM_BASE_URL`                   | LLM service endpoint (OpenAI-compatible)                            |
-| `A2AT_LLM_MAX_TOKENS`                 | Maximum number of generated tokens for completion calls, sample value `2000`; the provider default is used when empty |
+| `A2AT_LLM_MAX_TOKENS`                 | Maximum number of generated tokens for structured completion calls; default `16384` (leaves room for a reasoning model's thinking plus the JSON object); `none`/`null` disables the cap and leaves the provider parameter unset; zero, negative and non-integer values are configuration errors |
 | `A2AT_LLM_TEMPERATURE`                | Sampling temperature, sample value `0`; the provider default is used when empty                   |
 | `A2AT_LLM_TIMEOUT_SECONDS`            | LLM request timeout (seconds), sample value `60`; the provider default is used when empty    |
 | `A2AT_LLM_HISTORY_WINDOW`             | Number of conversation history messages to keep, default `10`                            |

@@ -1,0 +1,9 @@
+{
+  "conclusion": "Reject",
+  "items": [
+    {
+      "name": "guaranteedThroughputTarget",
+      "value": "客户端无法提供所请求的保障速率目标。"
+    }
+  ]
+}

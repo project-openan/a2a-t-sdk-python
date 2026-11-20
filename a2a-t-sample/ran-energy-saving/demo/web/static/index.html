@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title data-i18n="app.title">RAN energy saving negotiation · Run explorer</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/js/main.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#timeline-scroll" data-i18n="app.skipLink">Skip to the run timeline</a>
+
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">A2A-T</span>
+      <span class="brand-text">
+        <span class="brand-title" data-i18n="app.brandTitle">RAN energy saving negotiation</span>
+        <span class="brand-subtitle" data-i18n="app.brandSubtitle">Run explorer</span>
+      </span>
+    </div>
+    <div class="header-run">
+      <button class="run-id" id="run-id" type="button" title="Copy the run id" data-i18n-title="header.copyRunId" disabled>No run</button>
+      <span class="status-pill status-idle" id="status-pill" data-status="idle">○ idle</span>
+      <span class="header-metric" title="Wall clock"><span class="header-metric-label" data-i18n="header.elapsed">elapsed</span><span id="elapsed">00:00.0</span></span>
+      <span class="header-metric" title="LLM tokens"><span class="header-metric-label" data-i18n="header.tokens">tokens</span><span id="token-total">—</span></span>
+    </div>
+    <div class="header-actions">
+      <button class="toggle-button" id="follow-toggle" type="button" aria-pressed="true" title="Follow new events (f)" data-i18n-title="toolbar.followTitle"><span id="follow-label" data-i18n="header.follow">Follow</span> <span class="toggle-dot" aria-hidden="true"></span></button>
+      <button class="icon-button" id="menu-button" type="button" aria-expanded="false" aria-controls="menu-panel" title="Menu" data-i18n-title="header.menu">⋯</button>
+      <div class="menu-panel" id="menu-panel" hidden>
+        <label class="menu-item menu-field">
+          <span data-i18n="header.language">Language</span>
+          <select id="locale-select" aria-label="Interface language" data-i18n-aria-label="header.language">
+            <option value="auto" data-i18n="locale.auto">Auto</option>
+            <option value="en" data-i18n="locale.en">English</option>
+            <option value="zh-CN" data-i18n="locale.zh-CN">中文</option>
+          </select>
+        </label>
+        <button class="menu-item" id="theme-toggle" type="button">Theme: auto</button>
+        <button class="menu-item" id="menu-shortcuts" type="button" data-i18n="header.shortcuts">Keyboard shortcuts (?)</button>
+        <a class="menu-item" id="menu-trace" href="#" download data-i18n="header.downloadTrace">Download trace.json</a>
+        <a class="menu-item" id="menu-transcript" href="#" download data-i18n="header.downloadTranscript">Download transcript.json</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="context-strip" id="context-strip" aria-label="Run context" data-i18n-aria-label="context.aria">
+    <span class="ctx-item"><span class="ctx-label" data-i18n="context.scenario">scenario</span><span id="ctx-scenario">—</span></span>
+    <span class="ctx-item"><span class="ctx-label" data-i18n="context.mode">mode</span><span id="ctx-mode">—</span></span>
+    <span class="ctx-item"><span class="ctx-label" data-i18n="context.transport">transport</span><span id="ctx-transport">—</span></span>
+    <span class="ctx-item"><span class="ctx-label" data-i18n="context.discovery">discovery</span><span id="ctx-discovery">—</span></span>
+    <span class="ctx-item"><span class="ctx-label" data-i18n="context.language">language</span><span id="ctx-language">—</span></span>
+    <span class="ctx-item"><span class="ctx-label" data-i18n="context.model">model</span><span id="ctx-model">—</span></span>
+    <span class="ctx-item ctx-id"><span class="ctx-label" data-i18n="context.context">context</span><span id="context-id">—</span></span>
+    <span class="ctx-item ctx-id"><span class="ctx-label" data-i18n="context.task">task</span><span id="task-id">—</span></span>
+    <span class="ctx-item ctx-activity"><span class="ctx-label" data-i18n="context.activity">activity</span><span id="current-activity">Idle</span></span>
+    <span class="ctx-item ctx-locale" id="locale-hint" hidden><span class="ctx-label" data-i18n="context.language">language</span><span id="locale-hint-text"></span></span>
+  </section>
+
+  <nav class="phase-stepper" id="phase-stepper" aria-label="Run phases" data-i18n-aria-label="timeline.aria">
+    <ol class="phase-list" id="phase-steps">
+      <li class="phase-step" data-phase="dispatch"><button type="button" class="phase-step-button" data-phase="dispatch"><span class="phase-step-index">01</span><span class="phase-step-label" data-i18n="phase.dispatch">Dispatch</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="task_prompt"><button type="button" class="phase-step-button" data-phase="task_prompt"><span class="phase-step-index">02</span><span class="phase-step-label" data-i18n="phase.task_prompt">Task-T generation</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="task_validation"><button type="button" class="phase-step-button" data-phase="task_validation"><span class="phase-step-index">03</span><span class="phase-step-label" data-i18n="phase.task_validation">Task validation</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="negotiation"><button type="button" class="phase-step-button" data-phase="negotiation"><span class="phase-step-index">04</span><span class="phase-step-label" data-i18n="phase.negotiation">Negotiation</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="resolution"><button type="button" class="phase-step-button" data-phase="resolution"><span class="phase-step-index">05</span><span class="phase-step-label" data-i18n="phase.resolution">Resolution</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="execution"><button type="button" class="phase-step-button" data-phase="execution"><span class="phase-step-index">06</span><span class="phase-step-label" data-i18n="phase.execution">NMS execution</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="report"><button type="button" class="phase-step-button" data-phase="report"><span class="phase-step-index">07</span><span class="phase-step-label" data-i18n="phase.report">Report</span><span class="phase-step-meta">pending</span></button></li>
+      <li class="phase-step" data-phase="done"><button type="button" class="phase-step-button" data-phase="done"><span class="phase-step-index">08</span><span class="phase-step-label" data-i18n="phase.done">Done</span><span class="phase-step-meta">pending</span></button></li>
+    </ol>
+  </nav>
+
+  <div class="shell">
+    <aside class="rail" id="rail" aria-label="Run controls" data-i18n-aria-label="rail.aria">
+      <button class="rail-toggle" id="rail-toggle" type="button" aria-expanded="false" title="Toggle the run controls"><span data-i18n="rail.toggle">☰ Controls</span></button>
+      <section class="panel rail-section" aria-labelledby="rail-run-title">
+        <h2 class="panel-title" id="rail-run-title" data-i18n="rail.runSetup">Run setup</h2>
+        <form class="run-form" id="run-form">
+          <label class="field"><span data-i18n="rail.scenario">Scenario</span>
+            <select id="scenario-select" name="scenario">
+              <option value="information">information</option>
+              <option value="target">target</option>
+              <option value="feasibility">feasibility</option>
+              <option value="reject">reject</option>
+              <option value="abort">abort</option>
+            </select>
+          </label>
+          <label class="field"><span data-i18n="rail.userRequest">Original user request</span>
+            <textarea id="user-request-input" name="userRequest" rows="6" spellcheck="false"
+              placeholder="Enter the natural-language request sent to the Task-T generator." data-i18n-placeholder="rail.userRequestPlaceholder"></textarea>
+          </label>
+          <button class="secondary-button request-reset" id="reset-request-button" type="button" data-i18n="rail.resetRequest">
+            Reset to scenario default
+          </button>
+          <p class="field-note" data-i18n="rail.scenarioNote">Scenario still controls the expected sequence and decision script; the text feeds Task-T generation.</p>
+          <label class="field"><span data-i18n="rail.mode">Mode</span>
+            <select id="mode-select" name="mode">
+              <option value="auto">auto</option>
+              <option value="manual">manual</option>
+            </select>
+          </label>
+          <label class="field"><span data-i18n="rail.transport">Transport</span>
+            <select id="transport-select" name="transport">
+              <option value="sse">sse</option>
+              <option value="webhook">webhook</option>
+            </select>
+          </label>
+          <label class="field"><span data-i18n="rail.discovery">Discovery</span>
+            <select id="discovery-select" name="discovery">
+              <option value="registry">registry</option>
+              <option value="direct">direct</option>
+            </select>
+          </label>
+          <button class="primary-button" id="start-button" type="submit" data-i18n="rail.start">▶ Start run</button>
+          <p class="field-note"><span data-i18n="rail.languageLabel">Language</span> <span id="rail-language">—</span> <span data-i18n="rail.languageReadOnly">is process-level and read-only.</span></p>
+          <p class="form-error" id="run-error" role="alert" hidden></p>
+        </form>
+      </section>
+
+      <section class="panel rail-section manual-panel" id="manual-panel-rail" aria-labelledby="rail-manual-title" hidden>
+        <h2 class="panel-title" id="rail-manual-title" data-i18n="rail.manualTitle">Manual decision</h2>
+        <p class="manual-context" data-role="manual-context">Waiting for a proposal…</p>
+        <p class="manual-countdown"><span class="micro-label" data-i18n="rail.remaining">remaining</span> <span class="decision-countdown" data-role="countdown">—</span></p>
+        <div class="decision-form">
+          <label class="field"><span data-i18n="rail.action">Action</span>
+            <select data-field="action" aria-label="Decision action" data-i18n-aria-label="rail.submitAria">
+              <option value="accept">accept</option>
+              <option value="reject">reject</option>
+              <option value="abort">abort</option>
+              <option value="counter">counter</option>
+            </select>
+          </label>
+          <label class="field"><span data-i18n="rail.rationale">Rationale</span>
+            <textarea data-field="rationale" rows="2" placeholder="Why this decision?" data-i18n-placeholder="rail.rationalePlaceholder"></textarea>
+          </label>
+          <label class="field"><span data-i18n="rail.filled">Filled params (accept, JSON)</span>
+            <textarea data-field="filled" rows="2" placeholder='{"region": "…"}' data-i18n-placeholder="rail.filledPlaceholder"></textarea>
+          </label>
+          <label class="field"><span data-i18n="rail.counter">Counter proposal (counter only)</span>
+            <textarea data-field="counter" rows="2" placeholder="Natural-language counter proposal" data-i18n-placeholder="rail.counterPlaceholder"></textarea>
+          </label>
+          <label class="field"><span data-i18n="rail.counterParams">Counter params (counter, JSON)</span>
+            <textarea data-field="counterParams" rows="2" placeholder='{"cellId": "cell-001"}' data-i18n-placeholder="rail.counterParamsPlaceholder"></textarea>
+          </label>
+        </div>
+        <p class="form-error decision-error" data-role="error" hidden></p>
+        <div class="manual-actions">
+          <button class="primary-button decision-submit" type="button" data-i18n="rail.submit">Submit decision</button>
+          <button class="secondary-button decision-focus" type="button" data-i18n="rail.focus">Open the pinned card</button>
+        </div>
+      </section>
+
+      <section class="panel rail-section" aria-labelledby="rail-analysis-title">
+        <h2 class="panel-title" id="rail-analysis-title" data-i18n="analysis.title">Analysis</h2>
+        <dl class="analysis-grid" id="analysis">
+          <div><dt data-i18n="analysis.wallClock">Wall clock</dt><dd id="analysis-wall">00:00.0</dd></div>
+          <div><dt data-i18n="analysis.llmCalls">LLM calls</dt><dd id="analysis-llm">0</dd></div>
+          <div><dt data-i18n="analysis.tokens">Tokens</dt><dd id="analysis-tokens">—</dd></div>
+          <div><dt data-i18n="analysis.tools">Tools</dt><dd id="analysis-tools">0</dd></div>
+          <div><dt data-i18n="analysis.errorsRetries">Errors / retries</dt><dd id="analysis-errors">0 / 0</dd></div>
+          <div><dt data-i18n="analysis.parseFailures">Parse failures</dt><dd id="analysis-parse">0</dd></div>
+          <div><dt data-i18n="analysis.decisions">Decisions</dt><dd id="analysis-decisions">0</dd></div>
+        </dl>
+        <h3 class="micro-label" data-i18n="analysis.phaseDurations">Phase durations</h3>
+        <ul class="phase-durations" id="phase-durations"></ul>
+        <h3 class="micro-label" data-i18n="analysis.anomalies">Anomalies</h3>
+        <ul class="anomaly-list" id="anomalies-list"><li class="placeholder">None detected.</li></ul>
+      </section>
+
+      <section class="panel rail-section" aria-labelledby="rail-decisions-title">
+        <h2 class="panel-title" id="rail-decisions-title" data-i18n="analysis.decisionLog">Decision log</h2>
+        <ol class="decision-log" id="decision-log"><li class="placeholder">No decisions yet.</li></ol>
+      </section>
+
+      <section class="panel rail-section" aria-labelledby="rail-exports-title">
+        <h2 class="panel-title" id="rail-exports-title" data-i18n="analysis.exports">Exports</h2>
+        <div class="export-links">
+          <a id="export-trace" href="#" download data-i18n="analysis.traceJson">Trace JSON</a>
+          <a id="export-json" href="#" download data-i18n="analysis.transcriptJson">Transcript JSON</a>
+          <a id="export-md" href="#" download data-i18n="analysis.transcriptMarkdown">Transcript Markdown</a>
+          <a id="export-langfuse" href="#" target="_blank" rel="noopener noreferrer" data-i18n="analysis.langfuse" hidden>Open in Langfuse</a>
+        </div>
+      </section>
+    </aside>
+
+    <main class="timeline-column" id="timeline-column">
+      <div class="timeline-toolbar" id="timeline-toolbar" role="toolbar" aria-label="Timeline controls" data-i18n-aria-label="toolbar.aria">
+        <div class="segmented" role="group" aria-label="Timeline view" data-i18n-aria-label="toolbar.viewAria">
+          <button type="button" class="segment is-active" id="view-story" data-view="story" aria-pressed="true" data-i18n="toolbar.story">Story</button>
+          <button type="button" class="segment" id="view-waterfall" data-view="waterfall" aria-pressed="false" data-i18n="toolbar.waterfall">Waterfall</button>
+        </div>
+        <div class="filter-chips" id="filter-chips" role="group" aria-label="Timeline filters" data-i18n-aria-label="toolbar.filtersAria">
+          <button type="button" class="chip is-active" data-filter="all" aria-pressed="true" data-i18n="toolbar.filterAll">All</button>
+          <button type="button" class="chip" data-filter="protocol" aria-pressed="false" data-i18n="toolbar.filterProtocol">Protocol</button>
+          <button type="button" class="chip" data-filter="llm" aria-pressed="false" data-i18n="toolbar.filterLlm">LLM</button>
+          <button type="button" class="chip" data-filter="tools" aria-pressed="false" data-i18n="toolbar.filterTools">Tools</button>
+          <button type="button" class="chip" data-filter="errors" aria-pressed="false" data-i18n="toolbar.filterErrors">Errors</button>
+        </div>
+        <label class="inline-field"><span class="sr-only" data-i18n="toolbar.actorAria">Actor</span>
+          <select id="actor-filter" aria-label="Filter by actor" data-i18n-aria-label="toolbar.actorAria">
+            <option value="all" data-i18n="toolbar.allActors">All actors</option>
+            <option value="client" data-i18n="toolbar.actorClient">Client</option>
+            <option value="server" data-i18n="toolbar.actorServer">Server</option>
+            <option value="llm" data-i18n="toolbar.actorLlm">LLM</option>
+            <option value="tool" data-i18n="toolbar.actorTool">Tool</option>
+            <option value="human" data-i18n="toolbar.actorHuman">Human</option>
+            <option value="system" data-i18n="toolbar.actorSystem">System</option>
+          </select>
+        </label>
+        <label class="inline-field"><span class="sr-only" data-i18n="toolbar.roundAria">Round</span>
+          <select id="round-filter" aria-label="Filter by negotiation round" data-i18n-aria-label="toolbar.roundAria">
+            <option value="all" data-i18n="toolbar.allRounds">All rounds</option>
+          </select>
+        </label>
+        <label class="search-field"><span class="sr-only" data-i18n="toolbar.searchAria">Search the timeline</span>
+          <input type="search" id="search-input" placeholder="Search…  ( / )" data-i18n-placeholder="toolbar.searchPlaceholder" autocomplete="off">
+        </label>
+        <button type="button" class="icon-text-button" id="expand-all" title="Expand all phases" data-i18n-title="toolbar.expandTitle" data-i18n="toolbar.expand">Expand</button>
+        <button type="button" class="icon-text-button" id="collapse-all" title="Collapse all phases" data-i18n-title="toolbar.collapseTitle" data-i18n="toolbar.collapse">Collapse</button>
+        <button type="button" class="icon-text-button" id="timeline-follow" aria-pressed="true" title="Follow new events (f)" data-i18n-title="toolbar.followTitle" data-i18n="toolbar.follow">Following</button>
+        <span class="toolbar-stats" id="timeline-stats">0 steps</span>
+      </div>
+
+      <div class="connection-banner" id="connection-banner" role="status" hidden>
+        <span id="connection-banner-text">Event stream disconnected; retrying…</span>
+        <button type="button" class="link-button" id="connection-retry" data-i18n="connection.retry">Retry now</button>
+      </div>
+
+      <section class="manual-pinned" id="manual-pinned" aria-labelledby="pinned-manual-title" hidden>
+        <h2 class="panel-title" id="pinned-manual-title"><span data-i18n="manual.required">Decision required</span> <span class="manual-round" data-role="manual-round"></span></h2>
+        <p class="manual-context" data-role="manual-context"></p>
+        <p class="manual-countdown"><span class="micro-label" data-i18n="rail.remaining">remaining</span> <span class="decision-countdown" data-role="countdown">—</span></p>
+        <div class="decision-form">
+          <label class="field"><span data-i18n="rail.action">Action</span>
+            <select data-field="action" aria-label="Decision action" data-i18n-aria-label="rail.submitAria">
+              <option value="accept">accept</option>
+              <option value="reject">reject</option>
+              <option value="abort">abort</option>
+              <option value="counter">counter</option>
+            </select>
+          </label>
+          <label class="field field-wide"><span data-i18n="rail.rationale">Rationale</span>
+            <textarea data-field="rationale" rows="2" placeholder="Why this decision?" data-i18n-placeholder="rail.rationalePlaceholder"></textarea>
+          </label>
+          <label class="field field-wide"><span data-i18n="rail.filled">Filled params (accept, JSON)</span>
+            <textarea data-field="filled" rows="3" placeholder='{"region": "…"}' data-i18n-placeholder="rail.filledPlaceholder"></textarea>
+          </label>
+          <label class="field field-wide"><span data-i18n="rail.counter">Counter proposal (counter only)</span>
+            <textarea data-field="counter" rows="2" placeholder="Natural-language counter proposal" data-i18n-placeholder="rail.counterPlaceholder"></textarea>
+          </label>
+          <label class="field field-wide"><span data-i18n="rail.counterParams">Counter params (counter, JSON)</span>
+            <textarea data-field="counterParams" rows="2" placeholder='{"cellId": "cell-001", "window": "00:00-06:00", "targetRate": "30"}' data-i18n-placeholder="rail.counterParamsPlaceholderFull"></textarea>
+          </label>
+        </div>
+        <p class="form-error decision-error" data-role="error" hidden></p>
+        <div class="manual-actions">
+          <button class="primary-button decision-submit" type="button" data-i18n="rail.submit">Submit decision</button>
+          <span class="field-note" data-i18n="rail.submitHint">Cmd/Ctrl+Enter submits.</span>
+        </div>
+      </section>
+
+      <div class="timeline-scroll" id="timeline-scroll" tabindex="-1">
+        <div class="state-callout" id="timeline-loading" hidden>
+          <span class="state-glyph" aria-hidden="true">◌</span>
+          <div><h2 data-i18n="state.loadingTitle">Loading run explorer…</h2><p data-i18n="state.loadingBody">Reading the process metadata.</p></div>
+        </div>
+        <div class="state-callout" id="timeline-empty">
+          <span class="state-glyph" aria-hidden="true">○</span>
+          <div><h2 data-i18n="state.emptyTitle">No run yet</h2><p data-i18n="state.emptyBody">Choose a scenario in the left rail and start a run. Every dispatch step, protocol message, decision, LLM call and tool call will appear here in order.</p></div>
+        </div>
+        <div class="state-callout state-error" id="timeline-error" role="alert" hidden>
+          <span class="state-glyph" aria-hidden="true">✕</span>
+          <div><h2 data-i18n="state.errorTitle">Run unavailable</h2><p id="timeline-error-text" data-i18n="state.errorBody">The run could not be started.</p></div>
+        </div>
+        <div class="state-callout state-warn" id="timeline-no-trace" hidden>
+          <span class="state-glyph" aria-hidden="true">!</span>
+          <div><h2 data-i18n="state.noTraceTitle">No trace payloads</h2><p data-i18n="state.noTraceBody">This run recorded protocol events only; no LLM or tool spans were captured.</p></div>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </div>
+    </main>
+
+    <aside class="inspector" id="inspector" aria-label="Step inspector" data-i18n-aria-label="inspector.aria" aria-hidden="true">
+      <div class="inspector-head">
+        <div class="inspector-identity">
+          <span class="micro-label" id="inspector-step" data-i18n="inspector.runSummary">RUN SUMMARY</span>
+          <span class="inspector-kind" id="inspector-kind" data-i18n="inspector.noRunSelected">No run selected</span>
+        </div>
+        <div class="inspector-nav">
+          <button type="button" class="icon-button" id="inspector-prev" title="Previous step ([)" data-i18n-title="inspector.previous" aria-label="Previous step" data-i18n-aria-label="inspector.previous">‹</button>
+          <button type="button" class="icon-button" id="inspector-next" title="Next step (])" data-i18n-title="inspector.next" aria-label="Next step" data-i18n-aria-label="inspector.next">›</button>
+          <button type="button" class="icon-button" id="inspector-close" title="Close inspector (Esc)" data-i18n-title="inspector.close" aria-label="Close inspector" data-i18n-aria-label="inspector.close">✕</button>
+        </div>
+      </div>
+      <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Inspector tabs" data-i18n-aria-label="inspector.tabsAria">
+        <button type="button" role="tab" data-tab="summary" aria-selected="true" aria-controls="inspector-body" data-i18n="inspector.tabSummary">Summary</button>
+        <button type="button" role="tab" data-tab="protocol" aria-selected="false" aria-controls="inspector-body" data-i18n="inspector.tabProtocol" disabled>Protocol</button>
+        <button type="button" role="tab" data-tab="llm-request" aria-selected="false" aria-controls="inspector-body" data-i18n="inspector.tabLlmRequest" disabled>LLM request</button>
+        <button type="button" role="tab" data-tab="llm-response" aria-selected="false" aria-controls="inspector-body" data-i18n="inspector.tabLlmResponse" disabled>LLM response</button>
+        <button type="button" role="tab" data-tab="tool" aria-selected="false" aria-controls="inspector-body" data-i18n="inspector.tabTool" disabled>Tool call</button>
+        <button type="button" role="tab" data-tab="raw" aria-selected="false" aria-controls="inspector-body" data-i18n="inspector.tabRaw">Raw JSON</button>
+      </div>
+      <div class="inspector-body" id="inspector-body" role="tabpanel" aria-label="Step details" data-i18n-aria-label="inspector.bodyAria" tabindex="0"></div>
+    </aside>
+    <div class="inspector-backdrop" id="inspector-backdrop" hidden></div>
+  </div>
+
+  <section class="history panel" id="history" aria-labelledby="history-title">
+    <div class="history-head">
+      <button class="history-toggle" id="history-toggle" type="button" aria-expanded="false" aria-controls="history-body">
+        <span class="history-chevron" aria-hidden="true">▸</span>
+        <span class="panel-title" id="history-title" data-i18n="history.title">History</span>
+        <span class="history-count" id="history-count">—</span>
+      </button>
+      <div class="history-tabs" id="history-tabs" role="tablist" aria-label="Persisted tasks, client runs and conversations" data-i18n-aria-label="history.aria">
+        <button type="button" role="tab" data-history-tab="tasks" aria-selected="true" aria-controls="history-panel-tasks" data-i18n="history.tabs.tasks">NMS tasks</button>
+        <button type="button" role="tab" data-history-tab="runs" aria-selected="false" aria-controls="history-panel-runs" data-i18n="history.tabs.runs">Client runs</button>
+        <button type="button" role="tab" data-history-tab="conversations" aria-selected="false" aria-controls="history-panel-conversations" data-i18n="history.tabs.conversations">Conversations</button>
+      </div>
+    </div>
+
+    <div class="history-body" id="history-body" hidden>
+      <section class="history-panel" id="history-panel-tasks" data-history-panel="tasks" role="tabpanel" aria-labelledby="history-title">
+        <div class="task-history-head">
+          <span class="task-history-count" id="task-history-count">0 tasks</span>
+        </div>
+        <p class="task-history-note" id="task-table-note">No persisted tasks yet.</p>
+        <div class="task-table-scroll" hidden>
+          <table class="task-table" id="task-table">
+            <caption class="sr-only" data-i18n="history.taskCaption">Persisted A2A tasks of the RAN NMS server</caption>
+            <thead>
+              <tr>
+                <th scope="col" data-i18n="history.columnTask">Task</th>
+                <th scope="col" data-i18n="history.columnState">State</th>
+                <th scope="col" data-i18n="history.columnContext">Context</th>
+                <th scope="col" data-i18n="history.columnUpdated">Updated</th>
+                <th scope="col" data-i18n="history.columnReport">Report</th>
+                <th scope="col" data-i18n="history.columnRun">Run</th>
+              </tr>
+            </thead>
+            <tbody id="task-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="history-panel" id="history-panel-runs" data-history-panel="runs" role="tabpanel" aria-labelledby="history-title" hidden>
+        <div class="task-history-head">
+          <span class="task-history-count" id="client-history-count">0 runs</span>
+        </div>
+        <p class="task-history-note" id="client-history-note">No persisted client runs yet.</p>
+        <div class="task-table-scroll" hidden>
+          <table class="task-table" id="client-run-table">
+            <caption class="sr-only" data-i18n="history.runCaption">Persisted client runs, conversations and negotiation audit</caption>
+            <thead>
+              <tr>
+                <th scope="col" data-i18n="history.columnRun">Run</th>
+                <th scope="col" data-i18n="history.columnConversation">Conversation</th>
+                <th scope="col" data-i18n="history.columnScenario">Scenario</th>
+                <th scope="col" data-i18n="history.columnStatus">Status</th>
+                <th scope="col" data-i18n="history.columnFinalState">Final state</th>
+                <th scope="col" data-i18n="history.columnStarted">Started</th>
+                <th scope="col" data-i18n="history.columnRequest">Request</th>
+                <th scope="col" data-i18n="history.columnDetail">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="client-run-table-body"></tbody>
+          </table>
+        </div>
+        <section class="client-run-detail" id="client-run-detail" aria-labelledby="client-run-detail-title" hidden>
+          <div class="client-run-detail-head">
+            <h3 class="panel-title" id="client-run-detail-title" data-i18n="history.detailTitle">Run detail</h3>
+            <button class="secondary-button" id="client-run-detail-close" type="button" data-i18n="history.close">Close</button>
+          </div>
+          <div class="client-run-detail-body" id="client-run-detail-body"></div>
+        </section>
+      </section>
+
+      <section class="history-panel" id="history-panel-conversations" data-history-panel="conversations" role="tabpanel" aria-labelledby="history-title" hidden>
+        <div class="task-history-head">
+          <span class="task-history-count" id="conversation-history-count">0 conversations</span>
+        </div>
+        <p class="task-history-note" id="conversation-history-note">No conversations yet.</p>
+        <div class="task-table-scroll" hidden>
+          <table class="task-table" id="conversation-table">
+            <caption class="sr-only" data-i18n="history.conversationCaption">Persisted client conversations</caption>
+            <thead>
+              <tr>
+                <th scope="col" data-i18n="history.columnConversation">Conversation</th>
+                <th scope="col" data-i18n="history.columnTurns">Turns</th>
+                <th scope="col" data-i18n="history.columnRuns">Runs</th>
+                <th scope="col" data-i18n="history.columnUpdated">Updated</th>
+                <th scope="col" data-i18n="history.columnDetail">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="conversation-table-body"></tbody>
+          </table>
+        </div>
+        <section class="client-run-detail" id="conversation-detail" aria-labelledby="conversation-detail-title" hidden>
+          <div class="client-run-detail-head">
+            <h3 class="panel-title" id="conversation-detail-title" data-i18n="history.conversationDetailTitle">Conversation detail</h3>
+            <button class="secondary-button" id="conversation-detail-close" type="button" data-i18n="history.close">Close</button>
+          </div>
+          <div class="client-run-detail-body" id="conversation-detail-body"></div>
+        </section>
+      </section>
+    </div>
+  </section>
+
+  <footer class="app-footer">
+    <span class="connection-state" id="connection-state" data-state="idle"><span class="conn-dot" aria-hidden="true"></span><span id="connection-label">idle</span></span>
+    <span class="last-event" id="last-event">No events yet</span>
+    <span class="shortcut-hint" data-i18n="connection.shortcutHint">j/k move · Enter open · / search · f follow · ? shortcuts</span>
+  </footer>
+
+  <dialog class="shortcuts-dialog" id="shortcuts-dialog" aria-labelledby="shortcuts-title">
+    <div class="shortcuts-head">
+      <h2 id="shortcuts-title" data-i18n="shortcuts.title">Keyboard shortcuts</h2>
+      <button type="button" class="icon-button" id="shortcuts-close" aria-label="Close" data-i18n-aria-label="shortcuts.close">✕</button>
+    </div>
+    <dl class="shortcuts-list" id="shortcuts-list"></dl>
+  </dialog>
+
+  <div class="sr-only" id="live-region" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

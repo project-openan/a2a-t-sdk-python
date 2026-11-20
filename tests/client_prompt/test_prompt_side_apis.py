@@ -112,9 +112,14 @@ def _build_orchestrator(
     *,
     slot_extractor: Any,
     resource_access: FakePromptResourceAccess | None = None,
+    provider: str = "",
+    config: PromptRuntimeConfig | None = None,
 ) -> PromptGenerationOrchestrator:
+    # The validation tests opt in explicitly: constraint inspection is off by default.
     return PromptGenerationOrchestrator(
-        config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+        config=config
+        or PromptRuntimeConfig(language="en-US", source_type="packaged", validate_slot_constraints=True),
+        provider=provider,
         resource_access=resource_access
         or FakePromptResourceAccess(
             template_text="Site: {site}\nNotes: {additional_notes}",
@@ -314,6 +319,78 @@ def test_extraction_slot_errors_map_to_the_catalog_codes(reported_code: str, exp
     assert "extraction step message" not in str(exc_info.value)
 
 
+def test_duplicate_actual_across_slots_keeps_the_most_specific_report() -> None:
+    """One offending fragment must produce one error, attributed to the specific slot."""
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "additional_notes": None},
+        slot_errors=[
+            SlotValidationError(
+                slot_name="task_target",
+                code="slot.constraint_violated",
+                message="target",
+                facts={"slot_label": "Task Target", "actual": "approximately 1600"},
+            ),
+            SlotValidationError(
+                slot_name="task_context",
+                code="slot.constraint_violated",
+                message="context",
+                facts={"slot_label": "Carrier frequencies", "actual": "approximately 1600"},
+            ),
+        ],
+    )
+    orchestrator = _build_orchestrator(slot_extractor=RecordingSlotExtractor(extraction))
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["task_context"]
+    assert "Carrier frequencies" in str(exc_info.value)
+    assert "Task Target" not in str(exc_info.value)
+
+
+def test_a_concrete_slot_wins_over_the_task_description_copy() -> None:
+    """The descriptive slot is derivative; the concrete slot owns the offending value."""
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "additional_notes": None},
+        slot_errors=[
+            SlotValidationError(
+                slot_name="task_description",
+                code="slot.constraint_violated",
+                message="description",
+                facts={"slot_label": "Task Description", "actual": "3G"},
+            ),
+            SlotValidationError(
+                slot_name="task_context",
+                code="slot.constraint_violated",
+                message="context",
+                facts={"slot_label": "Cell RAT", "actual": "3G"},
+            ),
+        ],
+    )
+    orchestrator = _build_orchestrator(slot_extractor=RecordingSlotExtractor(extraction))
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["task_context"]
+
+
+def test_llm_invocation_failure_fills_the_provider_fact() -> None:
+    """The catalog declares ``provider`` and ``reason``; both must be present in the message."""
+    orchestrator = _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(LLMRuntimeError("Request timed out.")),
+        provider="openai",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "llm.invocation_failed"
+    assert exc_info.value.facts == {"provider": "openai", "reason": "Request timed out."}
+    assert "{provider}" not in str(exc_info.value)
+    assert "openai" in str(exc_info.value)
+
+
 def test_required_slot_missing_fails_with_not_provided_and_slot_label() -> None:
     extraction = SlotExtractionResult(slots={"site": None, "additional_notes": None}, slot_errors=[])
     orchestrator = _build_orchestrator(slot_extractor=RecordingSlotExtractor(extraction))
@@ -326,6 +403,266 @@ def test_required_slot_missing_fails_with_not_provided_and_slot_label() -> None:
     assert [error.slot_name for error in failed] == ["site"]
     # The slot label is the slot description when one exists (Java ``slotLabel``).
     assert failed[0].facts == {"slot_label": "Site name"}
+
+
+def _constrained_orchestrator(
+    *,
+    slot_name: str,
+    constraints: dict[str, object],
+    slot_value: str,
+    slot_type: str = "string",
+) -> PromptGenerationOrchestrator:
+    schema: dict[str, object] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "site": {"type": "string", "description": "Site name"},
+            slot_name: {"type": slot_type, "description": "Constrained slot", **constraints},
+        },
+        "required": ["site"],
+    }
+    access = FakePromptResourceAccess(
+        template_text="Site: {site}",
+        slot_json_schema=schema,
+        system_prompt="Extract slots.",
+        user_prompt="Return slots.",
+    )
+    extraction = SlotExtractionResult(slots={"site": "Site A", slot_name: slot_value}, slot_errors=[])
+    return _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        resource_access=access,
+    )
+
+
+def test_enum_slot_violation_fails_with_constraint_violated() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="incident_level",
+        constraints={"enum": ["critical", "major"]},
+        slot_value="warning",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    failed = exc_info.value.failed_parameters
+    assert [error.slot_name for error in failed] == ["incident_level"]
+    assert failed[0].facts == {"slot_label": "Constrained slot", "actual": "warning"}
+
+
+def test_pattern_slot_violation_fails_with_constraint_violated() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="site_code",
+        constraints={"pattern": "^[A-Z][a-z]+$"},
+        slot_value="site-a",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["site_code"]
+
+
+def test_numeric_range_slot_violation_fails_with_constraint_violated() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="priority",
+        constraints={"minimum": 1, "maximum": 5},
+        slot_value="9",
+        slot_type="integer",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["priority"]
+
+
+def test_valid_constrained_slots_pass() -> None:
+    orchestrator = _constrained_orchestrator(
+        slot_name="incident_level",
+        constraints={"enum": ["critical", "major"]},
+        slot_value="critical",
+    )
+
+    content = orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert content.prompt_text == "Site: Site A"
+
+
+def _declarative_check_orchestrator(
+    *,
+    checks: list[dict[str, object]],
+    task_context: str,
+) -> PromptGenerationOrchestrator:
+    schema: dict[str, object] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "site": {"type": "string", "description": "Site name"},
+            "task_context": {"type": "string", "description": "Task context"},
+        },
+        "required": ["site"],
+        "x-a2at-checks": checks,
+    }
+    access = FakePromptResourceAccess(
+        template_text="Site: {site}",
+        slot_json_schema=schema,
+        system_prompt="Extract slots.",
+        user_prompt="Return slots.",
+    )
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "task_context": task_context},
+        slot_errors=[],
+    )
+    return _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        resource_access=access,
+    )
+
+
+def test_declarative_check_reports_not_provided_when_require_is_missing() -> None:
+    orchestrator = _declarative_check_orchestrator(
+        checks=[
+            {
+                "slot": "task_context",
+                "when": "power outage",
+                "require": "site list\\s*:",
+                "error": "slot.not_provided",
+                "slot_label": "Site list",
+            }
+        ],
+        task_context="A power outage is expected tomorrow.",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.not_provided"
+    assert [error.slot_name for error in exc_info.value.failed_parameters] == ["task_context"]
+    assert exc_info.value.failed_parameters[0].facts == {"slot_label": "Site list"}
+
+
+def test_declarative_check_reports_constraint_violated_for_a_forbidden_pattern() -> None:
+    orchestrator = _declarative_check_orchestrator(
+        checks=[
+            {
+                "slot": "task_context",
+                "when": "\\bgreen\\b",
+                "error": "slot.constraint_violated",
+                "slot_label": "Energy saving mode",
+                "actual": "green",
+            }
+        ],
+        task_context="Use the green energy-saving mode.",
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.constraint_violated"
+    assert exc_info.value.failed_parameters[0].facts == {
+        "slot_label": "Energy saving mode",
+        "actual": "green",
+    }
+
+
+def test_declarative_check_can_inspect_the_original_input() -> None:
+    orchestrator = _declarative_check_orchestrator(
+        checks=[
+            {
+                "slot": "task_context",
+                "when": "such as",
+                "source": "input",
+                "error": "slot.not_provided",
+                "slot_label": "Site list",
+            }
+        ],
+        task_context='Site list: ["NE_A"]',
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Sites such as NE_A and NE_B.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.not_provided"
+    assert exc_info.value.failed_parameters[0].facts == {"slot_label": "Site list"}
+
+
+def test_declarative_check_passes_when_require_matches() -> None:
+    orchestrator = _declarative_check_orchestrator(
+        checks=[
+            {
+                "slot": "task_context",
+                "when": "power outage",
+                "require": "site list\\s*:",
+                "error": "slot.not_provided",
+                "slot_label": "Site list",
+            }
+        ],
+        task_context='Site list: ["NE_A"], Background event: power outage from 08:00 to 12:00.',
+    )
+
+    content = orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert content.prompt_text == "Site: Site A"
+
+
+def test_slot_constraint_inspection_is_off_by_default() -> None:
+    """Schema and declarative checks are opt-in; the model's slot errors are the only verdict."""
+    schema: dict[str, object] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "site": {"type": "string", "description": "Site name"},
+            "task_context": {"type": "string", "description": "Task context"},
+        },
+        "required": ["site"],
+        "x-a2at-checks": [
+            {
+                "slot": "task_context",
+                "when": "power outage",
+                "require": "site list\\s*:",
+                "error": "slot.not_provided",
+                "slot_label": "Site list",
+            }
+        ],
+    }
+    extraction = SlotExtractionResult(
+        slots={"site": "", "task_context": "Background event: power outage from 08:00 to 12:00."},
+        slot_errors=[],
+    )
+    orchestrator = _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        resource_access=FakePromptResourceAccess(
+            template_text="Site: {site}",
+            slot_json_schema=schema,
+            system_prompt="Extract slots.",
+            user_prompt="Return slots.",
+        ),
+        config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+    )
+
+    content = orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert content.prompt_text == "Site: "
+
+
+def test_slot_errors_still_block_when_constraint_inspection_is_off() -> None:
+    """The extraction model's own errors stay blocking without the inspection switch."""
+    extraction = SlotExtractionResult(
+        slots={"site": "Site A", "additional_notes": None},
+        slot_errors=[SlotValidationError(slot_name="site", code="slot.not_provided", message="missing")],
+    )
+    orchestrator = _build_orchestrator(
+        slot_extractor=RecordingSlotExtractor(extraction),
+        config=PromptRuntimeConfig(language="en-US", source_type="packaged"),
+    )
+
+    with pytest.raises(PromptGenerationError) as exc_info:
+        orchestrator.generate_task_prompt_from_text("Analyze Site A.", _TEMPLATE_URI)
+
+    assert exc_info.value.code_str == "slot.not_provided"
 
 
 def test_render_failure_surfaces_render_failed_with_template_uri_fact() -> None:

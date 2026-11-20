@@ -1,12 +1,15 @@
 """Verify Langfuse cloud received traces — with observation-level detail."""
 import base64
 import json
+import os
 import urllib.request
 
-pk = "pk-lf-661d8d9f-d5e1-4bd4-ae9f-68c7f1c93b8a"
-sk = "sk-lf-ff9d6ca0-4eb8-4288-9839-eca9e5a12a8f"
+pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+sk = os.environ.get("LANGFUSE_SECRET_KEY", "")
+if not pk or not sk:
+    raise SystemExit("Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY (optionally LANGFUSE_BASE_URL).")
 auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
-BASE = "https://us.cloud.langfuse.com"
+BASE = os.environ.get("LANGFUSE_BASE_URL", "https://us.cloud.langfuse.com").rstrip("/")
 
 def api(path):
     req = urllib.request.Request(f"{BASE}{path}", headers={"Authorization": f"Basic {auth}"})

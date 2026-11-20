@@ -1,0 +1,1857 @@
+"""Best-effort Langfuse export of one client run's Run Explorer spans.
+
+The sample already records every protocol, intent, approval, LLM and tool event as one span in
+:mod:`shared.trace`. This module replays that stream into Langfuse instead of adding a second
+instrumentation layer:
+
+* one Langfuse trace per client run (``session.id`` = conversation, ``user.id`` = caller);
+* one child span per Run Explorer phase, and one more per negotiation round;
+* ``llm`` spans become ``generation`` observations with model and token usage;
+* ``tool`` spans become ``tool`` observations;
+* every other span stays a generic observation.
+
+The exporter never changes the protocol flow. Langfuse is optional: without the keys, without
+the package, or in offline mode it is a no-op, and every export failure is swallowed into a
+warning that the run snapshot can display.
+
+Python SDK v5's high-level ``start_observation`` uses the current time and cannot replay a finished
+span, so the exporter talks to OpenTelemetry directly and passes the recorded ``startedAt`` /
+``endedAt`` timestamps. The ``langfuse.*`` attribute names are the SDK's public ingestion contract.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+from collections import OrderedDict, deque
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, Final
+from urllib.parse import urlsplit
+
+from shared.config import (
+    TRACE_SPAN_LEVEL_FULL,
+    TRACE_SPAN_LEVEL_MINIMAL,
+    SampleConfig,
+)
+
+_LOGGER = logging.getLogger("ran_energy_saving.langfuse")
+
+#: Instrumentation scope of the exporter. Langfuse v5 filters unknown scopes by default, so the
+#: provider is configured with ``should_export_span`` allowing exactly this scope.
+LANGFUSE_SCOPE_NAME: Final[str] = "ran_energy_saving.trace"
+
+#: Langfuse OTel attribute contract (``langfuse/_client/attributes.py`` of the v5 SDK).
+TRACE_NAME_ATTRIBUTE: Final[str] = "langfuse.trace.name"
+TRACE_METADATA_PREFIX: Final[str] = "langfuse.trace.metadata."
+TRACE_SESSION_ATTRIBUTE: Final[str] = "session.id"
+TRACE_USER_ATTRIBUTE: Final[str] = "user.id"
+OBSERVATION_TYPE_ATTRIBUTE: Final[str] = "langfuse.observation.type"
+OBSERVATION_INPUT_ATTRIBUTE: Final[str] = "langfuse.observation.input"
+OBSERVATION_OUTPUT_ATTRIBUTE: Final[str] = "langfuse.observation.output"
+OBSERVATION_METADATA_PREFIX: Final[str] = "langfuse.observation.metadata."
+
+#: Task states that end a run; a reduced export keeps only the final status, not every WORKING push.
+_TERMINAL_STATUS_STATES: Final[frozenset[str]] = frozenset(
+    {
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_FAILED",
+        "TASK_STATE_REJECTED",
+        "TASK_STATE_CANCELED",
+    }
+)
+OBSERVATION_LEVEL_ATTRIBUTE: Final[str] = "langfuse.observation.level"
+OBSERVATION_STATUS_MESSAGE_ATTRIBUTE: Final[str] = "langfuse.observation.status_message"
+OBSERVATION_MODEL_ATTRIBUTE: Final[str] = "langfuse.observation.model.name"
+OBSERVATION_USAGE_ATTRIBUTE: Final[str] = "langfuse.observation.usage_details"
+ROOT_ATTRIBUTE: Final[str] = "langfuse.internal.as_root"
+
+#: Langfuse SDK 5.1.0's internal baggage key. The SDK marks a span whose parent was not exported
+#: in this process as an application root; a retry attaches to a workflow anchor exported by an
+#: earlier attempt, so the anchor context carries this claim to suppress the second root.
+LANGFUSE_TRACE_ID_BAGGAGE_KEY: Final[str] = "langfuse_trace_id"
+
+#: Observations exported under these span kinds.
+OBSERVATION_GENERATION: Final[str] = "generation"
+OBSERVATION_TOOL: Final[str] = "tool"
+OBSERVATION_SPAN: Final[str] = "span"
+
+#: Span kinds whose detail payload is already carried by input/output.
+_PAYLOAD_KINDS: Final[frozenset[str]] = frozenset({"llm", "tool"})
+
+#: Decision span kinds recorded by ``RunState.record_decision``.
+_DECISION_KINDS: Final[frozenset[str]] = frozenset({"accept", "counter", "reject", "abort"})
+
+#: Kinds exported by every level: the model/tool work (token and latency metrics) and the run end.
+_ALWAYS_EXPORT_KINDS: Final[frozenset[str]] = frozenset({"llm", "tool", "finished"})
+
+#: Kinds exported at ``phase`` (and above) on every occurrence -- one per hop/round. They are the
+#: OSP time-point carriers (AL/AM/AS, AO/AP, AK, AQ, AN, AT) plus the business intent, the Task-T
+#: validation verdict and the approval wait.
+_PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
+    frozenset(
+        {
+            "message_sent",
+            "propose",
+            "negotiation_started",
+            "decision_requested",
+            "task_created",
+            "intent_processed",
+            "task_prompt_rendered",
+            "task_validation",
+            "correction_applied",
+            "approval",
+        }
+    )
+    | _DECISION_KINDS
+)
+
+#: Everything else (``transport``, ``run_started``, artifacts, execution, plain status rows, ...)
+#: is full-level evidence: it duplicates the rows above or is too granular for the dashboard.
+
+
+def exported_span_kinds(level: str) -> frozenset[str] | None:
+    """Return the span kinds the exporter keeps at one detail level.
+
+    ``full`` exports every kind, so it returns ``None``. The review console derives its expected
+    trace points from this function instead of copying the private tables, so a change to the
+    export contract fails a single contract test rather than silently changing the acceptance
+    oracle.
+    """
+    if level == TRACE_SPAN_LEVEL_FULL:
+        return None
+    if level == TRACE_SPAN_LEVEL_MINIMAL:
+        return _ALWAYS_EXPORT_KINDS
+    return _ALWAYS_EXPORT_KINDS | _PHASE_EXPORT_KINDS
+
+
+def is_exported_kind(kind: str, level: str) -> bool:
+    """Return whether one span kind reaches Langfuse at ``level``."""
+    kinds = exported_span_kinds(level)
+    return kinds is None or kind in kinds
+
+
+#: Fields copied into the structural observation metadata.
+_STRUCTURAL_FIELDS: Final[tuple[str, ...]] = (
+    "kind",
+    "phase",
+    "actor",
+    "side",
+    "direction",
+    "round",
+    "stage",
+    "status",
+    "seq",
+    "spanId",
+    "parentSpanId",
+    "contextId",
+    "taskId",
+    "runId",
+    "purpose",
+)
+
+try:  # pragma: no cover - exercised by the import-guard test
+    from langfuse import Langfuse
+    from opentelemetry.context import Context
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SpanExportResult
+    from opentelemetry.trace import format_span_id, format_trace_id, set_span_in_context
+
+    LANGFUSE_AVAILABLE = True
+except ImportError:  # pragma: no cover - default test environment installs the SDK
+    Langfuse = None  # type: ignore[assignment,misc]
+    Context = None  # type: ignore[assignment,misc]
+    Resource = None  # type: ignore[assignment,misc]
+    SpanExportResult = None  # type: ignore[assignment,misc]
+    TracerProvider = None  # type: ignore[assignment,misc]
+    format_span_id = None  # type: ignore[assignment]
+    format_trace_id = None  # type: ignore[assignment]
+    set_span_in_context = None  # type: ignore[assignment]
+    LANGFUSE_AVAILABLE = False
+
+
+@dataclass(frozen=True)
+class LangfuseRunMetadata:
+    """Run-level values of one Langfuse trace."""
+
+    run_id: str
+    scenario: str
+    conversation_id: str | None = None
+    #: Stable session of one operator's correction chain; a retry keeps it while getting a new
+    #: trace, so Langfuse groups the attempts without putting several roots in one trace.
+    chain_id: str = ""
+    #: The attempt this run retries, when it is part of a correction chain.
+    parent_run_id: str = ""
+    user_id: str | None = None
+    language: str = ""
+    mode: str = ""
+    protocol: str = ""
+    transport: str = ""
+    discovery: str = ""
+    intent_mode: str = ""
+    model_mode: str = ""
+    model_label: str = ""
+    run_mode: str = ""
+    source_kind: str = ""
+    #: OSP tester identity, when the run was started by the tester console.
+    case_id: str = ""
+    case_name: str = ""
+    batch_id: str = ""
+    #: When the inbound adapter received the request (before the run existed).
+    received_at: str = ""
+    #: The operator's original text (the OSP "user input"). A blocked run keeps this text for its
+    #: whole life; the replacement it dispatches is recorded as ``dispatchedRequest``.
+    user_request: str = ""
+    #: ``blocked_followup`` when the run may repair a blocked gate; empty otherwise.
+    request_role: str = ""
+
+
+@dataclass
+class _LangfuseRuntime:
+    """Process-wide Langfuse client, provider and tracer shared by every run."""
+
+    client: Any
+    provider: Any
+    tracer: Any
+
+
+_RUNTIME: _LangfuseRuntime | None = None
+_RUNTIME_LOCK = threading.Lock()
+
+#: How long one ingestion-probe result is trusted. The probe is a single empty OTLP batch, so a
+#: healthy project costs one request per process per window instead of one per run.
+_INGESTION_PROBE_TTL_SECONDS: Final[float] = 300.0
+_INGESTION_PROBE_TIMEOUT_SECONDS: Final[float] = 5.0
+#: OTLP request timeout and the batch processor's export budget. It must cover the retry budget
+#: (0.5 + 1 + 2 + 4 s of backoff plus the request time), otherwise the processor would give up
+#: while the exporter is still retrying.
+_OTLP_TIMEOUT_SECONDS: Final[float] = 30.0
+_INGESTION_PROBES: dict[tuple[str, str], tuple[float, str]] = {}
+_INGESTION_PROBE_LOCK = threading.Lock()
+
+
+def _probe_ingestion(config: SampleConfig) -> str:
+    """Return why one Langfuse project rejects writes, or ``""`` when it accepts them.
+
+    Langfuse answers a suspended project with HTTP 403 while its read API keeps working. The
+    SDK's OTLP exporter logs that failure and the run still reports ``status=exported``, so a
+    reader of the run snapshot would otherwise believe the trace was stored. An empty OTLP batch
+    is accepted by a healthy project and rejected by a suspended one, which makes it a cheap
+    health check that writes no observation.
+    """
+    endpoint = f"{config.langfuse_base_url.rstrip('/')}/api/public/otel/v1/traces"
+    raw = f"{config.langfuse_public_key}:{config.langfuse_secret_key}".encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=b'{"resourceSpans": []}',
+        headers={
+            "Authorization": "Basic " + base64.b64encode(raw).decode("ascii"),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_INGESTION_PROBE_TIMEOUT_SECONDS) as response:
+            if 200 <= response.status < 300:
+                return ""
+            return f"Langfuse ingestion returned HTTP {response.status}"
+    except urllib.error.HTTPError as exc:
+        return f"Langfuse ingestion rejected (HTTP {exc.code}): {_probe_error_detail(exc)}"
+    except Exception as exc:  # noqa: BLE001 - observability must never break the run
+        return f"Langfuse ingestion probe failed: {type(exc).__name__}: {exc}"
+
+
+def _probe_error_detail(exc: urllib.error.HTTPError) -> str:
+    """Return the server's message of one rejected OTLP batch, bounded for a snapshot."""
+    try:
+        body = exc.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - the status code is already enough
+        return "no response body"
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return body[:300]
+    if isinstance(payload, Mapping):
+        message = payload.get("message") or payload.get("error")
+        if isinstance(message, str) and message:
+            return message[:300]
+    return body[:300]
+
+
+def _ingestion_warning(config: SampleConfig) -> str:
+    """Return the cached ingestion health of one project, probing again after the TTL."""
+    key = (config.langfuse_base_url, config.langfuse_public_key)
+    now = time.monotonic()
+    with _INGESTION_PROBE_LOCK:
+        cached = _INGESTION_PROBES.get(key)
+        if cached is not None and now - cached[0] < _INGESTION_PROBE_TTL_SECONDS:
+            return cached[1]
+    warning = _probe_ingestion(config)
+    with _INGESTION_PROBE_LOCK:
+        _INGESTION_PROBES[key] = (time.monotonic(), warning)
+    return warning
+
+
+def _cached_ingestion_warning(config: SampleConfig) -> str:
+    """Return a fresh cached probe result without making a request (empty when unknown)."""
+    key = (config.langfuse_base_url, config.langfuse_public_key)
+    now = time.monotonic()
+    with _INGESTION_PROBE_LOCK:
+        cached = _INGESTION_PROBES.get(key)
+    if cached is None or now - cached[0] >= _INGESTION_PROBE_TTL_SECONDS:
+        return ""
+    return cached[1]
+
+
+def _should_export_span(span: Any) -> bool:
+    """Allow exactly the exporter's instrumentation scope (Langfuse filters unknown scopes)."""
+    scope = getattr(span, "instrumentation_scope", None)
+    return scope is not None and getattr(scope, "name", None) == LANGFUSE_SCOPE_NAME
+
+
+#: A rejected OTLP batch is dropped by the batch processor after a warning on the SDK's logger, so
+#: the run snapshot would still say ``exported``. This audit is the authoritative account of what
+#: each trace actually delivered. Entries are keyed by OTel trace id (the chain id under a workflow
+#: root) and bounded: a long-lived UI process must not grow the map without limit.
+_MAX_AUDITED_TRACES: Final[int] = 512
+
+
+@dataclass
+class _TraceExportAudit:
+    """Span delivery of one trace, counted per export attempt."""
+
+    batches: int = 0
+    rejected_batches: int = 0
+    spans: int = 0
+    lost_spans: int = 0
+    generations: int = 0
+    lost_generations: int = 0
+    last_status: int | None = None
+    last_reason: str = ""
+    lost_names: list[str] = field(default_factory=list)
+
+
+_EXPORT_AUDITS: "OrderedDict[str, _TraceExportAudit]" = OrderedDict()
+_EXPORT_AUDIT_LOCK = threading.Lock()
+#: Diagnostics of the batch being exported right now. Exports are serialized by the batch
+#: processor's export lock, so a module-level slot is enough; the locks keep it exception-safe.
+_BATCH_DIAGNOSTICS_LOCK = threading.Lock()
+_LAST_EXPORT_RESULT: tuple[bool, int | None, str] | None = None
+_LAST_REJECTION_BODY: tuple[int, str] | None = None
+
+
+def _reset_batch_diagnostics() -> None:
+    """Clear the diagnostics of the previous export attempt."""
+    global _LAST_EXPORT_RESULT, _LAST_REJECTION_BODY
+    with _BATCH_DIAGNOSTICS_LOCK:
+        _LAST_EXPORT_RESULT = None
+        _LAST_REJECTION_BODY = None
+
+
+def _remember_export_result(result: Any) -> None:
+    """Record the OTLP client's result (``success``/``status_code``/``reason``)."""
+    global _LAST_EXPORT_RESULT
+    with _BATCH_DIAGNOSTICS_LOCK:
+        _LAST_EXPORT_RESULT = (
+            bool(getattr(result, "success", False)),
+            getattr(result, "status_code", None),
+            str(getattr(result, "reason", "") or ""),
+        )
+
+
+def _remember_rejection_body(status: int, body: str) -> None:
+    """Record the response body of a rejected OTLP request."""
+    global _LAST_REJECTION_BODY
+    with _BATCH_DIAGNOSTICS_LOCK:
+        _LAST_REJECTION_BODY = (status, body)
+
+
+def _take_batch_diagnostics() -> tuple[int | None, str]:
+    """Return the HTTP status and reason of the batch just exported, when known."""
+    with _BATCH_DIAGNOSTICS_LOCK:
+        result = _LAST_EXPORT_RESULT
+        body = _LAST_REJECTION_BODY
+    status = result[1] if result else None
+    reason = result[2] if result else ""
+    if body is not None:
+        status = status or body[0]
+        reason = body[1] or reason
+    return status, reason
+
+
+#: Largest accepted OTLP request of the process, in wire bytes. A proxy that rejects by body size
+#: is proved when every rejection sits above this value; an accepted request above it rules the
+#: size rule out. Process lifetime is enough: the exporter is a singleton.
+_MAX_ACCEPTED_BYTES: int = 0
+_ACCEPTED_BYTES_LOCK = threading.Lock()
+
+
+def _note_accepted_request(request: Any) -> None:
+    """Remember the largest accepted request body of the process."""
+    global _MAX_ACCEPTED_BYTES
+    size = _request_body_size(request)
+    if not isinstance(size, int):
+        return
+    with _ACCEPTED_BYTES_LOCK:
+        if size > _MAX_ACCEPTED_BYTES:
+            _MAX_ACCEPTED_BYTES = size
+
+
+def _max_accepted_bytes() -> int:
+    """Return the largest accepted OTLP request body seen in this process."""
+    with _ACCEPTED_BYTES_LOCK:
+        return _MAX_ACCEPTED_BYTES
+
+
+#: Rolling window of completed OTLP requests (monotonic seconds, wire bytes). The egress proxy's
+#: per-message limit is known, but a per-time byte quota is not: the same 1-way and 3-way batches
+#: compare their last-minute traffic in the log instead of guessing from concurrency alone.
+_TRAFFIC_WINDOW_SECONDS: Final[float] = 60.0
+_OTLP_TRAFFIC: deque[tuple[float, int]] = deque()
+_TRAFFIC_LOCK = threading.Lock()
+
+
+def _note_traffic(request: Any) -> None:
+    """Record one completed OTLP request in the rolling traffic window."""
+    size = _request_body_size(request)
+    if not isinstance(size, int):
+        return
+    now = time.monotonic()
+    with _TRAFFIC_LOCK:
+        _OTLP_TRAFFIC.append((now, size))
+        _prune_traffic(now)
+
+
+def _prune_traffic(now: float) -> None:
+    """Drop the entries that left the rolling window (caller holds the lock)."""
+    cutoff = now - _TRAFFIC_WINDOW_SECONDS
+    while _OTLP_TRAFFIC and _OTLP_TRAFFIC[0][0] < cutoff:
+        _OTLP_TRAFFIC.popleft()
+
+
+def _traffic_last_minute() -> tuple[int, int]:
+    """Return ``(requests, wire bytes)`` of the last 60 seconds."""
+    now = time.monotonic()
+    with _TRAFFIC_LOCK:
+        _prune_traffic(now)
+        return len(_OTLP_TRAFFIC), sum(size for _, size in _OTLP_TRAFFIC)
+
+
+def _trace_id_text(trace_id: int) -> str:
+    """Render one OTel trace id as 32 lowercase hex characters."""
+    formatter = format_trace_id
+    return formatter(trace_id) if callable(formatter) else format(trace_id, "032x")
+
+
+def _record_batch(
+    spans: Sequence[Any],
+    *,
+    failed: bool,
+    status: int | None = None,
+    reason: str = "",
+) -> None:
+    """Account one export attempt per trace; never raises."""
+    try:
+        counts: dict[str, tuple[int, int]] = {}
+        names: dict[str, list[str]] = {}
+        for span in spans:
+            context = getattr(span, "context", None)
+            trace_id = getattr(context, "trace_id", 0)
+            if not isinstance(trace_id, int) or trace_id <= 0:
+                continue
+            key = _trace_id_text(trace_id)
+            attributes = getattr(span, "attributes", None) or {}
+            is_generation = attributes.get(OBSERVATION_TYPE_ATTRIBUTE) == OBSERVATION_GENERATION
+            total, generations = counts.get(key, (0, 0))
+            counts[key] = (total + 1, generations + (1 if is_generation else 0))
+            if failed:
+                bucket = names.setdefault(key, [])
+                name = str(getattr(span, "name", "") or "")
+                if name and len(bucket) < 10:
+                    bucket.append(name)
+        if not counts:
+            return
+        with _EXPORT_AUDIT_LOCK:
+            for key, (total, generations) in counts.items():
+                audit = _EXPORT_AUDITS.get(key)
+                if audit is None:
+                    audit = _TraceExportAudit()
+                    _EXPORT_AUDITS[key] = audit
+                _EXPORT_AUDITS.move_to_end(key)
+                audit.batches += 1
+                audit.spans += total
+                audit.generations += generations
+                if failed:
+                    audit.rejected_batches += 1
+                    audit.lost_spans += total
+                    audit.lost_generations += generations
+                    if status is not None:
+                        audit.last_status = status
+                    if reason:
+                        audit.last_reason = reason[:300]
+                    bucket = names.get(key) or []
+                    room = max(0, 20 - len(audit.lost_names))
+                    audit.lost_names.extend(bucket[:room])
+            while len(_EXPORT_AUDITS) > _MAX_AUDITED_TRACES:
+                _EXPORT_AUDITS.popitem(last=False)
+        if failed:
+            _LOGGER.warning(
+                "Langfuse rejected a span batch: %d span(s), %d generation(s) not stored "
+                "(traces=%s, status=%s, reason=%s, spans=%s)",
+                sum(total for total, _ in counts.values()),
+                sum(generations for _, generations in counts.values()),
+                ",".join(sorted(counts)),
+                status if status is not None else "unknown",
+                reason[:200],
+                ",".join(name for bucket in names.values() for name in bucket),
+            )
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("Langfuse export audit failed", exc_info=True)
+
+
+def _audit_for(trace_id: str) -> _TraceExportAudit | None:
+    """Return a copy of one trace's delivery audit, or ``None``."""
+    with _EXPORT_AUDIT_LOCK:
+        audit = _EXPORT_AUDITS.get(trace_id)
+        if audit is None:
+            return None
+        return _TraceExportAudit(
+            batches=audit.batches,
+            rejected_batches=audit.rejected_batches,
+            spans=audit.spans,
+            lost_spans=audit.lost_spans,
+            generations=audit.generations,
+            lost_generations=audit.lost_generations,
+            last_status=audit.last_status,
+            last_reason=audit.last_reason,
+            lost_names=list(audit.lost_names),
+        )
+
+
+class _AuditingSpanExporter:
+    """Span exporter that records what each trace actually delivered.
+
+    It implements the ``SpanExporter`` protocol instead of inheriting from it: the SDK import is
+    optional, and the batch processor only calls ``export``/``force_flush``/``shutdown``.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def export(self, spans: Sequence[Any]) -> Any:
+        _reset_batch_diagnostics()
+        try:
+            result = self._inner.export(spans)
+        except Exception:  # noqa: BLE001 - record, then preserve the exporter contract
+            status, reason = _take_batch_diagnostics()
+            _record_batch(spans, failed=True, status=status, reason=reason)
+            raise
+        success = getattr(SpanExportResult, "SUCCESS", None)
+        failed = success is None or result is not success
+        if failed:
+            status, reason = _take_batch_diagnostics()
+        else:
+            status, reason = None, ""
+        _record_batch(spans, failed=failed, status=status, reason=reason)
+        return result
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        force_flush = getattr(self._inner, "force_flush", None)
+        return bool(force_flush(timeout_millis)) if callable(force_flush) else True
+
+
+def _audited_exporter(exporter: Any) -> Any:
+    """Wrap one exporter with the per-trace audit (a no-op when the SDK is absent)."""
+    if not LANGFUSE_AVAILABLE:
+        return exporter
+    try:
+        return _AuditingSpanExporter(exporter)
+    except Exception:  # noqa: BLE001 - never break the export path
+        _LOGGER.debug("Langfuse export audit wrapper unavailable", exc_info=True)
+        return exporter
+
+
+def _instrument_otlp_client(exporter: Any) -> None:
+    """Capture the OTLP client's status code without depending on the exporter's API.
+
+    The HTTP exporter returns only ``SUCCESS``/``FAILURE`` to the batch processor, but its client
+    result also carries ``status_code``. Wrapping that call is version-tolerant: when the attribute
+    is absent the audit still counts failures, it just cannot name the status.
+    """
+    client = getattr(exporter, "_client", None)
+    export = getattr(client, "export", None)
+    if client is None or not callable(export):
+        return
+
+    def audited_export(data: bytes) -> Any:
+        result = export(data)
+        try:
+            _remember_export_result(result)
+        except Exception:  # noqa: BLE001 - the export already succeeded or failed on its own
+            _LOGGER.debug("Langfuse export result capture failed", exc_info=True)
+        return result
+
+    try:
+        client.export = audited_export
+    except Exception:  # noqa: BLE001 - a read-only client just loses the status code
+        _LOGGER.debug("Langfuse OTLP client is not instrumentable", exc_info=True)
+
+
+def _request_body_size(request: Any) -> int | str:
+    """Return the on-the-wire body length of one OTLP request, ``unknown`` when unavailable."""
+    body = getattr(request, "body", None)
+    if isinstance(body, (bytes, bytearray)):
+        return len(body)
+    return "unknown"
+
+
+def _request_encoding(request: Any) -> str:
+    """Return the ``Content-Encoding`` of one OTLP request (``none`` when uncompressed)."""
+    headers = getattr(request, "headers", None)
+    if headers is None or not callable(getattr(headers, "get", None)):
+        return "unknown"
+    return str(headers.get("Content-Encoding") or "none")
+
+
+def _response_excerpt(response: Any) -> str:
+    """Return a bounded one-line excerpt of a rejected HTTP response."""
+    try:
+        text = response.text
+    except Exception:  # noqa: BLE001 - a body we cannot read is not worth failing over
+        return ""
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.split())[:300]
+
+
+def _rejection_warning(audit: _TraceExportAudit) -> str:
+    """Return the human sentence of one trace's rejected batches."""
+    status = f" (HTTP {audit.last_status})" if audit.last_status is not None else ""
+    reason = f": {audit.last_reason}" if audit.last_reason else ""
+    return (
+        f"Langfuse rejected {audit.rejected_batches} batch(es): {audit.lost_spans} span(s) "
+        f"including {audit.lost_generations} generation(s) were not stored{status}{reason}"
+    )
+
+
+def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
+    """Return an OTLP exporter that retries a temporary ingestion rejection.
+
+    The SDK's default OTLP exporter reports one failure and the batch processor discards the whole
+    batch, so the trace silently loses spans. Retrying inside the HTTP session keeps the batch
+    alive: urllib3 honours ``Retry-After`` and rewinds the POST body.
+
+    ``403`` is retried together with ``429``/5xx: the observed Langfuse Cloud rejection was
+    intermittent (403 with 200 in the same minute, see ``docs-local/langfuse_403问题分析.md``),
+    which is not the persistent "project suspended" case the older guidance assumed; a suspended
+    project simply exhausts the bounded budget and the batch is dropped as before. ``401`` (bad
+    key) is never retried.
+
+    Returns ``None`` when the retry stack is unavailable, so the caller falls back to the SDK's
+    default exporter rather than failing the run.
+    """
+    try:
+        import os
+
+        import requests
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        return None
+    auth = "Basic " + base64.b64encode(
+        f"{config.langfuse_public_key}:{config.langfuse_secret_key}".encode("utf-8")
+    ).decode("ascii")
+    headers = {
+        "Authorization": auth,
+        "x-langfuse-sdk-name": "python",
+        "x-langfuse-sdk-version": "5.1.0",
+        "x-langfuse-public-key": config.langfuse_public_key,
+        # Langfuse v4/Cloud needs this to process the batch in real time.
+        "x-langfuse-ingestion-version": "4",
+    }
+    export_path = os.environ.get("LANGFUSE_OTEL_TRACES_EXPORT_PATH", "")
+    endpoint = (
+        f"{config.langfuse_base_url.rstrip('/')}/{export_path}"
+        if export_path
+        else f"{config.langfuse_base_url.rstrip('/')}/api/public/otel/v1/traces"
+    )
+    retry = Retry(
+        total=4,
+        connect=2,
+        read=2,
+        status=4,
+        backoff_factor=0.5,
+        status_forcelist=(403, 429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"POST"}),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    session = requests.Session()
+
+    class _CapturingHTTPAdapter(HTTPAdapter):
+        """HTTP adapter that keeps the rejection status and body of an OTLP request."""
+
+        def send(
+            self,
+            request: Any,
+            stream: bool = False,
+            timeout: Any = None,
+            verify: Any = True,
+            cert: Any = None,
+            proxies: Any = None,
+        ) -> Any:
+            response = super().send(
+                request,
+                stream=stream,
+                timeout=timeout,
+                verify=verify,
+                cert=cert,
+                proxies=proxies,
+            )
+            try:
+                status = getattr(response, "status_code", 0)
+                _note_traffic(request)
+                if isinstance(status, int) and status >= 400:
+                    body = _response_excerpt(response)
+                    _remember_rejection_body(status, body)
+                    # The bytes as they went on the wire (already compressed when gzip is on):
+                    # an egress proxy that rejects by body size needs this to be measurable.
+                    minute_requests, minute_bytes = _traffic_last_minute()
+                    _LOGGER.warning(
+                        "Langfuse OTLP request rejected: HTTP %s bytes=%s encoding=%s "
+                        "maxAcceptedBytes=%s lastMinuteRequests=%s lastMinuteBytes=%s %s",
+                        status,
+                        _request_body_size(request),
+                        _request_encoding(request),
+                        _max_accepted_bytes(),
+                        minute_requests,
+                        minute_bytes,
+                        body,
+                    )
+                elif isinstance(status, int):
+                    _note_accepted_request(request)
+            except Exception:  # noqa: BLE001 - inspecting the response must never fail the export
+                _LOGGER.debug("Langfuse rejection capture failed", exc_info=True)
+            return response
+
+    adapter = _CapturingHTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    compression: Any = None
+    try:
+        from opentelemetry.exporter.otlp.proto.http import Compression
+
+        if not (
+            os.environ.get("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION")
+            or os.environ.get("OTEL_EXPORTER_OTLP_COMPRESSION")
+        ):
+            # The Langfuse SDK's own exporter defaults to gzip; a custom span_exporter must opt in.
+            compression = Compression.Gzip
+    except Exception:  # noqa: BLE001 - uncompressed is still a working exporter
+        compression = None
+    try:
+        if compression is not None:
+            exporter = OTLPSpanExporter(
+                endpoint=endpoint,
+                headers=headers,
+                timeout=_OTLP_TIMEOUT_SECONDS,
+                compression=compression,
+                session=session,
+            )
+        else:
+            exporter = OTLPSpanExporter(
+                endpoint=endpoint,
+                headers=headers,
+                timeout=_OTLP_TIMEOUT_SECONDS,
+                session=session,
+            )
+    except Exception:  # noqa: BLE001 - fall back to the SDK default exporter
+        return None
+    _LOGGER.info(
+        "Langfuse OTLP exporter ready: compression=%s endpoint=%s",
+        "gzip" if compression is not None else "none",
+        endpoint,
+    )
+    _instrument_otlp_client(exporter)
+    return _audited_exporter(exporter)
+
+
+def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
+    """Return the process-wide Langfuse runtime, creating it once."""
+    global _RUNTIME
+    if _RUNTIME is not None:
+        return _RUNTIME
+    if not LANGFUSE_AVAILABLE:
+        return None
+    with _RUNTIME_LOCK:
+        if _RUNTIME is not None:
+            return _RUNTIME
+        provider = TracerProvider(resource=Resource.create({"service.name": "ran-energy-saving-sample"}))
+        exporter = _retrying_otlp_exporter(config)
+        client = Langfuse(
+            public_key=config.langfuse_public_key,
+            secret_key=config.langfuse_secret_key,
+            base_url=config.langfuse_base_url,
+            environment=config.langfuse_environment or None,
+            tracer_provider=provider,
+            should_export_span=_should_export_span,
+            # The batch processor's export timeout must cover the retry budget (0.5+1+2+4s plus
+            # the request time), otherwise it would give up while the exporter is still retrying.
+            timeout=_OTLP_TIMEOUT_SECONDS,
+            # One LLM span carries the whole slot-extraction prompt (~34 KB with content capture),
+            # so the batch size bounds the request body: 32 spans of concurrent runs can exceed
+            # the egress proxy's 1 MB limit and get a 403 the batch processor cannot retry.
+            flush_at=config.langfuse_flush_at,
+            flush_interval=1.0,
+            **({"span_exporter": exporter} if exporter is not None else {}),
+        )
+        tracer = provider.get_tracer(LANGFUSE_SCOPE_NAME)
+        _RUNTIME = _LangfuseRuntime(client=client, provider=provider, tracer=tracer)
+        return _RUNTIME
+
+
+def langfuse_export_active(config: SampleConfig) -> bool:
+    """Return whether a live run creates a Langfuse exporter (mirrors the create guard)."""
+    return config.langfuse_configured and not config.is_offline and LANGFUSE_AVAILABLE
+
+
+def create_langfuse_exporter(
+    config: SampleConfig,
+    metadata: LangfuseRunMetadata,
+    *,
+    parent_trace_id: str | None = None,
+    workflow_root_span_id: str | None = None,
+    create_workflow_root: bool = False,
+) -> "LangfuseSpanExporter | None":
+    """Build the exporter of one run, or ``None`` when Langfuse is disabled.
+
+    Langfuse is active when both keys are configured and the run is live. Offline runs use the
+    deterministic model whose token usage is not real, so they stay out of the dashboard.
+
+    ``parent_trace_id`` is the correction chain's explicit (vendor-facing) trace id. When
+    ``workflow_root_span_id`` names an already-exported anchor, this run's root attaches under
+    it. Otherwise ``create_workflow_root`` makes this run own the chain's single anchor; the
+    exporter exposes it through :attr:`LangfuseSpanExporter.workflow_root_span_id` so the caller
+    can persist it for every retry.
+    """
+    if not langfuse_export_active(config):
+        if config.langfuse_configured and config.is_offline:
+            _LOGGER.info("Langfuse export skipped: offline (scripted) runs are not exported")
+        elif config.langfuse_configured:
+            _LOGGER.warning("LANGFUSE_* is configured but the langfuse package is not installed; export disabled")
+        return None
+    try:
+        runtime = _get_runtime(config)
+        if runtime is None:
+            return None
+        return LangfuseSpanExporter(
+            runtime=runtime,
+            config=config,
+            metadata=metadata,
+            parent_trace_id=parent_trace_id,
+            workflow_root_span_id=workflow_root_span_id,
+            create_workflow_root=create_workflow_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.warning("Langfuse initialization failed: %s: %s", type(exc).__name__, exc)
+        return None
+
+
+def _current_parent_context() -> Any:
+    """Return the current OTel context when it carries a valid span, else an empty context.
+
+    The UI adopts an incoming ``traceparent`` (see ``TracePropagationMiddleware`` on the Web UI),
+    so a run started by an instrumented caller joins that caller's trace instead of opening an
+    unrelated one. A browser request has no parent and keeps the historical behavior.
+    """
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span is not None and span.get_span_context().is_valid:
+            return trace.set_span_in_context(span)
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("current OTel parent lookup failed", exc_info=True)
+    return Context()
+
+
+def _root_context(parent_trace_id: str | None) -> Any:
+    """Return the root context: the explicit run trace id, else the current OTel parent.
+
+    The run trace id is authoritative because it is derived from the caller's ``traceparent``
+    when one is present (``x-a2at-downstream-trace-id``): a retry and a follow-up turn then stay
+    in one Langfuse trace instead of each opening its own. Only a run without one (plain span
+    ingestion) falls back to whatever OTel context is current.
+    """
+    explicit = (parent_trace_id or "").strip().lower()
+    if len(explicit) == 32 and explicit != "0" * 32 and all(character in "0123456789abcdef" for character in explicit):
+        return _synthetic_parent_context(explicit)
+    return _current_parent_context()
+
+
+def _synthetic_parent_context(trace_id: str, span_id: str | None = None) -> Any:
+    """Return a context whose remote parent carries ``trace_id`` and a fresh span id."""
+    try:
+        from opentelemetry import trace
+
+        context = trace.SpanContext(
+            trace_id=int(trace_id, 16),
+            span_id=int(span_id or uuid.uuid4().hex[:16], 16),
+            is_remote=True,
+            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+        )
+        return trace.set_span_in_context(trace.NonRecordingSpan(context))
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("synthetic parent context failed", exc_info=True)
+        return Context()
+
+
+def _workflow_parent_context(trace_id: str, span_id: str) -> Any:
+    """Return a context parented to a workflow anchor, with the SDK's root-suppression claim.
+
+    The anchor was exported by an earlier attempt (possibly another process), so the installed
+    Langfuse SDK would otherwise tag this run's root as an application root. Baggage
+    ``langfuse_trace_id`` is the SDK's own signal that the parent belongs to this trace.
+    """
+    try:
+        from opentelemetry import baggage, trace
+
+        context = trace.SpanContext(
+            trace_id=int(trace_id, 16),
+            span_id=int(span_id, 16),
+            is_remote=True,
+            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+        )
+        anchored = trace.set_span_in_context(trace.NonRecordingSpan(context))
+        return baggage.set_baggage(LANGFUSE_TRACE_ID_BAGGAGE_KEY, trace_id, context=anchored)
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        _LOGGER.debug("workflow parent context failed", exc_info=True)
+        return _synthetic_parent_context(trace_id)
+
+
+class LangfuseSpanExporter:
+    """Translate the Run Explorer span stream of one run into Langfuse observations."""
+
+    def __init__(
+        self,
+        *,
+        runtime: _LangfuseRuntime,
+        config: SampleConfig,
+        metadata: LangfuseRunMetadata,
+        parent_trace_id: str | None = None,
+        workflow_root_span_id: str | None = None,
+        create_workflow_root: bool = False,
+    ) -> None:
+        """Create the chain/workflow anchor and this run's root span."""
+        self._runtime = runtime
+        self._config = config
+        self._metadata = metadata
+        self._lock = threading.Lock()
+        self._closed = False
+        self._finished = False
+        self._status = "exporting"
+        # A suspended project rejects every OTLP batch while its read API still works. Later runs
+        # surface the previous run's probe result immediately instead of looking healthy.
+        self._warning: str | None = _cached_ingestion_warning(config) or None
+        self._exported = 0
+        self._phase_spans: dict[str, Any] = {}
+        self._round_spans: dict[int, Any] = {}
+        self._span_map: dict[str, Any] = {}
+        self._trace_url: str | None = None
+        self._span_level = (config.trace_span_level or TRACE_SPAN_LEVEL_FULL).strip().lower()
+        self._last_status_span: Mapping[str, object] | None = None
+        self._saw_terminal_status = False
+        self._max_round = 0
+        #: Span id of the early zero-length anchor every observation is parented to.
+        self._visible_span_id: str = ""
+        self._visible_context: Any = None
+        #: Open "creation" span; observations hang under it until the Task is accepted.
+        self._creation_span: Any = None
+        #: Context used for new observations and phase/round spans (creation, then the anchor).
+        self._child_context: Any = None
+        started = _now_ns()
+        trace_id = _valid_trace_id(parent_trace_id)
+        anchor_id = _valid_span_id(workflow_root_span_id)
+        self._workflow_root_span_id = anchor_id
+        self._uses_workflow_root = bool(trace_id and (anchor_id or create_workflow_root))
+        if self._uses_workflow_root and anchor_id:
+            # A retry in another process attaches to the anchor exported by the first attempt.
+            self._root = runtime.tracer.start_span(
+                _run_span_name(metadata),
+                context=_workflow_parent_context(trace_id, anchor_id),
+                start_time=started,
+                attributes=_run_root_attributes(metadata),
+            )
+            self._start_run_anchor(started)
+        elif self._uses_workflow_root:
+            # The first exported attempt owns the chain's single root. It is a zero-length
+            # anchor: OTel exports a span only on end(), and a retry may run in another process,
+            # so an open anchor could never be the parent it promises to be.
+            anchor = runtime.tracer.start_span(
+                _workflow_span_name(metadata),
+                context=_root_context(trace_id),
+                start_time=started,
+                attributes=_workflow_root_attributes(metadata),
+            )
+            anchor_context = anchor.get_span_context()
+            self._workflow_root_span_id = format_span_id(anchor_context.span_id)
+            trace_id = format_trace_id(anchor_context.trace_id)
+            anchor.end(end_time=started)
+            self._root = runtime.tracer.start_span(
+                _run_span_name(metadata),
+                context=_workflow_parent_context(trace_id, self._workflow_root_span_id),
+                start_time=started,
+                attributes=_run_root_attributes(metadata),
+            )
+            self._start_run_anchor(started)
+            self._start_creation(started)
+            # Name the trace and expose the attempt's runId as early as possible. The anchor
+            # itself stays a zero-length root; this child is its first observation.
+            bootstrap = runtime.tracer.start_span(
+                "trace opened",
+                context=self._child_context,
+                start_time=started,
+                attributes=_trace_opened_attributes(metadata),
+            )
+            bootstrap.end(end_time=started)
+        else:
+            self._root = runtime.tracer.start_span(
+                _run_span_name(metadata),
+                context=_root_context(parent_trace_id),
+                start_time=started,
+                attributes=_root_attributes(metadata),
+            )
+            root_context = self._root.get_span_context()
+            self._trace_id = format_trace_id(root_context.trace_id)
+            self._root_span_id = format_span_id(root_context.span_id)
+            self._start_run_anchor(started)
+            self._start_creation(started)
+            # The root stays open for the whole run, so its trace-level attributes would arrive
+            # only at run end. Export one zero-length child immediately: it is the trace's first
+            # observation, so Langfuse names the trace and fills session/user from the start.
+            bootstrap = runtime.tracer.start_span(
+                "trace opened",
+                context=self._child_context,
+                start_time=started,
+                attributes={key: value for key, value in _root_attributes(metadata).items() if key != ROOT_ATTRIBUTE}
+                | {OBSERVATION_TYPE_ATTRIBUTE: "event"},
+            )
+            bootstrap.end(end_time=started)
+        root_context = self._root.get_span_context()
+        self._trace_id = format_trace_id(root_context.trace_id)
+        self._root_span_id = format_span_id(root_context.span_id)
+
+    def _start_run_anchor(self, started: int) -> None:
+        """Export one zero-length child of the run root and parent observations to it.
+
+        OTel exports a span only when it ends, so the long-lived root reaches Langfuse at run end
+        — or never, if the process stops first. Every observation would then name a parent the
+        backend has not received, and the trace renders as a flat list of unrelated rows. The
+        anchor ends immediately, so it exists from the first seconds of the run; the observations
+        (and the root, when it finally arrives) attach to it.
+        """
+        attributes = {key: value for key, value in _root_attributes(self._metadata).items() if key != ROOT_ATTRIBUTE}
+        attributes[OBSERVATION_TYPE_ATTRIBUTE] = OBSERVATION_SPAN
+        anchor = self._runtime.tracer.start_span(
+            "run opened",
+            context=set_span_in_context(self._root),
+            start_time=started,
+            attributes=attributes,
+        )
+        self._visible_span_id = format_span_id(anchor.get_span_context().span_id)
+        self._visible_context = set_span_in_context(anchor)
+        self._child_context = self._visible_context
+        anchor.end(end_time=started)
+
+    def _start_creation(self, started: int) -> None:
+        """Open the creation stage: intent, Task-T, validation, send and acceptance.
+
+        The span ends when the remote Task is accepted (SUBMITTED/WORKING), so a long-running
+        Task still has one closed span for the creation stage instead of an open-ended root.
+        Observations created before that moment hang under it; later ones hang under the anchor.
+        The name is new: ``run ·`` / ``phase ·`` / round names stay exactly as the statistics
+        tools expect them.
+        """
+        self._creation_span = self._runtime.tracer.start_span(
+            _creation_span_name(self._metadata),
+            context=self._visible_context,
+            start_time=started,
+            attributes={
+                OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN,
+                "stage": "creation",
+            },
+        )
+        self._child_context = set_span_in_context(self._creation_span)
+
+    def _close_creation(self, ended: int) -> None:
+        """End the creation stage and move later observations back under the anchor."""
+        span = self._creation_span
+        if span is None:
+            return
+        self._creation_span = None
+        self._child_context = self._visible_context
+        span.end(end_time=ended)
+
+    def _is_acceptance(self, span: Mapping[str, object]) -> bool:
+        """Whether one recorded span proves the remote Task was accepted."""
+        kind = _as_str(span.get("kind"))
+        if kind == "task_created":
+            return True
+        return kind == "status" and _status_state(span) in (
+            "TASK_STATE_SUBMITTED",
+            "TASK_STATE_WORKING",
+        )
+
+    @property
+    def trace_id(self) -> str:
+        """Return the Langfuse trace id (the OTel trace id)."""
+        return self._trace_id
+
+    @property
+    def root_span_id(self) -> str:
+        """Return the exported run anchor, used as the parent of outgoing server hops.
+
+        It is the visible node of the trace: the run root itself stays open for the whole run and
+        is exported only at ``finish``, so naming the root would leave every child dangling.
+        """
+        return self._visible_span_id or self._root_span_id
+
+    @property
+    def workflow_root_span_id(self) -> str:
+        """Return the chain's workflow anchor span id, empty outside a workflow-root run."""
+        return self._workflow_root_span_id
+
+    def start_vendor_span(self, name: str, attributes: Mapping[str, object]) -> Any:
+        """Start one exported child of the run root for an outbound vendor request.
+
+        The vendor NMS joins its backend trace to the ``span-id`` we send, so that id must name a
+        span that exists in our trace. Started through this exporter's tracer, the span lands in
+        the run's Langfuse trace under the run root and ends with the request.
+        """
+        return self._runtime.tracer.start_span(
+            name,
+            context=self._child_context,
+            attributes={str(key): value for key, value in attributes.items()},
+        )
+
+    def __call__(self, span: Mapping[str, object]) -> None:
+        """Export one completed Run Explorer span; failures become a snapshot warning.
+
+        Spans that arrive after :meth:`finish` (the local demo's server trace emitter flushes in
+        batches) are still exported under the closed root; the Langfuse atexit handler sends them.
+        """
+        if self._closed:
+            return
+        try:
+            with self._lock:
+                self._observe(span)
+                if self._should_export(span):
+                    self._export(span)
+                elif self._creation_span is not None and self._is_acceptance(span):
+                    # A reduced level may not export the accepting row (a bare status or a
+                    # terminal), but the creation stage must still close at acceptance.
+                    started = _iso_to_ns(span.get("startedAt"), default=_now_ns())
+                    self._close_creation(_span_end_ns(span, started))
+        except Exception as exc:  # noqa: BLE001 - observability must never break the run
+            self._warning = f"{type(exc).__name__}: {exc}"
+            _LOGGER.warning("Langfuse span export failed: %s", exc)
+
+    def _observe(self, span: Mapping[str, object]) -> None:
+        """Track run-wide facts from every span, even the ones the level does not export."""
+        kind = _as_str(span.get("kind"))
+        if kind == "status" and _status_state(span) in _TERMINAL_STATUS_STATES:
+            self._saw_terminal_status = True
+        if kind == "correction_applied":
+            detail = span.get("detail")
+            corrected = _as_str(detail.get("correctedRequest")) if isinstance(detail, Mapping) else ""
+            if corrected:
+                # The run's request stays ``userRequest``; this names what it actually dispatched
+                # after its own gate blocked. The root is open until run end, so the attribute
+                # reaches Langfuse with it.
+                prefix = (
+                    OBSERVATION_METADATA_PREFIX
+                    if self._uses_workflow_root
+                    else TRACE_METADATA_PREFIX
+                )
+                self._root.set_attribute(
+                    f"{prefix}dispatchedRequest", _json_value(corrected)
+                )
+                self._root.set_attribute(
+                    f"{prefix}requestRole", _json_value("blocked_followup")
+                )
+        round_number = span.get("round")
+        if isinstance(round_number, int) and not isinstance(round_number, bool):
+            self._max_round = max(self._max_round, round_number)
+
+    def _should_export(self, span: Mapping[str, object]) -> bool:
+        """Return whether one recorded span becomes a Langfuse observation.
+
+        The Web UI timeline always keeps every span; this filter only controls the dashboard. The
+        reduced levels are an explicit allow-list instead of "first span of every phase": a phase
+        representative was arbitrary (an artifact row could win over the decision it belongs to)
+        and it hid rounds 2+ proposals and counter decisions.
+
+        * ``full`` exports everything, including the NMS ``transport`` evidence rows;
+        * ``phase`` (default) keeps the model/tool work, the run end and the OSP time-point
+          carriers: every hop/round ``message_sent``, ``propose`` and decision, plus
+          ``task_created`` / ``intent_processed`` / ``task_validation`` / ``approval``;
+        * ``minimal`` keeps only the model/tool work and the run result.
+
+        Non-terminal status rows never export; the last status is written at :meth:`finish` only
+        when the run never reached a terminal state (interrupted/recovered).
+        """
+        if self._span_level == TRACE_SPAN_LEVEL_FULL:
+            return True
+        kind = _as_str(span.get("kind"))
+        if kind == "status":
+            self._last_status_span = span
+            return False
+        if kind in _ALWAYS_EXPORT_KINDS:
+            return True
+        if self._span_level == TRACE_SPAN_LEVEL_MINIMAL:
+            return False
+        if kind in _PHASE_EXPORT_KINDS:
+            return True
+        return False
+
+    def finish(self, *, result: Any | None = None, error: str | None = None) -> None:
+        """Close every open phase/round span, write the run result and flush the client."""
+        if isinstance(self._runtime, _LangfuseRuntime):
+            # ``client.flush()`` reports transport errors only through the SDK log. Probe the
+            # project once so a suspended ingestion endpoint becomes a visible run warning.
+            warning = _ingestion_warning(self._config)
+            if warning and not self._warning:
+                self._warning = warning
+        with self._lock:
+            if self._closed or self._finished:
+                return
+            if (
+                self._span_level != TRACE_SPAN_LEVEL_FULL
+                and self._last_status_span is not None
+                and not self._saw_terminal_status
+            ):
+                # A reduced export keeps one status: the last one observed, even when the run
+                # never reached a terminal state (incomplete / interrupted). A terminal run is
+                # represented by its ``finished`` span instead.
+                try:
+                    self._export(self._last_status_span)
+                except Exception as exc:  # noqa: BLE001 - observability must never break the run
+                    self._warning = f"{type(exc).__name__}: {exc}"
+                    _LOGGER.warning("Langfuse final status export failed: %s", exc)
+            self._last_status_span = None
+            ended = _now_ns()
+            # A run that never reached acceptance still closes its creation stage at the end.
+            self._close_creation(ended)
+            for span in self._round_spans.values():
+                span.end(end_time=ended)
+            for span in self._phase_spans.values():
+                span.end(end_time=ended)
+            payload = _final_payload(result, error)
+            if payload:
+                self._root.set_attribute(OBSERVATION_OUTPUT_ATTRIBUTE, _json_value(payload))
+            if self._span_level != TRACE_SPAN_LEVEL_FULL:
+                # The OSP export columns AW/BB: the run states its own round count. Under a
+                # workflow root this is per-attempt data, so it must not overwrite the chain's
+                # trace-level metadata.
+                metadata_prefix = OBSERVATION_METADATA_PREFIX if self._uses_workflow_root else TRACE_METADATA_PREFIX
+                self._root.set_attribute(f"{metadata_prefix}rounds", _json_value(self._max_round))
+                self._root.set_attribute(
+                    f"{metadata_prefix}negotiated",
+                    _json_value(self._max_round > 0),
+                )
+            if error:
+                self._root.set_attribute(OBSERVATION_LEVEL_ATTRIBUTE, "ERROR")
+                self._root.set_attribute(OBSERVATION_STATUS_MESSAGE_ATTRIBUTE, error[:2048])
+            self._root.end(end_time=ended)
+            self._finished = True
+        try:
+            self._runtime.client.flush()
+            self._status = "exported"
+        except Exception as exc:  # noqa: BLE001 - the run already finished successfully
+            self._status = "failed"
+            self._warning = f"{type(exc).__name__}: {exc}"
+            _LOGGER.warning("Langfuse flush failed: %s", exc)
+        minute_requests, minute_bytes = _traffic_last_minute()
+        _LOGGER.info(
+            "Langfuse OTLP traffic (last 60 s): requests=%d bytes=%d",
+            minute_requests,
+            minute_bytes,
+        )
+
+    def snapshot(self, *, resolve_url: bool = False) -> dict[str, object]:
+        """Return the Langfuse state shown by the run snapshot and the presentation UI."""
+        with self._lock:
+            if resolve_url and self._trace_url is None:
+                try:
+                    sdk_url = self._runtime.client.get_trace_url(trace_id=self._trace_id)
+                    self._trace_url = _ui_trace_url(sdk_url, self._config.langfuse_ui_base_url)
+                except Exception as exc:  # noqa: BLE001 - the trace id is still useful
+                    self._warning = self._warning or f"{type(exc).__name__}: {exc}"
+            status = self._status
+            warning = self._warning
+            delivered = self._exported
+            rejected_batches = 0
+            lost_spans = 0
+            lost_generations = 0
+            last_status: int | None = None
+            audit = _audit_for(self._trace_id)
+            if audit is not None:
+                delivered = max(audit.spans - audit.lost_spans, 0)
+                rejected_batches = audit.rejected_batches
+                lost_spans = audit.lost_spans
+                lost_generations = audit.lost_generations
+                last_status = audit.last_status
+                if lost_spans:
+                    # A rejected batch is dropped by the batch processor; saying "exported" here
+                    # is what hid the field 403 losses. "failed" stays reserved for a flush error
+                    # or for a trace that lost every span.
+                    status = "failed" if self._status == "failed" or delivered <= 0 else "partial"
+                    detail = _rejection_warning(audit)
+                    warning = f"{warning}; {detail}" if warning else detail
+            return {
+                "enabled": True,
+                "traceId": self._trace_id,
+                "workflowRootSpanId": self._workflow_root_span_id or None,
+                "url": self._trace_url,
+                "status": status,
+                "warning": warning,
+                "exportedSpans": self._exported,
+                "deliveredSpans": delivered,
+                "rejectedBatches": rejected_batches,
+                "lostSpans": lost_spans,
+                "lostGenerations": lost_generations,
+                "lastRejectStatus": last_status,
+            }
+
+    def _export(self, span: Mapping[str, object]) -> None:
+        """Create and immediately end one OTel observation from one recorded span."""
+        phase = _as_str(span.get("phase")) or "dispatch"
+        started = _iso_to_ns(span.get("startedAt"), default=_now_ns())
+        ended = _span_end_ns(span, started)
+        parent_context = self._parent_context(span, phase, started)
+        observation = self._runtime.tracer.start_span(
+            _observation_name(span),
+            context=parent_context,
+            start_time=started,
+            attributes=self._attributes(span),
+        )
+        observation.end(end_time=ended)
+        span_id = span.get("spanId")
+        if isinstance(span_id, str) and span_id:
+            self._span_map[span_id] = observation
+        self._exported += 1
+        if self._creation_span is not None and self._is_acceptance(span):
+            # The Task was accepted: close the creation stage right after the accepting row, so
+            # the trace shows one finished stage even while the Task keeps running.
+            self._close_creation(ended)
+
+    def _parent_context(self, span: Mapping[str, object], phase: str, started: int) -> Any:
+        """Attach one span to its recorded parent, its negotiation round, or its phase."""
+        if self._span_level != TRACE_SPAN_LEVEL_FULL:
+            # Reduced levels stay flat: phase/round grouping spans would double the observation
+            # count, and the phase is still recorded as metadata on every observation.
+            return self._child_context
+        parent_id = span.get("parentSpanId")
+        if isinstance(parent_id, str) and parent_id in self._span_map:
+            return set_span_in_context(self._span_map[parent_id])
+        phase_span = self._phase_spans.get(phase)
+        if phase_span is None:
+            phase_span = self._runtime.tracer.start_span(
+                f"phase · {phase}",
+                context=self._child_context,
+                start_time=started,
+                attributes={OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN, "phase": phase},
+            )
+            self._phase_spans[phase] = phase_span
+        round_number = span.get("round")
+        if phase == "negotiation" and isinstance(round_number, int) and not isinstance(round_number, bool):
+            round_span = self._round_spans.get(round_number)
+            if round_span is None:
+                round_span = self._runtime.tracer.start_span(
+                    f"round {round_number}",
+                    context=set_span_in_context(phase_span),
+                    start_time=started,
+                    attributes={OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN, "round": round_number},
+                )
+                self._round_spans[round_number] = round_span
+            return set_span_in_context(round_span)
+        return set_span_in_context(phase_span)
+
+    def _attributes(self, span: Mapping[str, object]) -> dict[str, Any]:
+        """Render the Langfuse attributes of one recorded span."""
+        kind = _as_str(span.get("kind"))
+        observation_type = _observation_type(kind)
+        attributes: dict[str, Any] = {OBSERVATION_TYPE_ATTRIBUTE: observation_type}
+        status = _as_str(span.get("status"), "ok") or "ok"
+        error = _as_str(span.get("error"))
+        if status == "error" or error:
+            attributes[OBSERVATION_LEVEL_ATTRIBUTE] = "ERROR"
+            if error:
+                attributes[OBSERVATION_STATUS_MESSAGE_ATTRIBUTE] = error[:2048]
+        detail = span.get("detail")
+        detail_map = detail if isinstance(detail, Mapping) else {}
+        response = detail_map.get("response")
+        response_map = response if isinstance(response, Mapping) else {}
+        # Top-level fields are the current producer contract; older/other shapes kept the model
+        # and raw usage only in ``detail.response``. Prefer the top level and fall back so a
+        # generation never loses its model/token columns.
+        model = _as_str(span.get("model")) or _as_str(response_map.get("model"))
+        if observation_type == OBSERVATION_GENERATION and model:
+            attributes[OBSERVATION_MODEL_ATTRIBUTE] = model
+        tokens_value = span.get("tokens")
+        if not isinstance(tokens_value, Mapping) or not tokens_value:
+            tokens_value = response_map.get("usage")
+        usage = _usage_details(tokens_value)
+        if observation_type == OBSERVATION_GENERATION and usage:
+            attributes[OBSERVATION_USAGE_ATTRIBUTE] = _json_value(usage)
+        if self._config.langfuse_capture_content:
+            input_payload, output_payload = _observation_payload(kind, detail_map)
+            if input_payload is not None:
+                attributes[OBSERVATION_INPUT_ATTRIBUTE] = _json_value(input_payload)
+            if output_payload is not None:
+                attributes[OBSERVATION_OUTPUT_ATTRIBUTE] = _json_value(output_payload)
+        for key, value in _observation_metadata(
+            span,
+            detail_map,
+            capture_content=self._config.langfuse_capture_content,
+        ).items():
+            attributes[f"{OBSERVATION_METADATA_PREFIX}{key}"] = _json_value(value)
+        return attributes
+
+
+def _valid_trace_id(value: str | None) -> str:
+    """Return a normalized 32-hex trace id, or ``""`` when the value is unusable."""
+    trace_id = (value or "").strip().lower()
+    if len(trace_id) == 32 and trace_id != "0" * 32 and all(character in "0123456789abcdef" for character in trace_id):
+        return trace_id
+    return ""
+
+
+def _valid_span_id(value: str | None) -> str:
+    """Return a normalized 16-hex span id, or ``""`` when the value is unusable."""
+    span_id = (value or "").strip().lower()
+    if len(span_id) == 16 and span_id != "0" * 16 and all(character in "0123456789abcdef" for character in span_id):
+        return span_id
+    return ""
+
+
+def _run_span_name(metadata: LangfuseRunMetadata) -> str:
+    """Return the root observation name of one run."""
+    protocol = metadata.protocol or "a2a"
+    return f"run · {metadata.scenario} · {protocol}"
+
+
+def _creation_span_name(metadata: LangfuseRunMetadata) -> str:
+    """Return the name of the creation stage span (new; existing names stay unchanged)."""
+    protocol = metadata.protocol or "a2a"
+    return f"creation · {metadata.scenario} · {protocol}"
+
+
+def _workflow_span_name(metadata: LangfuseRunMetadata) -> str:
+    """Return the neutral root observation name of one correction chain."""
+    protocol = metadata.protocol or "a2a"
+    return f"workflow · {metadata.scenario} · {protocol}"
+
+
+def _workflow_root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the trace-level attributes owned by the chain's single workflow root."""
+    attributes: dict[str, Any] = {
+        TRACE_NAME_ATTRIBUTE: f"{metadata.scenario} · {metadata.protocol or 'a2a'}",
+        OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN,
+        ROOT_ATTRIBUTE: True,
+    }
+    session_id = metadata.chain_id or metadata.conversation_id
+    if session_id:
+        attributes[TRACE_SESSION_ATTRIBUTE] = session_id
+    if metadata.user_id:
+        attributes[TRACE_USER_ATTRIBUTE] = metadata.user_id
+    trace_metadata = {
+        "scenario": metadata.scenario,
+        "chainId": metadata.chain_id,
+        "protocol": metadata.protocol,
+        "language": metadata.language,
+        # OSP tester identity: scenario alone is not enough to group the 51 evaluation cases.
+        "caseId": metadata.case_id,
+        "caseName": metadata.case_name,
+        "batchId": metadata.batch_id,
+        "requestRole": metadata.request_role,
+        "workflow": True,
+    }
+    for key, value in trace_metadata.items():
+        if value:
+            attributes[f"{TRACE_METADATA_PREFIX}{key}"] = _json_value(value)
+    return attributes
+
+
+def _run_root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the observation-level attributes of one attempt's run root.
+
+    Trace-level identity belongs to the workflow anchor; writing it again from a retry would
+    overwrite the chain's name/session with the attempt's values. ``runId`` and the attempt's
+    request stay on this observation and reach ``langfuse_export`` through observation metadata.
+    """
+    attributes: dict[str, Any] = {OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN}
+    run_metadata = {
+        "runId": metadata.run_id,
+        "scenario": metadata.scenario,
+        "chainId": metadata.chain_id,
+        "parentRunId": metadata.parent_run_id,
+        "conversationId": metadata.conversation_id,
+        "language": metadata.language,
+        "mode": metadata.mode,
+        "protocol": metadata.protocol,
+        "transport": metadata.transport,
+        "discovery": metadata.discovery,
+        "intentMode": metadata.intent_mode,
+        "modelMode": metadata.model_mode,
+        "modelLabel": metadata.model_label,
+        "runMode": metadata.run_mode,
+        "sourceKind": metadata.source_kind,
+        "caseId": metadata.case_id,
+        "caseName": metadata.case_name,
+        "batchId": metadata.batch_id,
+        "receivedAt": metadata.received_at,
+        "userRequest": metadata.user_request[:4096],
+        "requestRole": metadata.request_role,
+    }
+    for key, value in run_metadata.items():
+        if value:
+            attributes[f"{OBSERVATION_METADATA_PREFIX}{key}"] = _json_value(value)
+    return attributes
+
+
+def _trace_opened_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the zero-length first observation that names the workflow trace early."""
+    attributes = {key: value for key, value in _workflow_root_attributes(metadata).items() if key != ROOT_ATTRIBUTE}
+    attributes[OBSERVATION_TYPE_ATTRIBUTE] = "event"
+    attributes[f"{OBSERVATION_METADATA_PREFIX}runId"] = metadata.run_id
+    return attributes
+
+
+def _root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
+    """Return the trace-level attributes of one run root span."""
+    attributes: dict[str, Any] = {
+        TRACE_NAME_ATTRIBUTE: f"{metadata.scenario} · {metadata.protocol or 'a2a'}",
+        OBSERVATION_TYPE_ATTRIBUTE: OBSERVATION_SPAN,
+        ROOT_ATTRIBUTE: True,
+    }
+    # A correction chain is a session: every retry gets its own trace (one root) but stays under
+    # one Langfuse session. A standalone run falls back to its conversation, preserving the
+    # historical grouping.
+    session_id = metadata.chain_id or metadata.conversation_id
+    if session_id:
+        attributes[TRACE_SESSION_ATTRIBUTE] = session_id
+    if metadata.user_id:
+        attributes[TRACE_USER_ATTRIBUTE] = metadata.user_id
+    trace_metadata = {
+        "runId": metadata.run_id,
+        "scenario": metadata.scenario,
+        "chainId": metadata.chain_id,
+        "parentRunId": metadata.parent_run_id,
+        "language": metadata.language,
+        "mode": metadata.mode,
+        "protocol": metadata.protocol,
+        "transport": metadata.transport,
+        "discovery": metadata.discovery,
+        "intentMode": metadata.intent_mode,
+        "modelMode": metadata.model_mode,
+        "modelLabel": metadata.model_label,
+        "runMode": metadata.run_mode,
+        "sourceKind": metadata.source_kind,
+        # OSP tester identity: scenario alone is not enough to group the 51 evaluation cases.
+        "caseId": metadata.case_id,
+        "caseName": metadata.case_name,
+        "batchId": metadata.batch_id,
+        "receivedAt": metadata.received_at,
+        "userRequest": metadata.user_request[:4096],
+        "requestRole": metadata.request_role,
+    }
+    for key, value in trace_metadata.items():
+        if value:
+            attributes[f"{TRACE_METADATA_PREFIX}{key}"] = _json_value(value)
+    return attributes
+
+
+def _observation_name(span: Mapping[str, object]) -> str:
+    """Return the observation name of one span.
+
+    A proposal's timeline title is the whole negotiation body, which makes a poor observation
+    name and cannot be grouped in Langfuse. Negotiation rows therefore use a stable
+    ``Propose · {kind} · R{n}`` / ``Decision · {action} · R{n}`` name; the body stays in
+    input/output.
+    """
+    kind = _as_str(span.get("kind"))
+    round_label = _round_label(span)
+    if kind in _DECISION_KINDS:
+        return f"Decision · {kind}{round_label}"
+    if kind in ("propose", "negotiation_started"):
+        detail = span.get("detail")
+        negotiation_type = _as_str(detail.get("negotiationType")) if isinstance(detail, Mapping) else ""
+        label = "Negotiation started" if kind == "negotiation_started" else "Propose"
+        return f"{label} · {negotiation_type or 'negotiation'}{round_label}"
+    title = _as_str(span.get("title"))
+    if title:
+        return title
+    return kind or "event"
+
+
+def _round_label(span: Mapping[str, object]) -> str:
+    """Return the `` · R{round}`` suffix of one observation name, empty without a round."""
+    round_number = span.get("round")
+    if isinstance(round_number, int) and not isinstance(round_number, bool):
+        return f" · R{round_number}"
+    return ""
+
+
+def _status_state(span: Mapping[str, object]) -> str:
+    """Return the A2A state carried by one status span, ``""`` when absent."""
+    detail = span.get("detail")
+    if isinstance(detail, Mapping):
+        event = detail.get("event")
+        if isinstance(event, Mapping):
+            state = event.get("state")
+            if isinstance(state, str):
+                return state
+    return ""
+
+
+def _observation_type(kind: str) -> str:
+    """Map one Run Explorer span kind to a Langfuse observation type."""
+    if kind == "llm":
+        return OBSERVATION_GENERATION
+    if kind == "tool":
+        return OBSERVATION_TOOL
+    return OBSERVATION_SPAN
+
+
+def _observation_payload(
+    kind: str,
+    detail: Mapping[str, object],
+) -> tuple[object | None, object | None]:
+    """Return the input/output payload of one span from its recorded detail."""
+    if kind == "llm":
+        request = detail.get("request")
+        response = detail.get("response")
+        input_payload: object | None = request
+        if isinstance(request, Mapping) and "messages" in request:
+            input_payload = request.get("messages")
+        output_payload: object | None = response
+        if isinstance(response, Mapping):
+            output_payload = response.get("rawContent")
+            if output_payload is None:
+                output_payload = response.get("content")
+            if output_payload is None:
+                output_payload = response.get("parsed", response)
+        return input_payload, output_payload
+    if kind == "tool":
+        return detail.get("args"), detail.get("result")
+    if kind == "intent_processed":
+        return detail.get("rawRequest"), detail.get("normalizedText")
+    if kind in _DECISION_KINDS:
+        rendered = {
+            key: detail.get(key)
+            for key in (
+                "action",
+                "rationale",
+                "filledParams",
+                "counterProposal",
+                "counterParams",
+                "confirmedIntent",
+                "feasibilitySummary",
+                "confirmedBy",
+            )
+            if detail.get(key) is not None
+        }
+        return None, rendered or None
+    if kind == "correction_applied":
+        # The hand-off is the one span whose input and output are different operator requests.
+        return detail.get("originalRequest"), detail.get("correctedRequest")
+    event = detail.get("event")
+    if isinstance(event, Mapping):
+        return None, dict(event)
+    return (
+        _first_present(detail, ("input", "request", "promptText", "rawRequest", "content", "text", "message")),
+        _first_present(detail, ("output", "result", "normalizedText", "summary", "report")),
+    )
+
+
+def _observation_metadata(
+    span: Mapping[str, object],
+    detail: Mapping[str, object],
+    *,
+    capture_content: bool,
+) -> dict[str, object]:
+    """Return the metadata attributes of one observation."""
+    metadata: dict[str, object] = {}
+    for key in _STRUCTURAL_FIELDS:
+        value = span.get(key)
+        if value is not None and value != "":
+            metadata[key] = value
+    tokens = span.get("tokens")
+    if isinstance(tokens, Mapping):
+        metadata["tokens"] = dict(tokens)
+    if capture_content and _as_str(span.get("kind")) not in _PAYLOAD_KINDS and detail:
+        metadata["detail"] = dict(detail)
+    return metadata
+
+
+def _usage_details(tokens: object) -> dict[str, int] | None:
+    """Map one producer token map to Langfuse usage details.
+
+    Three shapes reach the exporter: the sample's normalized ``prompt/completion/cached`` keys
+    (ADK and A2A-T SDK spans) and LangChain's ``input_tokens/output_tokens/total_tokens`` (the
+    LangGraph planner). Without normalizing the latter, Langfuse drops the planner's input/output
+    tokens -- which is most of a pure A2A run's usage.
+    """
+    if not isinstance(tokens, Mapping):
+        return None
+    usage: dict[str, int] = {}
+    for sources, target in (
+        (("prompt", "prompt_tokens", "input_tokens"), "input"),
+        (("cached", "cached_tokens", "input_cached", "prompt_cache_hit_tokens"), "input_cached"),
+        (("completion", "completion_tokens", "output_tokens"), "output"),
+        (("total", "total_tokens"), "total"),
+    ):
+        value = _first_int(tokens, sources)
+        if value is not None:
+            usage[target] = value
+    if "input_cached" not in usage:
+        cached = _nested_cached_tokens(tokens)
+        if cached is not None:
+            usage["input_cached"] = cached
+    return usage or None
+
+
+def _nested_cached_tokens(tokens: Mapping[str, object]) -> int | None:
+    """Read the cached-prefix count from the OpenAI/DeepSeek/LangChain nested usage shapes."""
+    for key, nested_key in (
+        ("prompt_tokens_details", "cached_tokens"),
+        ("input_token_details", "cache_read"),
+    ):
+        details = tokens.get(key)
+        if isinstance(details, Mapping):
+            value = _first_int(details, (nested_key,))
+            if value is not None:
+                return value
+    return None
+
+
+def _first_int(values: Mapping[str, object], keys: tuple[str, ...]) -> int | None:
+    """Return the first integer value among ``keys`` (booleans are not numbers)."""
+    for key in keys:
+        value = values.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _ui_trace_url(url: str | None, ui_base_url: str) -> str | None:
+    """Move a Langfuse trace URL onto the browser-facing UI base.
+
+    The SDK builds the URL from its API ``base_url``. When reporting goes through a proxy (the
+    yellow-zone setup), that host is not what the browser opens, so the path — project id and trace
+    id included — is kept and only the origin is replaced with ``A2AT_SAMPLE_LANGFUSE_UI_BASE_URL``.
+    """
+    if not url:
+        return url
+    base = (ui_base_url or "").rstrip("/")
+    if not base:
+        return url
+    parsed = urlsplit(url)
+    suffix = parsed.path or ""
+    if parsed.query:
+        suffix = f"{suffix}?{parsed.query}"
+    if parsed.fragment:
+        suffix = f"{suffix}#{parsed.fragment}"
+    return f"{base}{suffix}"
+
+
+def _final_payload(result: Any | None, error: str | None) -> dict[str, object] | None:
+    """Return the run result written on the root observation."""
+    payload: dict[str, object] = {}
+    final_state = getattr(result, "final_state", None)
+    task_id = getattr(result, "task_id", None)
+    report = getattr(result, "report", None)
+    if final_state:
+        payload["finalState"] = final_state
+    if task_id:
+        payload["taskId"] = task_id
+    if report:
+        payload["report"] = report
+    if error:
+        payload["error"] = error
+    return payload or None
+
+
+def _json_value(value: object) -> str:
+    """Serialize one attribute value the way the Langfuse SDK does."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _first_present(mapping: Mapping[str, object], keys: tuple[str, ...]) -> object | None:
+    """Return the first non-``None`` value among ``keys``."""
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _as_str(value: object, default: str = "") -> str:
+    """Return one value as a string, ``default`` when absent."""
+    return value if isinstance(value, str) else default
+
+
+def _now_ns() -> int:
+    """Return the current epoch time in nanoseconds."""
+    return time.time_ns()
+
+
+def _iso_to_ns(value: object, *, default: int) -> int:
+    """Parse one ISO 8601 timestamp into epoch nanoseconds, ``default`` when unparseable."""
+    if not isinstance(value, str) or not value:
+        return default
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return int(parsed.timestamp() * 1_000_000_000)
+    except (OverflowError, ValueError):
+        return default
+
+
+def _span_end_ns(span: Mapping[str, object], started: int) -> int:
+    """Return the recorded end time of one span, falling back to its duration."""
+    ended = _iso_to_ns(span.get("endedAt"), default=-1)
+    if ended >= started:
+        return ended
+    duration = span.get("durationMs")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
+        return started + int(float(duration) * 1_000_000)
+    return started
+
+
+__all__ = [
+    "LANGFUSE_AVAILABLE",
+    "LANGFUSE_SCOPE_NAME",
+    "LangfuseRunMetadata",
+    "LangfuseSpanExporter",
+    "create_langfuse_exporter",
+    "langfuse_export_active",
+]

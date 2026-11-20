@@ -10,10 +10,12 @@ Error-code contract tests pin the catalog with a small synthetic table (via ``st
 they stay deterministic regardless of the real ``a2a_t.core.errors.catalog`` contents; the degraded
 behavior (catalog unavailable) is pinned separately via ``degraded_catalog``.
 
-The bundled ``src/a2a_t/prompt_resources`` root is synced to the Java 1.1.0 resources (P2): its
-byte-for-byte equality with the Java repository is verified outside this suite, and the tests below
-pin that the synced bundle passes the strict gate with the real catalog — neither errors nor
-warnings. The temporary P0 stale-resource whitelist was deleted together with that sync.
+The bundled ``src/a2a_t/prompt_resources`` root is synced to the Java 1.1.0 resources (P2) with one
+deliberate, Python-only divergence: the slot-extraction system prompt carries the generic
+one-fragment-one-slot / missing-value rules added for the Task-T conversion fixes. Java sync is
+deferred, so byte-for-byte equality with the Java repository is temporarily not expected. The tests
+below pin that the current bundle passes the strict gate with the real catalog — neither errors nor
+warnings. The temporary P0 stale-resource whitelist was deleted together with the original sync.
 """
 
 from __future__ import annotations

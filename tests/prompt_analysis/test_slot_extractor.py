@@ -289,6 +289,84 @@ class SlotExtractorTest(unittest.TestCase):
         )
         self.assertEqual(result.slot_errors, [])
 
+    def test_extract_appends_terminology_section_for_a_localized_template(self) -> None:
+        """The terminology heading follows the template language.
+
+        Slot constraints offload synonyms to the ``[terminology]`` section, so a
+        localized heading must not leave the section out: the Chinese template uses
+        ``## 术语解释`` and the extracted constraints then point at a missing section.
+        """
+        llm_client = FakeLLMClient('{"slots": {"site": "Site A"}, "slot_errors": []}')
+
+        from a2a_t.prompt.analysis.slot_extractor import SlotExtractor
+
+        template_text = (
+            "## 任务目标\n节能目标：{task_target}\n\n## 术语解释\n1. NR\n   - 同义词：5G、NG-RAN\n\n## 预期输出\n"
+        )
+        extractor = SlotExtractor(llm_client=llm_client)
+
+        extractor.extract(
+            normalized_input="对 Site A 做节能。",
+            reference=PromptReference(scenario_code="ran-energy-saving", language="zh-CN"),
+            template_text=template_text,
+            slot_schema=SlotSchema(
+                scenario_code="ran-energy-saving",
+                slots=[
+                    SlotDefinition(
+                        name="site",
+                        required=True,
+                        description="站点名称",
+                        example="Site A",
+                        value_constraint="必须是具体站点名。",
+                        type="string",
+                        allowed_values=None,
+                        range=None,
+                        pattern=None,
+                    )
+                ],
+            ),
+            system_prompt="Extract slots.",
+            user_prompt="Return slots and slot errors.",
+        )
+
+        user_content = str(llm_client.calls[0]["messages"][1]["content"])
+        self.assertIn("[terminology]\n## 术语解释", user_content)
+        self.assertIn("同义词：5G、NG-RAN", user_content)
+        self.assertNotIn("## 预期输出", user_content)
+
+    def test_extract_omits_terminology_section_when_the_template_has_none(self) -> None:
+        llm_client = FakeLLMClient('{"slots": {"site": "Site A"}, "slot_errors": []}')
+
+        from a2a_t.prompt.analysis.slot_extractor import SlotExtractor
+
+        extractor = SlotExtractor(llm_client=llm_client)
+
+        extractor.extract(
+            normalized_input="Analyze Site A.",
+            reference=PromptReference(scenario_code="ran-energy-saving", language="en-US"),
+            template_text="## Task Target\nGoal: {task_target}\n",
+            slot_schema=SlotSchema(
+                scenario_code="ran-energy-saving",
+                slots=[
+                    SlotDefinition(
+                        name="site",
+                        required=True,
+                        description="Site name",
+                        example="Site A",
+                        value_constraint="Must be a concrete site name.",
+                        type="string",
+                        allowed_values=None,
+                        range=None,
+                        pattern=None,
+                    )
+                ],
+            ),
+            system_prompt="Extract slots.",
+            user_prompt="Return slots and slot errors.",
+        )
+
+        self.assertNotIn("[terminology]", str(llm_client.calls[0]["messages"][1]["content"]))
+
 
 if __name__ == "__main__":
     unittest.main()

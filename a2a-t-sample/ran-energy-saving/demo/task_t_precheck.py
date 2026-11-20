@@ -1,0 +1,210 @@
+"""Sample Task-T precheck used by the RAN energy-saving demonstration.
+
+Live semantic validation occasionally accepts a Task-T that the sample considers incomplete or
+infeasible. This module keeps those deterministic business checks out of the protocol handler:
+the composition root injects :class:`RanDataTaskTPrecheck` into the server runtime.
+
+A deployment replaces this class with its own checks over its Task-T schema.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from typing import Final
+
+from a2a_t.core.validation_pipeline import FilledParamData
+from protocol.negotiation_policy import NegotiationKind
+from protocol.pre_task_negotiation import PrecheckFinding
+from protocol.target_grammar import find_segments
+from shared import energy_rules
+
+from demo.served_areas import (
+    build_area_options,
+    build_area_proposal_text,
+    detect_language,
+    match_served_areas,
+    resolve_served_area,
+)
+
+#: Sentence carrying the background event of a rendered Task-T prompt.
+_OUTAGE_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^\n。；;]*(?:outage|停电)[^\n。；;]*", re.IGNORECASE)
+
+#: Area line of a rendered Task-T prompt (localized).
+_REGION_SENTENCE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:The area is(?: the)?|区域为)\s*([^.\n。]+)", re.IGNORECASE
+)
+
+
+def _minutes(value: str) -> int:
+    """Convert one ``HH:MM`` value to minutes from midnight."""
+    hours, minutes = value.split(":", 1)
+    return int(hours) * 60 + int(minutes)
+
+
+def _span(start: str, end: str) -> tuple[int, int]:
+    """Return one interval in minutes, wrapping midnight for an end at or before the start."""
+    start_minutes = _minutes(start)
+    end_minutes = _minutes(end)
+    if end_minutes <= start_minutes:
+        end_minutes += 24 * 60
+    return start_minutes, end_minutes
+
+
+def _target_segments(data: Mapping[str, object]) -> list[tuple[int, int, float]]:
+    """Return the distinct target segments of one Task-T parameter map.
+
+    A rendered Task-T prompt repeats the same target in Task Description and Task Context. The
+    repeated segment describes the same window, not a second one, so duplicates are collapsed
+    before the overlap check.
+    """
+    target = data.get("guaranteedThroughputTarget")
+    if not isinstance(target, str):
+        return []
+    segments = [
+        (*_span(segment.start, segment.end), segment.rate_mbps) for segment in find_segments(target)
+    ]
+    return list(dict.fromkeys(segments))
+
+
+def _overlaps(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    """Return whether two half-open minute intervals overlap."""
+    return first[0] < second[1] and second[0] < first[1]
+
+
+def _deterministic_negotiation_kind(data: Mapping[str, object]) -> NegotiationKind | None:
+    """Detect the sample's target/feasibility triggers without relying on a model verdict.
+
+    Overlapping segments conflict only when their rates differ: the same rate covering an hour
+    twice is harmless and the vendor does not open a negotiation for it. The feasibility rule is
+    the vendor's: an outage strictly longer than four hours with a rate strictly above 2 Mbps.
+    """
+    segments = _target_segments(data)
+    for index, first in enumerate(segments):
+        for second in segments[index + 1 :]:
+            if first[2] != second[2] and _overlaps(first[:2], second[:2]):
+                return NegotiationKind.TARGET
+
+    background = data.get("backgroundEvent")
+    if isinstance(background, str):
+        hours = energy_rules.outage_duration_hours(background)
+        if energy_rules.is_outage_infeasible(hours, (segment[2] for segment in segments)):
+            return NegotiationKind.FEASIBILITY
+    return None
+
+
+def _conflict_data(
+    data: Mapping[str, object],
+    prompt: str | None,
+) -> Mapping[str, object]:
+    """Merge the values a rendered Task-T prompt still carries into one parameter map.
+
+    A failed semantic validation nulls the slot it rejected in its extracted parameters, so the
+    conflict check reads the target segments and the background-event sentence from the prompt.
+    """
+    if not prompt:
+        return data
+    merged = dict(data)
+    # The target is the one field whose prose repeats: Task Description and Task Context both
+    # carry it, so replacing the structured value with the whole prompt makes the regex read the
+    # same segment twice and report a conflict the request does not have. Only fall back to the
+    # prompt when the validator nulled the slot (a failed validation does that).
+    target = merged.get("guaranteedThroughputTarget")
+    if (not isinstance(target, str) or not target.strip()) and find_segments(prompt):
+        merged["guaranteedThroughputTarget"] = prompt
+    # Region and background event are single lines of the rendered prompt and are the deterministic
+    # source when the semantic pass filled them from somewhere else (or nulled them).
+    region = _REGION_SENTENCE_PATTERN.search(prompt)
+    if region is not None:
+        merged["region"] = region.group(1).strip()
+    sentence = _OUTAGE_SENTENCE_PATTERN.search(prompt)
+    if sentence is not None:
+        merged["backgroundEvent"] = _outage_clause(sentence.group(0))
+    return merged
+
+
+def _outage_clause(text: str) -> str:
+    """Return the clause of one sentence that names the outage.
+
+    A Task-T context line may list the target segments and the background event together; the
+    outage interval must come from the clause after the marker, not from the first interval of
+    the line (which is a target segment).
+    """
+    for part in re.split(r"[，,；;。.!！?？]", text):
+        if re.search(r"outage|停电", part, re.IGNORECASE):
+            return part
+    return text
+
+
+def _missing_required_params(
+    filled: FilledParamData,
+    schema: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Return required caller-schema fields that the semantic pass left empty."""
+    required = schema.get("required")
+    if not isinstance(required, list):
+        return ()
+    data = filled.data if isinstance(filled.data, Mapping) else {}
+    missing: list[str] = []
+    for name in required:
+        if not isinstance(name, str):
+            continue
+        value = data.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(name)
+    return tuple(missing)
+
+
+class RanDataTaskTPrecheck:
+    """Demo precheck: required caller fields, overlapping targets, impossible outage guarantees."""
+
+    def __call__(
+        self,
+        filled: FilledParamData,
+        schema: Mapping[str, object],
+        *,
+        prompt: str | None = None,
+    ) -> PrecheckFinding | None:
+        """Return the negotiation the sample opens for one Task-T."""
+        data = filled.data if isinstance(filled.data, Mapping) else {}
+        # With the prompt at hand, check the conflict first: a failed validation nulls the
+        # rejected slot, so the parameters alone would look incomplete even when the prompt
+        # carries a target that genuinely overlaps.
+        checked = _conflict_data(data, prompt) if prompt else data
+        if prompt:
+            kind = _deterministic_negotiation_kind(checked)
+            if kind is not None:
+                return PrecheckFinding(
+                    kind=kind,
+                    detail=f"the sample detected a {kind.value} conflict",
+                )
+        missing = _missing_required_params(filled, schema)
+        if missing:
+            return PrecheckFinding(
+                kind=NegotiationKind.INFORMATION,
+                missing_items=missing,
+                detail=f"required fields are missing: {', '.join(missing)}",
+            )
+        region = checked.get("region")
+        if isinstance(region, str) and region.strip() and resolve_served_area(region) is None:
+            matches = match_served_areas(region)
+            language = detect_language(f"{region} {prompt or ''}")
+            return PrecheckFinding(
+                kind=NegotiationKind.INFORMATION,
+                missing_items=("region",),
+                detail=f"the sample does not serve area '{region}'",
+                proposal_text=build_area_proposal_text(region, matches, language),
+                options=build_area_options(region, matches),
+            )
+        if prompt:
+            return None
+        kind = _deterministic_negotiation_kind(data)
+        if kind is None:
+            return None
+        return PrecheckFinding(
+            kind=kind,
+            detail=f"the sample detected a {kind.value} conflict",
+        )
+
+
+__all__ = ["RanDataTaskTPrecheck"]

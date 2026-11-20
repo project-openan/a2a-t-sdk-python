@@ -327,7 +327,9 @@ def _map_propose_content(
     """Map one propose extraction payload onto the typed propose content of the type."""
     if negotiation_type is NegotiationType.INFORMATION:
         return InformationProposeContent(
-            _required_non_empty_items(payload, "items", "information negotiation requested items", language),
+            _required_propose_items(
+                payload, "items", "information negotiation requested items", language
+            ),
             _optional_string(payload, "relationship", language),
         )
     if negotiation_type is NegotiationType.TARGET:
@@ -501,6 +503,26 @@ def _required_items(payload: dict[str, object], field: str, language: str) -> li
     if value is None:
         raise _slot_missing(language, field)
     return _items_of(value, field, language)
+
+
+def _required_propose_items(
+    payload: dict[str, object], field: str, description: str, language: str
+) -> list[NegotiationItem]:
+    """Read the non-empty item array of an information *propose* extraction.
+
+    An empty result is an extraction miss, not a client-side field omission: the model failed to
+    copy the items from the inbound proposal. Classifying it as ``content_extract_failed`` lets
+    the pipeline retry the extraction instead of aborting the negotiation on the non-retryable
+    ``field_missing`` code.
+    """
+    items = _required_items(payload, field, language)
+    if not items:
+        raise _extract_failed(
+            language,
+            description,
+            "the extraction returned no items for the inbound information proposal",
+        )
+    return items
 
 
 def _required_non_empty_items(

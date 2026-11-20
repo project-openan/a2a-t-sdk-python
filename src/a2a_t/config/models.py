@@ -24,6 +24,14 @@ LLM_MAX_ATTEMPTS_KEY: Final[str] = "A2AT_LLM_MAX_ATTEMPTS"
 #: root).
 DEFAULT_PROMPT_SOURCE_TYPE: Final[str] = "packaged"
 
+#: Configuration key enabling the slot schema/declarative constraint validation of the generation
+#: pipeline. Off by default: the extraction model's ``slot_errors`` are the sole business verdict,
+#: so a heuristic rule in a scenario overlay cannot veto an otherwise correct extraction.
+VALIDATE_SLOT_CONSTRAINTS_KEY: Final[str] = "A2AT_VALIDATE_SLOT_CONSTRAINTS"
+
+#: Default of :data:`VALIDATE_SLOT_CONSTRAINTS_KEY` (disabled).
+DEFAULT_VALIDATE_SLOT_CONSTRAINTS: Final[bool] = False
+
 #: Default maximum number of attempts of one retryable LLM step (Java ``LlmConfig.DEFAULT_MAX_ATTEMPTS``).
 DEFAULT_LLM_MAX_ATTEMPTS: Final[int] = 3
 
@@ -39,6 +47,13 @@ def _parse_float(raw_value: str | None, default: float) -> float:
     if raw_value is None or not raw_value.strip():
         return default
     return float(raw_value)
+
+
+def _parse_bool(raw_value: str | None, default: bool) -> bool:
+    """Parse a boolean-like environment value with a fallback default."""
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_prompt_resource_root_dir() -> str:
@@ -76,6 +91,7 @@ class PromptRuntimeConfig:
     language: str = "en-US"
     source_type: str = DEFAULT_PROMPT_SOURCE_TYPE
     local_root_dir: str | None = field(default_factory=_default_prompt_resource_root_dir)
+    validate_slot_constraints: bool = DEFAULT_VALIDATE_SLOT_CONSTRAINTS
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, str], *, base_dir: Path | None = None) -> "PromptRuntimeConfig":
@@ -86,6 +102,10 @@ class PromptRuntimeConfig:
             local_root_dir=_resolve_prompt_resource_root_dir(
                 values.get("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"),
                 base_dir=base_dir,
+            ),
+            validate_slot_constraints=_parse_bool(
+                values.get(VALIDATE_SLOT_CONSTRAINTS_KEY),
+                DEFAULT_VALIDATE_SLOT_CONSTRAINTS,
             ),
         )
 
