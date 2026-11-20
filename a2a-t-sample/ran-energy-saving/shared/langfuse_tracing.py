@@ -106,6 +106,7 @@ _PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
             "intent_processed",
             "task_prompt_rendered",
             "task_validation",
+            "correction_applied",
             "approval",
         }
     )
@@ -206,8 +207,11 @@ class LangfuseRunMetadata:
     batch_id: str = ""
     #: When the inbound adapter received the request (before the run existed).
     received_at: str = ""
-    #: The operator's original text (the OSP "user input").
+    #: The operator's original text (the OSP "user input"). A blocked run keeps this text for its
+    #: whole life; the replacement it dispatches is recorded as ``dispatchedRequest``.
     user_request: str = ""
+    #: ``blocked_followup`` when the run may repair a blocked gate; empty otherwise.
+    request_role: str = ""
 
 
 @dataclass
@@ -1166,8 +1170,27 @@ class LangfuseSpanExporter:
 
     def _observe(self, span: Mapping[str, object]) -> None:
         """Track run-wide facts from every span, even the ones the level does not export."""
-        if _as_str(span.get("kind")) == "status" and _status_state(span) in _TERMINAL_STATUS_STATES:
+        kind = _as_str(span.get("kind"))
+        if kind == "status" and _status_state(span) in _TERMINAL_STATUS_STATES:
             self._saw_terminal_status = True
+        if kind == "correction_applied":
+            detail = span.get("detail")
+            corrected = _as_str(detail.get("correctedRequest")) if isinstance(detail, Mapping) else ""
+            if corrected:
+                # The run's request stays ``userRequest``; this names what it actually dispatched
+                # after its own gate blocked. The root is open until run end, so the attribute
+                # reaches Langfuse with it.
+                prefix = (
+                    OBSERVATION_METADATA_PREFIX
+                    if self._uses_workflow_root
+                    else TRACE_METADATA_PREFIX
+                )
+                self._root.set_attribute(
+                    f"{prefix}dispatchedRequest", _json_value(corrected)
+                )
+                self._root.set_attribute(
+                    f"{prefix}requestRole", _json_value("blocked_followup")
+                )
         round_number = span.get("round")
         if isinstance(round_number, int) and not isinstance(round_number, bool):
             self._max_round = max(self._max_round, round_number)
@@ -1463,6 +1486,7 @@ def _workflow_root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
         "caseId": metadata.case_id,
         "caseName": metadata.case_name,
         "batchId": metadata.batch_id,
+        "requestRole": metadata.request_role,
         "workflow": True,
     }
     for key, value in trace_metadata.items():
@@ -1500,6 +1524,7 @@ def _run_root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
         "batchId": metadata.batch_id,
         "receivedAt": metadata.received_at,
         "userRequest": metadata.user_request[:4096],
+        "requestRole": metadata.request_role,
     }
     for key, value in run_metadata.items():
         if value:
@@ -1551,6 +1576,7 @@ def _root_attributes(metadata: LangfuseRunMetadata) -> dict[str, Any]:
         "batchId": metadata.batch_id,
         "receivedAt": metadata.received_at,
         "userRequest": metadata.user_request[:4096],
+        "requestRole": metadata.request_role,
     }
     for key, value in trace_metadata.items():
         if value:
@@ -1649,6 +1675,9 @@ def _observation_payload(
             if detail.get(key) is not None
         }
         return None, rendered or None
+    if kind == "correction_applied":
+        # The hand-off is the one span whose input and output are different operator requests.
+        return detail.get("originalRequest"), detail.get("correctedRequest")
     event = detail.get("event")
     if isinstance(event, Mapping):
         return None, dict(event)

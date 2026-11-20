@@ -278,29 +278,6 @@ def _recorded_interception(
     )
 
 
-def run_interception_case(
-    case: Mapping[str, Any],
-    client: EvalPromptClient,
-    *,
-    stop_after: str = "validate",
-) -> CaseOutcome:
-    """Execute only the intercepted original request of a blocked case with a follow-up.
-
-    The follow-up segment is deliberately skipped: the tester's full flow dispatches that
-    replacement request itself, so running it here would repeat its model calls. The intent
-    extraction is skipped as well — its assertions are disabled for an interception and the
-    arbitration reads the downstream payload, not this pre-send extraction — so a deterministic
-    block costs one slot extraction and nothing more.
-    """
-    if stop_after not in STAGE_ORDER:
-        raise ValueError(f"unsupported stop_after {stop_after!r}; expected one of {STAGE_ORDER}")
-    if not (is_blocked_case(case) and has_followup(case)):
-        raise ValueError("an interception-only run needs a blocked case with a follow-up request")
-    return _run_segment(
-        interception_case(case), client, stop_after=stop_after, include_intent=False
-    )
-
-
 def _run_segment(
     case: Mapping[str, Any],
     client: EvalPromptClient,

@@ -138,50 +138,38 @@ A2A 与 A2A-T 的预期结构化意图在这 100 条里完全相同，因此只�
 补充/替换的请求原文；用例现有的 `expect.intent`、`task_t`、`negotiation` 描述的就是这条请求，
 不需要再写一份完整期望。
 
-`/tester` 对这类用例跑两段：
+**全流程批次：一次 run，两段 gate。** A2A-T 的发送前校验属于每次 run 的必经阶段，补充请求是
+同一次 run 内的修正输入，不是第二次请求：
 
 | 段 | 输入 | 判定 |
 |---|---|---|
-| 拦截段 | 原 `user_input` | 只跑 SDK 三阶段；`intent` / `task_t` 记为 `recorded`（期望值属于补充请求），`validate: blocked` 参与判定；**不启动 runtime run，不下发请求** |
-| 补充段 | `blocked_followup.input` | 跑完整管线；`validate: pass`、`send: true`、`final_state: task_completed` 由拦截态机械派生，其余期望继承用例 |
+| 拦截段（run 内） | 原 `user_input` | run 用原请求生成 Task-T 并校验；被拦截时不发送。`intent` / `task_t` 记为 `recorded`（期望值属于补充请求），`validate: blocked` 参与判定 |
+| 补充段（同一次 run） | `blocked_followup.input` | gate 阻塞后由 `correction_provider` 注入；同一 run 重新抽取、再校验、继续发送。`validate: pass`、`send: true`、`final_state: task_completed` 由拦截态机械派生，其余期望继承用例 |
 
-补充段的 `expect`/`assert` 可用同名子块局部覆盖（例如补充请求触发一轮可行性协商）。拦截段结果
-写在 item 的 `interception`（持久化 JSON 同名键）；结果表增加「拦截校验」「拦截后补充信息」两列，
-阶段差异表用 `拦截/validate` 等前缀区分两段。
+- run 的 `userRequest` 始终是**原请求**；实际下发的补充文本记 `dispatchedRequest`，同一条 trace 中
+  以 `correction_applied` span 分隔两次尝试（两次 `task_prompt_rendered` / `task_validation`）。
+- 补充段的 `expect`/`assert` 可用同名子块局部覆盖（例如补充请求触发一轮可行性协商）。拦截段结果
+  写在 item 的 `interception`（持久化 JSON 同名键）；结果表增加「拦截校验」「拦截后补充信息」两列，
+  阶段差异表用 `拦截/validate` 等前缀区分两段。
+- 只有一次修正：补充请求再次被拦截即终止（`followupBlocked`），不会循环。
 
-**补充段只在原请求被真正拦截后执行。** 判定看拦截段**观察到的校验结论**（`eval/osp/followup.py::
-followup_allowed`），不看阶段状态：
+**补充段只在原请求被真正拦截后执行。** 判定是 run 自己 gate 的结论：
 
-- 结论是 `blocked` → 正常执行补充段；
-- 结论是 `pass` → **实际未拦截**：用例**按记录判过（绿色）**，拦截段只记录不判定，并且**改按原请求
-  继续往下走**——原请求既然没被拦住，就应该看它下发后会发生什么；
-- 结论是 `unavailable` 或没有结论（校验调不出来 / `stop_after` 停在 `intent`/`task_t`）→ **既不能证明
-  拦截、也不能证明放过**，保持两段行为：补充段照跑，拦截段因与用例期望不符判红。
+- 结论是 `blocked` → 同一 run 内注入修正并继续；
+- 结论是 `pass` → **实际未拦截**：不注入修正，原请求直接下发。下游阶段只记录、不判定
+  （`intent` / `task_t` / `send` / `negotiation` / `final_state` 的断言全部关闭，因为用例期望描述
+  的是补充请求）；`item.interception.followupSkipped = true`、全流程批次另加
+  `originalDispatched = true`，拦截记录 `validate` 记 `recorded`，`item.error` 保持为空；
+- 结论是 `unavailable` 或没有结论（校验调不出来 / `stop_after` 停在 `intent`/`task_t`）→ **既不能
+  证明拦截、也不能证明放过**，按现有两段行为记录：拦截段因与用例期望不符判红。
 
-「结论是 `pass`」时的落地：
+**SDK-only 批次**（`stop_after ∈ intent/task_t/validate`）不启动 run，仍由离线 runner 执行两段；
+它的客户端由 `/tester` 的 `--env-file`（`env_path`）构建，与全流程 run 使用的是同一份 SDK 配置。
+全流程批次不再有独立预检，gate 与下发天然同配置，2026-11-17 那种“预检与 run 模型不一致”的偏差
+不再可能发生。
 
-- 全流程批次：run 下发**原 `user_input`**（Modify 仍先建基线 Task），下游阶段只记录、不判定
-  （`intent` / `task_t` / `send` / `negotiation` / `final_state` 的断言全部关闭，因为用例期望描述的是
-  补充请求）；run **复用预检已经生成并校验过的 Task-T**（`prepared_task_t`，外加校验抽出的
-  `filledParams` 作为 accept 回填基线），不再重复一次槽位抽取和一次校验（同一段原文的两轮模型调用）；
-- SDK-only 批次：这类批次本来不启动 run，阶段记 `skipped`；
-- 拦截记录的 `validate` 阶段状态改为 `recorded`（实际结论保留在 `actual`），消息写明「原请求未被拦截
-  （实际校验结论：…）…按记录处理」；`item.interception.followupSkipped = true`，全流程批次另加
-  `originalDispatched = true`；`item.error` 保持为空（用例不判红），结果表「拦截后补充信息」列标
-  「（未执行）」；
-- `/review` 与 tester 一致：`validate` 记 `recorded`，已按原请求下发时其余维度记 `recorded`，未启动
-  run 时记 `not_applicable`（用 `missing` 会读成证据缺失），整个用例判 `pass`。
-
-**预检与 run 必须使用同一份 SDK 配置。** `/tester` 的 SDK 预检客户端由 UI 的 `--env-file`
-（`env_path`）构建，与 run 的 runtime 完全相同；否则两者会解析出不同模型，对同一段原文给出不同抽取
-（2026-11-17 现场：预检 deepseek 按站点分组→pass，run qwen 合并站点→时间窗重叠→blocked）。
-
-两种不停止的情况：
-
-- **拦截了，但 slot 错误与用例不符**：结论仍是 `blocked`，请求没有下发，补充段照常执行；用例仍因
-  slot 错误判红。
-- **没有校验结论**：`stop_after` 停在 `intent` / `task_t` 的批次，或校验调用本身异常，都无法判断
-  是否拦截；保持两段都跑的旧行为。
+`/review` 与 tester 一致：未拦截时 `validate` 记 `recorded`，已按原请求下发时其余维度记
+`recorded`，未启动 run 时记 `not_applicable`（用 `missing` 会读成证据缺失），整个用例判 `pass`。
 
 `/annotate` 只展示补充请求原文，不执行它。
 
@@ -412,8 +400,9 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 前三阶段走 SDK-only runner；后三阶段走 `RunManager` 完整运行时。
 - 协商脚本化：A2A-T 用 Q 列答复生成 `NegotiationDecision`，A2A 用 P 列答复作为 `INPUT_REQUIRED` 答案。
 - 结果表按阶段显示 `passed / failed / recorded / error`，点“差异”看逐字段/逐段 expected/actual。
-- 带 `blocked_followup` 的拦截用例先记录拦截段，再用补充请求继续跑；拦截段证据在抽屉里以
-  `拦截/...` 展示，拦截请求不会被下发。
+- 带 `blocked_followup` 的拦截用例：全流程批次由 run 自己的 gate 拦截后在同一 run 内注入补充请求
+  （`correction_applied`），run 的 `userRequest` 仍是原请求；SDK-only 批次由 runner 先跑拦截段、
+  再跑补充段。拦截段证据在抽屉里以 `拦截/...` 展示，被拦截的原请求不会被下发。
 - 用例详情抽屉展示 `baseline.request`（Modify 的前置基线 Create；从结果行打开时同时显示本次实际
   基线的 state 与 wire 链接）和 `blocked_followup.input`（拦截后补充请求）。有补充请求时，
   `expect.intent` / `task_t` 标注为「（补充请求）」。

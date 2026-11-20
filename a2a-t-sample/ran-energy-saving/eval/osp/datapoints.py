@@ -246,12 +246,11 @@ def _original_copies(
 ) -> list[DataCopy]:
     """Resolve the operator's original request.
 
-    A blocked A2A-T case is recorded as two segments. The dispatched run is started with the
-    replacement request, so every span of that run names the replacement; the blocked original
-    exists only in the interception span replayed from the preflight. With a follow-up, the
-    original column must therefore come from that span alone — taking the run's own request would
-    silently report the replacement as the original. A blocked case without a follow-up runs the
-    original itself, so its trace is a valid carrier. Pure A2A has no Task-T validation at all.
+    A blocked A2A-T run is one run with two gate attempts: it starts with the operator's original
+    request, its own gate blocks, and the replacement is applied as a correction. The first
+    rendered Task-T therefore names the original. Older traces recorded the interception outside
+    the run and started the run with the replacement; those carry a replayed interception
+    validation span, which is the only trustworthy source there. Pure A2A has no gate at all.
     """
     if context.blocked and context.protocol != PROTOCOL_A2A:
         copies = _copies(
@@ -265,7 +264,23 @@ def _original_copies(
         )
         if copies:
             return copies
-        return [] if context.followup else _trace_request_copies(observations, context)
+        if not _harness_correction(observations):
+            # Legacy trace: its run dispatched the replacement, so its own request cannot stand in
+            # for the blocked original.
+            return [] if context.followup else _trace_request_copies(observations, context)
+        copies = _ordered_request_copies(
+            observations,
+            context,
+            predicate=lambda item: _kind(item) == "task_prompt_rendered"
+            and bool(_text(item, "user_request", "userRequest")),
+            source="task_prompt_rendered",
+            fields=("userRequest",),
+            value=lambda item: _text(item, "user_request", "userRequest"),
+            last=False,
+        )
+        if copies:
+            return copies
+        return _trace_request_copies(observations, context)
     copies = _run_then_trace_copies(
         observations,
         context,
@@ -284,7 +299,20 @@ def _dispatched_copies(
     observations: Sequence[Mapping[str, object]],
     context: DataContext,
 ) -> list[DataCopy]:
-    """Resolve the request the run actually dispatched (the follow-up when blocked)."""
+    """Resolve the request the run actually dispatched (the correction when blocked)."""
+    if _harness_correction(observations):
+        copies = _ordered_request_copies(
+            observations,
+            context,
+            predicate=lambda item: _kind(item) == "task_prompt_rendered"
+            and bool(_text(item, "user_request", "userRequest")),
+            source="task_prompt_rendered",
+            fields=("userRequest",),
+            value=lambda item: _text(item, "user_request", "userRequest"),
+            last=True,
+        )
+        if copies:
+            return copies
     copies = _run_then_trace_copies(
         observations,
         context,
@@ -315,7 +343,23 @@ def _slot_extraction_copies(
     observations: Sequence[Mapping[str, object]],
     context: DataContext,
 ) -> list[DataCopy]:
-    """Resolve the LLM slot-extraction response (A2A-T only)."""
+    """Resolve the LLM slot-extraction response that produced the Task-T sent (A2A-T only)."""
+    if _harness_correction(observations):
+        # The correction attempt is the one whose Task-T is dispatched; the original's blocked
+        # extraction stays in the trace as evidence but must not answer this column.
+        copies = _ordered_request_copies(
+            observations,
+            context,
+            predicate=lambda item: _kind(item) == "llm"
+            and _text(item, "stage") in _SLOT_STAGES
+            and bool(_text(item, "response", "output")),
+            source="llm",
+            fields=("output",),
+            value=lambda item: _text(item, "response", "output"),
+            last=True,
+        )
+        if copies:
+            return copies
     return _run_then_trace_copies(
         observations,
         context,
@@ -333,6 +377,21 @@ def _task_t_copies(
     context: DataContext,
 ) -> list[DataCopy]:
     """Resolve the Task-T: the rendered prompt or any Task-T send frame."""
+    if _harness_correction(observations):
+        # The last render produced the Task-T the run dispatched; the blocked attempt's render
+        # stays in the trace as evidence.
+        dispatched = _ordered_request_copies(
+            observations,
+            context,
+            predicate=lambda item: _kind(item) == "task_prompt_rendered"
+            and bool(_text(item, "prompt_text", "promptText")),
+            source="task_prompt_rendered",
+            fields=("promptText",),
+            value=lambda item: _text(item, "prompt_text", "promptText"),
+            last=True,
+        )
+        if dispatched:
+            return dispatched
     rendered = _run_then_trace_copies(
         observations,
         context,
@@ -463,6 +522,59 @@ def _task_succeeded_copies(
         source="status",
         fields=("taskId", "contextId", "state", "modifyStatus"),
         value=_task_identity_text,
+    )
+
+
+def _harness_correction(observations: Sequence[Mapping[str, object]]) -> bool:
+    """Return whether the trace records the in-run gate correction rather than a replay.
+
+    The new shape marks the run root with ``requestRole`` and emits one ``correction_applied``
+    span per hand-off. A miss carries the role but no hand-off; both are new traces, so the role
+    alone decides. Older traces have neither and keep the replay-based reading.
+    """
+    for observation in observations:
+        if _text(observation, "request_role", "requestRole") == "blocked_followup":
+            return True
+        if _kind(observation) == "correction_applied":
+            return True
+    return False
+
+
+def _ordered_request_copies(
+    observations: Sequence[Mapping[str, object]],
+    context: DataContext,
+    *,
+    predicate: Callable[[Mapping[str, object]], bool],
+    source: str,
+    fields: tuple[str, ...],
+    value: Callable[[Mapping[str, object]], str],
+    last: bool,
+) -> list[DataCopy]:
+    """Return the first/last matching copy in start-time order.
+
+    The run's own observations win; the trace-wide pool is the fallback, mirroring
+    :func:`_run_then_trace_copies`. With a correction the same kind appears twice — the blocked
+    attempt and the dispatched one — so the position, not the kind, decides.
+    """
+    own = [item for item in observations if _matches_run(item, context.run_id)]
+    ordered = sorted(
+        (item for item in (own or observations) if predicate(item)),
+        key=lambda item: _text(item, "started_at", "startedAt"),
+    )
+    if not ordered and own:
+        ordered = sorted(
+            (item for item in observations if predicate(item)),
+            key=lambda item: _text(item, "started_at", "startedAt"),
+        )
+    if not ordered:
+        return []
+    chosen = ordered[-1] if last else ordered[0]
+    return _copies(
+        [chosen],
+        predicate=lambda item: True,
+        source=source,
+        fields=fields,
+        value=value,
     )
 
 

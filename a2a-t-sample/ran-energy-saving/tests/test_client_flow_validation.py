@@ -14,7 +14,13 @@ from a2a_t.core.errors.exceptions import ContentValidationError, PromptGeneratio
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI, MetadataContent
 from a2a_t.core.standard_templates import ENERGY_SAVING_URI
 from a2a_t.core.validation_pipeline import FilledParamData
-from protocol.client_flow import run_client_flow
+from google.protobuf.json_format import MessageToDict
+from protocol.client_flow import (
+    CorrectionProvider,
+    CorrectionRequest,
+    run_client_flow,
+    scripted_correction,
+)
 from protocol.decision_provider import ScriptedDecisionProvider
 from shared.run_constants import FINAL_STATE_INPUT_INVALID, FINAL_STATE_TASK_COMPLETED
 from shared.trace import PHASE_TASK_PROMPT
@@ -159,6 +165,7 @@ async def _run(
     trace_sink: list[dict[str, object]],
     validate: bool = True,
     enforce_required_fields: bool = False,
+    correction: CorrectionProvider | None = None,
 ):
     return await run_client_flow(
         prompt_client=prompt_client,
@@ -171,6 +178,7 @@ async def _run(
         single_extension_per_message=False,
         validate_before_send=validate,
         enforce_required_fields=enforce_required_fields,
+        correction=correction,
     )
 
 
@@ -573,5 +581,194 @@ async def test_disabled_validation_never_calls_the_sdk() -> None:
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
     assert prompt_client.validation_calls == []
     assert len(transport.requests) == 1
+
+
+def _correction_spans(traces: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [span for span in traces if span.get("kind") == "correction_applied"]
+
+
+def _detail(span: dict[str, object]) -> dict[str, object]:
+    detail = span.get("detail")
+    assert isinstance(detail, dict)
+    return detail
+
+
+def _rendered_spans(traces: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [span for span in traces if span.get("kind") == "task_prompt_rendered"]
+
+
+def _sent_task_t(transport: RecordingTransport) -> str:
+    metadata = MessageToDict(transport.requests[0].message.metadata)
+    return str(next(value for key, value in metadata.items() if "Task-T" in key))
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_request_is_corrected_inside_the_run_and_then_sent() -> None:
+    """The gate is a run phase: the run starts with the operator request, the correction is a
+    later input of the same run, and only the corrected Task-T reaches the wire."""
+    prompt_client = ValidatingPromptClient(
+        validation_errors=[
+            _content_error(
+                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
+                slot_errors=[_slot_error("content.format_error")],
+            ),
+            None,
+        ]
+    )
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        correction=scripted_correction("create ran energy saving task for NR cells"),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.generation_calls == [
+        "create ran energy saving task",
+        "create ran energy saving task for NR cells",
+    ]
+    assert [call[0] for call in prompt_client.validation_calls] == [
+        "Task-T prompt for: create ran energy saving task",
+        "Task-T prompt for: create ran energy saving task for NR cells",
+    ]
+    assert "for NR cells" in _sent_task_t(transport)
+
+    rendered = _rendered_spans(traces)
+    assert [_detail(span)["userRequest"] for span in rendered] == [
+        "create ran energy saving task",
+        "create ran energy saving task for NR cells",
+    ]
+    assert [_detail(span)["attempt"] for span in rendered] == [1, 2]
+
+    corrections = _correction_spans(traces)
+    assert len(corrections) == 1
+    detail = _detail(corrections[0])
+    assert detail["attempt"] == 1
+    assert detail["originalRequest"] == "create ran energy saving task"
+    assert detail["correctedRequest"] == "create ran energy saving task for NR cells"
+    assert detail["verdict"] == "blocked"
+    errors = detail["errors"]
+    assert isinstance(errors, list)
+    assert errors[0]["code"] == "content.format_error"
+
+    kinds = [span.get("kind") for span in traces]
+    assert kinds.index("correction_applied") > kinds.index("task_validation")
+    assert kinds.index("task_prompt_rendered", kinds.index("correction_applied")) > kinds.index(
+        "correction_applied"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_corrected_request_that_blocks_again_ends_input_invalid() -> None:
+    blocked = _content_error(
+        ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
+        slot_errors=[_slot_error("content.format_error")],
+    )
+    prompt_client = ValidatingPromptClient(validation_errors=[blocked, blocked])
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        correction=scripted_correction("create ran energy saving task for NR cells"),
+    )
+
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
+    assert transport.requests == []
+    assert len(prompt_client.generation_calls) == 2
+    assert len(prompt_client.validation_calls) == 2
+    assert len(_correction_spans(traces)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_passing_gate_never_asks_for_a_correction() -> None:
+    prompt_client = ValidatingPromptClient()
+    transport = RecordingTransport([_completed_task()])
+    asked: list[CorrectionRequest] = []
+
+    async def provider(request: CorrectionRequest) -> str | None:
+        asked.append(request)
+        return "should not be used"
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=[],
+        correction=provider,
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert asked == []
+    assert prompt_client.generation_calls == ["create ran energy saving task"]
+    assert "for NR cells" not in _sent_task_t(transport)
+
+
+@pytest.mark.asyncio
+async def test_a_slot_generation_failure_can_be_corrected_too() -> None:
+    error = PromptGenerationError(
+        ErrorCatalog.SLOT_CONSTRAINT_VIOLATED,
+        {"slot_label": "Task Target", "actual": "3G"},
+        message="The value of 'Task Target' (3G) is not within the allowed range",
+        failed_parameters=[
+            SlotValidationError(
+                slot_name="task_target",
+                code="slot.constraint_violated",
+                message="The value of 'Task Target' (3G) is not within the allowed range",
+                facts={"slot_label": "Task Target", "actual": "3G"},
+            )
+        ],
+    )
+    prompt_client = ValidatingPromptClient(generation_errors=[error, None])
+    transport = RecordingTransport([_completed_task()])
+    traces: list[dict[str, object]] = []
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=traces,
+        correction=scripted_correction("create ran energy saving task for NR cells"),
+    )
+
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert prompt_client.generation_calls == [
+        "create ran energy saving task",
+        "create ran energy saving task for NR cells",
+    ]
+    corrections = _correction_spans(traces)
+    assert len(corrections) == 1
+    errors = _detail(corrections[0])["errors"]
+    assert isinstance(errors, list)
+    assert errors[0]["code"] == "slot.constraint_violated"
+
+
+@pytest.mark.asyncio
+async def test_a_correction_provider_failure_keeps_the_block() -> None:
+    prompt_client = ValidatingPromptClient(
+        validation_errors=[
+            _content_error(
+                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
+                slot_errors=[_slot_error("content.format_error")],
+            )
+        ]
+    )
+    transport = RecordingTransport([_completed_task()])
+
+    async def broken(request: CorrectionRequest) -> str | None:
+        raise RuntimeError("no operator available")
+
+    result = await _run(
+        prompt_client=prompt_client,
+        transport=transport,
+        trace_sink=[],
+        correction=broken,
+    )
+
+    assert result.final_state == FINAL_STATE_INPUT_INVALID
+    assert transport.requests == []
 
 

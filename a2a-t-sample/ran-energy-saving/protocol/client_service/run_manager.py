@@ -67,7 +67,7 @@ from shared.trace_propagation import (
     set_vendor_span_starter,
 )
 
-from protocol.client_flow import ClientFlowResult
+from protocol.client_flow import ClientFlowResult, scripted_correction
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_poll_runtime
 from protocol.client_service.run_state import (
     SESSION_SWEEP_INTERVAL_SECONDS,
@@ -854,6 +854,7 @@ class RunManager:
         language: str | None = None,
         prepared_task_t: str | None = None,
         prepared_filled: Mapping[str, object] | None = None,
+        correction: str | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -895,6 +896,9 @@ class RunManager:
                 as-is and skips both SDK calls (the tester's interception-miss path).
             prepared_filled: values that validation extracted, used as the accept-refill baseline
                 when ``prepared_task_t`` is set.
+            correction: a repaired operator request applied when the run's own pre-send gate
+                blocks. The run keeps the original text as its request and continues after the
+                correction; a second block is terminal. ``None`` ends a blocked run as before.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
@@ -1037,6 +1041,7 @@ class RunManager:
             pure_answers=tuple(pure_answers or ()),
             prepared_task_t=prepared_task_t,
             prepared_filled=dict(prepared_filled) if prepared_filled else None,
+            correction_request=correction.strip() if isinstance(correction, str) and correction.strip() else None,
         )
         run.transcript = NegotiationTranscript(
             scenario=scenario,
@@ -1075,6 +1080,7 @@ class RunManager:
                 batch_id=str(resolved_source.get("batchId") or ""),
                 received_at=str(resolved_source.get("receivedAt") or ""),
                 user_request=raw_request or spec.user_request,
+                request_role=str(resolved_source.get("requestRole") or ""),
             ),
             # The chain trace id is both the Langfuse trace id and the vendor-facing id. A retry
             # adopts the anchor exported by the first attempt; the first live attempt creates it.
@@ -1700,7 +1706,15 @@ class RunManager:
                     "agentName": getattr(card, "name", None),
                 },
             )
+            # Only a run that can be corrected carries the extra hook: a runtime double or an
+            # older runtime keeps its historical call shape.
+            correction: dict[str, object] = (
+                {"correction_provider": scripted_correction(run.correction_request)}
+                if run.correction_request
+                else {}
+            )
             result = await run.runtime.run(
+                **correction,
                 event_sink=event_sink,
                 on_decision_requested=on_decision_requested,
                 on_decision_made=on_decision_made,

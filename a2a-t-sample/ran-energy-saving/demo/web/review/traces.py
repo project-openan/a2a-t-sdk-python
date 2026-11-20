@@ -121,6 +121,8 @@ class Observation:
     modify_status: str = ""
     summary: str = ""
     source: str = ""
+    #: ``blocked_followup`` on a run whose gate may correct the request; empty otherwise.
+    request_role: str = ""
     #: Observation start time. Langfuse lists observations newest first, so any fallback that has
     #: to number frames by occurrence must sort on this before assigning rounds.
     started_at: str = ""
@@ -144,6 +146,7 @@ class Observation:
             "scope": self.scope,
             "spanId": self.span_id,
             "parentId": self.parent_id,
+            "requestRole": self.request_role,
         }
         if self.user_request:
             payload["userRequest"] = self.user_request
@@ -543,6 +546,8 @@ def normalize_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[Observation, ...]
                 modify_status=_event_modify_status(event),
                 summary=_text(detail.get("summary")),
                 source=_text(detail.get("source")),
+                request_role=_text(metadata.get("requestRole"))
+                or _text(detail.get("requestRole")),
                 started_at=_text(row.get("startTime")) or _text(row.get("startedAt")),
             )
         )

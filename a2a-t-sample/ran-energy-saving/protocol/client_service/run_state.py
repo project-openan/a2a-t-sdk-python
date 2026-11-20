@@ -260,6 +260,9 @@ class RunState:
     #: A Task-T the caller already generated and validated (the tester's interception preflight).
     #: When set, the run reuses it instead of re-extracting and re-validating the same request.
     prepared_task_t: str | None = None
+    #: A repaired operator request the run may apply when its pre-send gate blocks (the tester's
+    #: ``blocked_followup.input``). It is a run-phase input, not a replacement run request.
+    correction_request: str | None = None
     prepared_filled: dict[str, object] | None = None
     proposals: list[NegotiationProposeView] = field(default_factory=list)
     traces: list[dict[str, object]] = field(default_factory=list)

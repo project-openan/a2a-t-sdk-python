@@ -108,7 +108,8 @@ def test_expected_points_follow_the_run_mode_and_the_interception() -> None:
     assert "gen:task_t_slot_extraction" not in modify
 
     blocked = {point.id for point in expected_client_points(_context(blocked=True, followup=True, run_mode="modify"))}
-    assert {"blocked_replay_extraction", "blocked_replay_validation"} <= blocked
+    assert "correction_applied" in blocked
+    assert "blocked_replay_extraction" not in blocked
     assert "gen:task_t_modify_extraction" in blocked
 
     pure = {point.id for point in expected_client_points(_context(protocol=PROTOCOL_A2A))}

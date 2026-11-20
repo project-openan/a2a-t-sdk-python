@@ -79,6 +79,7 @@ from shared.traced_llm import register_traced_providers
 from protocol.client_flow import (
     ClientFlowResult,
     ClientTransport,
+    CorrectionProvider,
     DecisionMadeCallback,
     SseClientTransport,
     WebhookClientTransport,
@@ -457,6 +458,8 @@ class ClientRuntime:
     activity_sink: ActivitySink | None = None
     pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None
     intent_processor: IntentProcessor | None = None
+    #: Optional in-run correction of a blocked pre-send gate (a scripted replacement request).
+    correction_provider: CorrectionProvider | None = None
     #: A Task-T the caller already generated and validated (the tester's interception preflight).
     #: When set, the run reuses it instead of re-extracting and re-validating the same request.
     prepared_task_t: str | None = None
@@ -581,6 +584,7 @@ class ClientRuntime:
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
         reply_only_accept: bool = False,
+        correction_provider: CorrectionProvider | None = None,
     ) -> ClientFlowResult:
         """Run the full client flow of the configured scenario.
 
@@ -615,6 +619,9 @@ class ClientRuntime:
             target_server_context_id: Context paired with ``target_server_task_id``.
             reply_only_accept: Build the accept from the decision's authored reply alone (the
                 tester replays a case): no derived target and no refilled Task-T.
+            correction_provider: Optional in-run correction of a blocked pre-send gate. A block
+                asks it once for a repaired operator request; the same run continues. ``None``
+                uses the runtime-wide provider, else the historical blocked-without-retry path.
 
         Returns:
             The collected events, decisions and terminal state.
@@ -850,6 +857,7 @@ class ClientRuntime:
                     # The tester (live mode included) replays its case reply: the accept carries
                     # that reply only, with nothing derived or refilled.
                     reply_only_accept=reply_only_accept,
+                    correction=correction_provider or self.correction_provider,
                     client_policy=ClientPolicy.from_config(self.config),
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,

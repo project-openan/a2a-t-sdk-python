@@ -58,7 +58,6 @@ from eval.osp.runner import (
     CaseOutcome,
     build_client_with_env,
     run_case,
-    run_interception_case,
 )
 from eval.osp.runner import (
     STAGE_ORDER as SDK_STAGE_ORDER,
@@ -80,7 +79,7 @@ from shared.run_constants import (
 from shared.run_constants import (
     PROTOCOL_A2A_T as RUNTIME_A2A_T,
 )
-from shared.trace import PHASE_TASK_VALIDATION, reset_task_sink, set_task_sink
+from shared.trace import reset_task_sink, set_task_sink
 
 from demo.web.tester.decisions import a2at_decisions, pure_answers
 from demo.web.tester.export_view import build_answer, read_traceparent
@@ -395,6 +394,9 @@ class CaseItem:
     refs: dict[str, object] = field(default_factory=dict)
     #: Reference-workbook answer/origin object (columns 76 and 87).
     answer: dict[str, object] | None = None
+    #: The operator's original request this item's run executes. A blocked case's replacement is a
+    #: correction inside the same run, so it never replaces this text.
+    run_request: str = ""
     #: The interception the case expects before its follow-up request (``blocked_followup``).
     interception: dict[str, object] | None = None
     #: Set by an operator cancelling this item alone. Transient: never persisted, and reset by a
@@ -1102,24 +1104,23 @@ class EvalBatchManager:
             return
         stages = list(ALL_STAGES[: ALL_STAGES.index(batch.stop_after) + 1])
         effective_case = case
-        #: Whether the case carries an expected interception plus a replacement request.
+        #: Whether the case carries an expected interception plus a replacement request. The run
+        #: always starts with the operator's original request; the replacement is a correction the
+        #: run applies only after its own pre-send gate blocks, so a miss dispatches the original.
         blocked_followup = False
-        #: Producer spans of the blocked original request; replayed into the item's run trace so
-        #: the trace shows the interception and the corrected retry like the presentation UI.
-        interception_spans: list[dict[str, object]] = []
+        correction: str | None = None
         #: Whether the original request was not intercepted, so the replacement must not run.
         interception_missed = False
-        #: The Task-T and its filled values the interception preflight already produced, reused by
-        #: the miss run instead of extracting and validating the same request a second time.
-        prepared_task_t: str | None = None
-        prepared_filled: dict[str, object] | None = None
         if item.protocol == PROTOCOL_A2A:
             # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
             stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
         else:
             blocked_followup = is_blocked_case(case) and has_followup(case)
             if blocked_followup:
+                # The corpus expectations describe the replacement request; the run still starts
+                # with the original text and reaches the replacement through its own gate.
                 effective_case = followup_case(case)
+                correction = followup_input(case)
             if batch.stop_after in SDK_STAGE_ORDER:
                 # SDK-only batch (``intent`` / ``task_t`` / ``validate``): no run is started, so the
                 # tester runs the three SDK stages itself and judges their columns.
@@ -1136,43 +1137,24 @@ class EvalBatchManager:
                     concurrent=batch.active_concurrency > 1,
                 )
                 interception_missed = blocked_followup and not _interception_held(item)
-            elif blocked_followup:
-                # A full-flow batch preflights only the original request of a blocked case: the
-                # interception is part of the case contract and the run never exercises it. The
-                # follow-up segment is skipped because the run dispatches that request itself, and
-                # the intent extraction is skipped because the arbitration reads the downstream
-                # payload; a deterministic block therefore costs one slot extraction at most.
-                interception_spans = await self._run_sdk_stages(
-                    case,
-                    item,
-                    "validate",
-                    batch.decision_mode,
-                    concurrent=batch.active_concurrency > 1,
-                    interception_only=True,
-                )
-                interception_missed = not _interception_held(item)
+        # The run executes the operator's original request; a correction is a later input of it.
+        item.run_request = str(case.get("user_input") or "")
         if item.cancel_requested:
             # The SDK call runs in a thread and cannot be interrupted; a cancel that arrived
             # during it must stop here, before a baseline is seeded or a real request is sent.
             return
-        # A miss runs the original request, not the replacement, so the frozen evidence must name
-        # the original; a hit runs the replacement the corpus describes.
+        # The frozen evidence names the operator's original request; the expectations describe the
+        # replacement a blocked case eventually dispatches.
         self._collect_reference(item, case if interception_missed else effective_case)
         if interception_missed:
-            if batch.stop_after in SDK_STAGE_ORDER:
-                # An SDK-only batch starts no run, so there is nothing to dispatch.
-                self._stamp_interception_miss(item, stages, dispatched=False)
-            else:
-                # The request the gate let through is the one that goes downstream. Its evidence
-                # is recorded — the corpus expectations describe the replacement — and only the
-                # interception segment judges the case.
-                effective_case = original_dispatch_case(case)
-                prepared_task_t, prepared_filled = _prepared_task_t(item.interception)
-                self._stamp_interception_miss(item, (), dispatched=True)
+            # Only an SDK-only batch can know the miss before a run exists; a full-flow run
+            # discovers it at its own gate and records it there.
+            self._stamp_interception_miss(item, stages, dispatched=False)
         if batch.stop_after in SDK_STAGE_ORDER:
             if blocked_followup and not interception_missed:
                 # The SDK stages are this item's whole evidence, so a follow-up that was blocked
                 # again must name itself here instead of looking like the expected interception.
+                item.refs["dispatchedRequest"] = correction or ""
                 self._stamp_followup_block(item)
             # No run will collect this evidence: freeze the request the SDK stages read so the
             # arbitration export still names it.
@@ -1189,10 +1171,9 @@ class EvalBatchManager:
             item,
             effective_case,
             stages,
-            interception_spans=interception_spans,
-            followup=blocked_followup and not interception_missed,
-            prepared_task_t=prepared_task_t,
-            prepared_filled=prepared_filled,
+            run_request=item.run_request,
+            correction=correction if blocked_followup else None,
+            interception_case=case if blocked_followup else None,
         )
         item.status = self._item_status(item)
 
@@ -1206,22 +1187,17 @@ class EvalBatchManager:
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
         interception_only: bool = False,
-    ) -> list[dict[str, object]]:
+    ) -> None:
         """Run the SDK stages of one SDK-only case and record its interception segment, when split.
 
         ``outcome_case`` is the derived replacement case whose expectations judge the returned
         stages; the runner already judged the intercepted original, so those stages are recorded
         verbatim (the runner derived their assertion flags). ``concurrent`` selects the pooled
-        client path; the default keeps the historical single locked client. ``interception_only``
-        records just the original request of a blocked case and leaves ``item.stages`` untouched.
+        client path; the default keeps the historical single locked client.
 
-        A preflight belongs to no run, so its producer spans are silenced. The interception of a
-        blocked case is different: the presentation UI shows the blocked attempt and its corrected
-        retry in one workflow, so those spans are returned for replay into the run trace.
+        A preflight belongs to no run, so its producer spans are silenced.
         """
-        interception_spans: list[dict[str, object]] = []
-        sink = interception_spans.append if interception_only else None
-        sink_token = set_task_sink(sink)
+        sink_token = set_task_sink(None)
         try:
             results, interception, error = await self._sdk_stage_results(
                 case,
@@ -1229,12 +1205,10 @@ class EvalBatchManager:
                 decision_mode,
                 outcome_case=outcome_case,
                 concurrent=concurrent,
-                interception_only=interception_only,
             )
         finally:
             reset_task_sink(sink_token)
-        if not interception_only:
-            item.stages.update(results)
+        item.stages.update(results)
         if interception is not None:
             record: dict[str, object] = {
                 "input": str(case.get("user_input") or ""),
@@ -1244,17 +1218,8 @@ class EvalBatchManager:
             if error:
                 record["error"] = error
             item.interception = record
-            if interception_only:
-                # The interception runs before the item's run exists, so its validation only reaches
-                # Langfuse when it is replayed with the rest of the preflight evidence.
-                validation_span = _interception_validation_span(
-                    interception, str(case.get("user_input") or "")
-                )
-                if validation_span is not None:
-                    interception_spans.append(validation_span)
         if error:
             item.error = error
-        return interception_spans
 
     async def _sdk_stage_results(
         self,
@@ -1264,14 +1229,11 @@ class EvalBatchManager:
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
-        interception_only: bool = False,
     ) -> tuple[dict[str, StageResult], dict[str, StageResult] | None, str | None]:
         """Run the SDK-owned stages of one case and return stages, interception and error.
 
         A blocked case with a replacement request makes the runner execute two segments; the
         follow-up segment is the returned outcome and the original is ``outcome.interception``.
-        With ``interception_only`` only the original is executed and its stages are the
-        interception record; there is no outcome for ``item.stages``.
         """
         judge = outcome_case if outcome_case is not None else case
         model_mode = MODEL_MODE_LIVE if decision_mode == DECISION_MODE_LIVE else None
@@ -1280,25 +1242,7 @@ class EvalBatchManager:
             stop_after,
             model_mode,
             concurrent=concurrent,
-            interception_only=interception_only,
         )
-        if interception_only:
-            return (
-                {},
-                {
-                    stage.stage: StageResult(
-                        stage=stage.stage,
-                        status=stage.status,
-                        message=stage.message,
-                        expected=stage.expected,
-                        actual=stage.actual,
-                        diffs=[diff.to_dict() for diff in stage.diffs],
-                        detail=dict(stage.detail) if stage.detail else None,
-                    )
-                    for stage in outcome.stages
-                },
-                outcome.error,
-            )
         negotiation_expected = _negotiation_expected(judge, PROTOCOL_A2A_T)
         results: dict[str, StageResult] = {}
         for stage in outcome.stages:
@@ -1343,10 +1287,9 @@ class EvalBatchManager:
         case: Mapping[str, Any],
         stages: Sequence[str],
         *,
-        interception_spans: Sequence[Mapping[str, object]] = (),
-        followup: bool = False,
-        prepared_task_t: str | None = None,
-        prepared_filled: Mapping[str, object] | None = None,
+        run_request: str,
+        correction: str | None = None,
+        interception_case: Mapping[str, Any] | None = None,
     ) -> None:
         if item.cancel_requested:
             # Cancelled between the SDK stages and here: never seed a baseline or send a request.
@@ -1419,7 +1362,7 @@ class EvalBatchManager:
             mode,
             transport,
             discovery,
-            str(case["user_input"]),
+            run_request,
             protocol=runtime_protocol,
             conversation_id=conversation_id,
             user_id="tester",
@@ -1433,6 +1376,9 @@ class EvalBatchManager:
                 # A rate-less site-level negotiation is expected to reach the server, which
                 # proposes the missing value; only the corpus' negotiation cases get this pass.
                 "negotiationExpected": negotiation_expected,
+                # The run's request is the operator's original text; a replacement is a
+                # correction of the run's own gate, never a second request of its own.
+                "requestRole": "blocked_followup" if correction else "",
             },
             target_task_id=target_task_id,
             target_context_id=target_context_id,
@@ -1442,11 +1388,9 @@ class EvalBatchManager:
             pure_answers=answers or None,
             validate_before_send=_pre_send_validation(runner),
             language=resolved_language,
-            prepared_task_t=prepared_task_t,
-            prepared_filled=prepared_filled,
+            correction=correction,
         )
         item.run_id = run.run_id
-        self._replay_interception_spans(run, interception_spans)
         self._persist(batch)
         if item.cancel_requested:
             # The cancel arrived while the run was being created; stop it before observing it,
@@ -1469,11 +1413,24 @@ class EvalBatchManager:
         finally:
             approval_task.cancel()
             await asyncio.gather(approval_task, return_exceptions=True)
-            await self._collect_metrics(item, run, case)
-            if followup:
-                # The run dispatches the replacement request, so a block here is the follow-up
-                # being rejected, not the interception the case expects. The stamp runs after the
-                # evidence collection because that is what creates the run's ``validate`` stage.
+            # The run's own pre-send gate is the interception segment of a blocked case. Read it
+            # before the evidence collection so the export names the case the run actually
+            # reached: the replacement's expectations on a hit, the original's on a miss.
+            interception_held = True
+            if interception_case is not None:
+                interception_held = self._record_run_interception(item, run, interception_case)
+            await self._collect_metrics(
+                item, run, case if interception_held else interception_case
+            )
+            if interception_case is not None and not interception_held:
+                # The gate let the original request through, so the replacement never ran. The
+                # downstream evidence is recorded against the original, never judged against the
+                # replacement's expectations.
+                self._demote_missed_interception(item, interception_case)
+                self._stamp_interception_miss(item, (), dispatched=True)
+            elif interception_case is not None:
+                # The correction was applied; a block of the corrected Task-T is the follow-up
+                # being rejected, not the interception the case expects.
                 self._stamp_followup_block(item, run)
             # The evidence is collected; release the remote Task unless this batch keeps Tasks for
             # long-task verification. ``accepted``/``working`` end the observation window, and the
@@ -1526,31 +1483,6 @@ class EvalBatchManager:
         await self._collect_metrics(item, run)
         if not batch.keep_tasks:
             await self._release_item_runs(item, run)
-
-    def _replay_interception_spans(
-        self, run: RunState, spans: Sequence[Mapping[str, object]]
-    ) -> None:
-        """Attach the blocked original request's spans to the run trace.
-
-        A blocked case with a follow-up dispatches the replacement request in the run, but the
-        interception is part of the evidence: the presentation UI shows the blocked attempt and
-        its corrected retry in one workflow, so the tester's trace must show it too. Only producer
-        work is replayed (an ``intent_processed`` row would overwrite the run's own intent); the
-        validation span the tester synthesizes for the block is part of that evidence.
-        Observability only: a replay failure must never change the item result.
-        """
-        for span in spans:
-            if str(span.get("kind") or "") not in {"llm", "tool", "task_validation"}:
-                continue
-            try:
-                payload = dict(span)
-                payload["runId"] = run.run_id
-                payload["traceId"] = run.trace_id
-                run.record_trace(payload)
-            except Exception:  # noqa: BLE001 - tracing must never break the tested flow
-                _LOGGER.warning(
-                    "tester interception span replay failed for run %s", run.run_id, exc_info=True
-                )
 
     async def _release_item_runs(self, item: CaseItem, run: RunState | None = None) -> None:
         """Cancel the runs one item created and release their remote Tasks.
@@ -2229,7 +2161,9 @@ class EvalBatchManager:
             "qaId": f"TC{item.case_id:08d}",
             "uid": str(case.get("uid") or ""),
             "taskT": str(block.get("task_t") or ""),
-            "userInput": str(case.get("user_input") or ""),
+            # The operator's original request, even when ``case`` is the derived replacement
+            # document whose expectations judge that replacement.
+            "userInput": item.run_request or str(case.get("user_input") or ""),
             "expectedIntent": (
                 {str(key): value for key, value in raw_intent.items()}
                 if isinstance(raw_intent, Mapping)
@@ -2270,6 +2204,13 @@ class EvalBatchManager:
             if langfuse_warning:
                 item.langfuse_warning = langfuse_warning
             self._collect_reference(item, case)
+            correction = _correction_detail(run)
+            if correction is not None:
+                corrected = correction.get("correctedRequest")
+                if isinstance(corrected, str) and corrected.strip():
+                    # The operator's request stays ``userInput``; this names what the run
+                    # actually dispatched after its own gate blocked.
+                    item.refs["dispatchedRequest"] = corrected.strip()
             raw_request = run.raw_request or str(item.refs.get("userInput") or "")
             item.intent_meta["rawRequest"] = raw_request
             item.intent_meta["normalizedText"] = run.normalized_request or raw_request
@@ -2474,24 +2415,86 @@ class EvalBatchManager:
             item.interception["followupBlocked"] = True
         item.error = f"{message} 详情：{item.error}" if item.error else message
 
-    def _judge_run_validation(
+    def _record_run_interception(
         self,
         item: CaseItem,
         run: RunState,
-        case: Mapping[str, Any] | None,
-    ) -> None:
-        """Judge the run's pre-send Task-T validation, the "拦截" stage of a full-flow item.
+        case: Mapping[str, Any],
+    ) -> bool:
+        """Record the run's own gate as the interception segment of one blocked case.
 
-        A full-flow item skips the SDK preflight; the run validates the Task-T itself before
-        sending and emits a ``task_validation`` span with the verdict and slot errors. The stage
-        shows that verdict against the case's expectation. No validation evidence creates no stage,
-        and a case without an expectation stays record-only.
+        A blocked case is one run with two gate attempts: the original request is blocked, the
+        operator's replacement is applied, and the gate runs again. Returns ``True`` when that
+        block happened and the replacement was dispatched. ``False`` means the gate let the
+        original through: the caller records the miss and treats the downstream evidence as
+        record-only.
         """
-        if item.protocol != PROTOCOL_A2A_T or "validate" in item.stages or case is None:
-            return
-        detail = _run_validation_detail(run)
-        if detail is None:
-            return
+        correction = _correction_detail(run)
+        original = str(item.run_request or case.get("user_input") or "")
+        if correction is None:
+            detail = _first_validation_detail(run)
+            result = (
+                self._validation_stage(case, detail)
+                if detail is not None
+                else StageResult(
+                    "validate",
+                    STAGE_ERROR,
+                    "run 未产生校验证据。",
+                    expected="blocked",
+                    actual=None,
+                )
+            )
+            item.interception = {
+                "input": original,
+                "followupInput": followup_input(case) or "",
+                "stages": {"validate": result.to_dict()},
+            }
+            return False
+        raw_errors = correction.get("errors")
+        slot_errors = (
+            [dict(error) for error in raw_errors] if isinstance(raw_errors, list) else []
+        )
+        detail: dict[str, object] = {
+            "verdict": "blocked",
+            "blocking": True,
+            "reason": str(correction.get("reason") or ""),
+            "code": str(correction.get("reason") or ""),
+            "slotErrors": slot_errors,
+        }
+        result = self._validation_stage(case, detail)
+        item.interception = {
+            "input": str(correction.get("originalRequest") or original),
+            "followupInput": str(correction.get("correctedRequest") or ""),
+            "stages": {"validate": result.to_dict()},
+        }
+        return True
+
+    @staticmethod
+    def _demote_missed_interception(item: CaseItem, case: Mapping[str, Any]) -> None:
+        """Record — never judge — the downstream stages of a run whose interception missed.
+
+        The corpus expectations describe the replacement request, which a miss never dispatches,
+        so the original request's downstream evidence stays visible without failing more stages
+        than the interception itself.
+        """
+        derived = original_dispatch_case(case)
+        for stage_name, key in (
+            ("intent", "intent"),
+            ("send", "send"),
+            ("task_t", "task_t"),
+            ("validate", "validate"),
+            ("negotiate", "negotiation"),
+            ("final", "final_state"),
+        ):
+            stage = item.stages.get(stage_name)
+            if stage is None:
+                continue
+            protocol = "" if key == "intent" else PROTOCOL_A2A_T
+            item.stages[stage_name] = _apply_assertion(derived, protocol, key, stage)
+
+    @staticmethod
+    def _validation_stage(case: Mapping[str, Any], detail: Mapping[str, object]) -> StageResult:
+        """Judge one observed validation verdict against the case's expectation."""
         verdict = str(detail.get("verdict") or "")
         expected = _case_validation_expectation(case)
         observed = detail.get("slotErrors")
@@ -2501,15 +2504,16 @@ class EvalBatchManager:
             verdict,
             observed if isinstance(observed, list) else (),
         )
+        merged = dict(detail)
         if evidence is not None:
-            detail.update(evidence.to_detail())
+            merged.update(evidence.to_detail())
         result = StageResult(
             "validate",
             STAGE_PASSED,
             expected=expected,
             actual=verdict,
             diffs=[dict(item) for item in evidence.diffs()] if evidence is not None else [],
-            detail=detail,
+            detail=merged,
         )
         if expected is None:
             result.status = STAGE_RECORDED
@@ -2522,7 +2526,28 @@ class EvalBatchManager:
         ):
             result.status = STAGE_FAILED
             result.message = _VALIDATION_MISMATCH_MESSAGE
-        item.stages["validate"] = result
+        return result
+
+    def _judge_run_validation(
+        self,
+        item: CaseItem,
+        run: RunState,
+        case: Mapping[str, Any] | None,
+    ) -> None:
+        """Judge the run's pre-send Task-T validation, the "拦截" stage of a full-flow item.
+
+        A full-flow item skips the SDK preflight; the run validates the Task-T itself before
+        sending and emits a ``task_validation`` span with the verdict and slot errors. With a
+        correction the run emits two verdicts; the last one is the request actually dispatched.
+        No validation evidence creates no stage, and a case without an expectation stays
+        record-only.
+        """
+        if item.protocol != PROTOCOL_A2A_T or "validate" in item.stages or case is None:
+            return
+        detail = _run_validation_detail(run)
+        if detail is None:
+            return
+        item.stages["validate"] = self._validation_stage(case, detail)
 
     async def _ensure_prompt_client(self, model_mode: str | None = None) -> Any:
         """Return the SDK prompt client of one model mode (offline scripted by default)."""
@@ -2562,16 +2587,14 @@ class EvalBatchManager:
         model_mode: str | None,
         *,
         concurrent: bool,
-        interception_only: bool = False,
     ) -> CaseOutcome:
         """Run the SDK stages on a client that is not borrowed by another thread.
 
         The sequential path and any injected client keep the historical single client behind
         ``_sdk_lock``. The concurrent path checks a client out of the per-mode pool, so no two
-        runner threads ever share one ``A2ATClient``. ``interception_only`` runs just the original
-        request of a blocked case with a follow-up (see :func:`run_interception_case`).
+        runner threads ever share one ``A2ATClient``.
         """
-        runner = run_interception_case if interception_only else run_case
+        runner = run_case
         if not concurrent or self._prompt_client is not None:
             async with self._sdk_lock:
                 client = await self._ensure_prompt_client(model_mode)
@@ -3380,29 +3403,6 @@ def _interception_held(item: CaseItem) -> bool:
     return followup_allowed(actual if isinstance(actual, str) and actual else None)
 
 
-def _prepared_task_t(
-    record: Mapping[str, object] | None,
-) -> tuple[str | None, dict[str, object] | None]:
-    """Return the Task-T and filled values an interception preflight already produced.
-
-    A miss dispatches the same original request the preflight just extracted and validated, so
-    the run reuses that Task-T (and the values the validation extracted) instead of paying for
-    the two model turns a second time.
-    """
-    record = record if isinstance(record, Mapping) else {}
-    stages = record.get("stages")
-    if not isinstance(stages, Mapping):
-        return None, None
-    task_t = stages.get("task_t")
-    text = task_t.get("actual") if isinstance(task_t, Mapping) else None
-    if not isinstance(text, str) or not text.strip() or text.startswith("<blocked"):
-        return None, None
-    validate = stages.get("validate")
-    detail = validate.get("detail") if isinstance(validate, Mapping) else None
-    filled = detail.get("filledParams") if isinstance(detail, Mapping) else None
-    return text, dict(filled) if isinstance(filled, Mapping) else None
-
-
 def _interception_miss_detail(item: CaseItem) -> str:
     """Return the one-line reason of an interception that did not hold, for the item's message."""
     record = item.interception if isinstance(item.interception, Mapping) else {}
@@ -3456,44 +3456,6 @@ def _task_observation(run: RunState) -> dict[str, object]:
     }
 
 
-def _interception_validation_span(
-    stages: Mapping[str, StageResult],
-    user_request: str = "",
-) -> dict[str, object] | None:
-    """Build the ``task_validation`` span of one intercepted request.
-
-    The tester's interception preflight runs outside a run, so its validation verdict and slot
-    errors never reach the trace. Replaying this span next to the preflight model calls makes the
-    blocked attempt visible in Langfuse and in the run trace view. ``user_request`` names the
-    request that was blocked, which is the original text, not the follow-up the run dispatches.
-    """
-    validate = stages.get("validate")
-    if validate is None:
-        return None
-    detail = dict(validate.detail) if isinstance(validate.detail, Mapping) else {}
-    verdict = str(detail.get("verdict") or validate.actual or "")
-    if verdict:
-        detail.setdefault("verdict", verdict)
-    detail.setdefault("blocking", verdict == "blocked")
-    if validate.message:
-        detail.setdefault("reason", validate.message)
-    if user_request:
-        detail.setdefault("userRequest", user_request)
-    # Distinguishes this blocked-original evidence from the validation the run itself performed.
-    detail["source"] = "interception"
-    task_t = stages.get("task_t")
-    if task_t is not None and isinstance(task_t.actual, str) and task_t.actual:
-        detail.setdefault("promptText", task_t.actual[:4000])
-    return {
-        "kind": "task_validation",
-        "phase": PHASE_TASK_VALIDATION,
-        "title": f"Task-T validation {verdict or 'unknown'}",
-        "side": "client",
-        "status": "ok",
-        "detail": detail,
-    }
-
-
 def _run_validation_detail(run: RunState) -> dict[str, object] | None:
     """Return the verdict and slot errors of the run's own pre-send validation.
 
@@ -3523,6 +3485,31 @@ def _run_validation_detail(run: RunState) -> dict[str, object] | None:
             "code": code,
             "slotErrors": slot_errors,
         }
+    return None
+
+
+def _first_validation_detail(run: RunState) -> dict[str, object] | None:
+    """Return the run's first gate verdict, which is the blocked original of a blocked case."""
+    for span in run.traces:
+        if span.get("kind") != "task_validation":
+            continue
+        detail = span.get("detail")
+        if not isinstance(detail, Mapping) or detail.get("source") == "interception":
+            continue
+        verdict = detail.get("verdict")
+        if isinstance(verdict, str) and verdict:
+            return dict(detail)
+    return None
+
+
+def _correction_detail(run: RunState) -> dict[str, object] | None:
+    """Return the run's correction hand-off, ``None`` when the gate never blocked."""
+    for span in reversed(run.traces):
+        if span.get("kind") != "correction_applied":
+            continue
+        detail = span.get("detail")
+        if isinstance(detail, Mapping):
+            return dict(detail)
     return None
 
 

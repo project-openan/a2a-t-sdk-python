@@ -271,6 +271,49 @@ class TaskValidation:
     attempts: int = 1
 
 
+@dataclass(frozen=True)
+class CorrectionRequest:
+    """One blocked gate waiting for a corrected operator request.
+
+    The gate is a phase of every A2A-T run, so a block does not end the run by itself: the
+    operator may repair the request and continue the same run. This object carries the evidence
+    the operator needs (what was blocked and why) to produce the correction.
+    """
+
+    #: The request the run is currently executing (the operator's original text on attempt 1).
+    user_request: str
+    #: 1-based gate attempt; a correction is only accepted for the first.
+    attempt: int
+    #: ``blocked``; a gate never asks for a correction on a passing/negotiable verdict.
+    verdict: str
+    #: Stable error reason (``content.param_missing``, ``slot.constraint_violated``, ...).
+    reason: str
+    #: Structured slot errors of the blocked attempt.
+    slot_errors: tuple[dict[str, object], ...]
+    #: The Task-T that failed the gate; empty when extraction failed before a Task-T existed.
+    prompt_text: str
+
+
+#: Callback returning the operator's corrected request, or ``None`` to end the run blocked.
+CorrectionProvider = Callable[[CorrectionRequest], Awaitable[str | None]]
+
+
+def scripted_correction(text: str) -> CorrectionProvider:
+    """Return a provider that answers the first gate with one fixed corrected request.
+
+    The tester replays a corpus replacement request; it is not an operator, so the answer is a
+    value, not an interaction. The flow itself bounds the correction to one attempt.
+    """
+
+    corrected = text.strip()
+
+    async def provider(request: CorrectionRequest) -> str | None:
+        del request
+        return corrected or None
+
+    return provider
+
+
 def _elapsed_ms(started: float) -> int:
     """Return the whole milliseconds elapsed since ``started``."""
     return max(0, int((time.monotonic() - started) * 1000))
@@ -964,6 +1007,7 @@ async def run_client_flow(
     target_context_id: str | None = None,
     prepared_task_t: str | None = None,
     prepared_filled: Mapping[str, object] | None = None,
+    correction: CorrectionProvider | None = None,
 ) -> ClientFlowResult:
     """Run one complete client flow: initial Task-T, multi-round negotiation, task or end.
 
@@ -1035,6 +1079,11 @@ async def run_client_flow(
             as the first message so an existing running Task is continued.
         target_task_id: Task the Modify-only run continues; required by ``run_mode="modify"``.
         target_context_id: Context of the target Task; required by ``run_mode="modify"``.
+        correction: Optional gate provider. A blocked pre-send validation asks it once for a
+            corrected operator request; the run then re-extracts, re-validates and continues in
+            the same run. ``None`` keeps the historical behaviour (the blocked run ends with
+            ``input_invalid``). A second block is terminal, so a scripted correction can never
+            loop.
 
     Returns:
         The collected events, provider decisions and terminal state.
@@ -1224,139 +1273,207 @@ async def run_client_flow(
     resolved_label = TASK_MODIFY_LABEL if modify_only else label
     initial_phase = PHASE_TASK_MODIFY if modify_only else PHASE_TASK_PROMPT
     validation_schema: Mapping[str, object] = TASK_PARAM_SCHEMA
-    # OSP `AL`: the moment OSS calls the A2A-T SDK. The span is written after the Task-T exists,
-    # so the SDK call's own start/end is carried on it (the LLM spans inside are separate).
-    sdk_started = time.perf_counter()
-    sdk_started_at = now_iso()
+    # The request the run currently executes. A gate block does not end the run: the operator may
+    # repair the request and the same run continues, so this text changes at most once.
+    request_text = user_request
+    attempt = 1
     prepared = bool(prepared_task_t and prepared_task_t.strip())
-    if prepared:
-        # The caller already generated and validated this exact Task-T (the tester replays its
-        # interception preflight into this run). Re-running the two SDK calls would duplicate two
-        # model turns and could, on a non-deterministic model, disagree with the verdict already
-        # recorded next to this run.
-        prompt_text = str(prepared_task_t)
-        prompt_content: Any = SimpleNamespace(
-            prompt_text=prompt_text,
-            template_uri=task_template_uri,
-            extension_uri=None,
+    prompt_text = ""
+    prompt_content: Any = None
+    initial_filled: dict[str, object] = {}
+
+    def end_blocked(*, with_target: bool = False) -> ClientFlowResult:
+        """End the run before anything is sent, at the gate that blocked it."""
+        blocked = ClientFlowResult()
+        blocked.final_state = FINAL_STATE_INPUT_INVALID
+        _fill_result(blocked, target_context_id if (with_target and modify_only) else None)
+        return blocked
+
+    async def accept_correction(validation: TaskValidation, blocked_prompt: str) -> bool:
+        """Ask the correction provider once; record the hand-off and continue the same run.
+
+        Returns ``False`` when no usable correction exists, so the caller ends the run blocked.
+        The correction is deliberately single-shot: a request that is blocked again is terminal,
+        which keeps a scripted correction from looping and matches the operator contract.
+        """
+        nonlocal request_text, prepared, attempt
+        if correction is None or attempt > 1:
+            return False
+        request = CorrectionRequest(
+            user_request=request_text,
+            attempt=attempt,
+            verdict=validation.verdict,
+            reason=str(validation.reason or ""),
+            slot_errors=tuple(dict(error) for error in validation.errors),
+            prompt_text=blocked_prompt[:4000],
         )
-    else:
         try:
-            with trace_stage("task_t_modify_extraction" if modify_only else "task_t_slot_extraction"):
-                # Every run, Create and Modify alike, extracts its Task-T from the operator's text.
-                # There is no structured shortcut: the text is the only source of business values.
-                # The SDK call is synchronous and can take minutes on a slow endpoint; run it off
-                # the event loop so the page keeps receiving activity frames while it waits.
-                prompt_content = await asyncio.to_thread(
-                    prompt_client.generate_task_prompt_from_text,
-                    _request_with_context(user_request, conversation_context),
-                    task_template_uri,
-                )
-        except PromptGenerationError as error:
-            validation = _generation_task_validation(error)
-            if validation is None:
-                raise
-            # No Task-T exists, so there is nothing to send and no protocol negotiation to start.
-            # Reuse the pre-send validation surface: the operator edits the request and retries.
-            emit_validation(validation, "", task_template_uri, initial_phase)
-            blocked = ClientFlowResult()
-            blocked.final_state = FINAL_STATE_INPUT_INVALID
-            _fill_result(blocked, target_context_id if modify_only else None)
-            return blocked
-        prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
-    # A concurrent intent read (see the runtime) is awaited here, after generation, so the two
-    # model turns overlap instead of running one after the other. Every later use of the fields
-    # sees a plain mapping.
-    intent_fields = await _resolve_intent_fields(intent_fields)
-    emit_trace(
-        "task_prompt_rendered",
-        phase=initial_phase,
-        title="Modify Task-T prompt rendered" if modify_only else "Task-T prompt rendered",
-        started_at=sdk_started_at,
-        ended_at=now_iso(),
-        duration_ms=elapsed_ms(sdk_started),
-        detail={
-            "promptText": prompt_text,
-            **({"prepared": True} if prepared else {}),
-            "templateUri": prompt_content.template_uri or task_template_uri,
-            "length": len(prompt_text),
-            # The request this prompt was generated from. A blocked-then-retried case dispatches
-            # the follow-up text, so the trace must name that text next to the Task-T it produced.
-            "userRequest": user_request,
-            **({"samplePhase": SAMPLE_PHASE_MODIFY} if modify_only else {}),
-        },
-    )
-    initial_filled: dict[str, object] = _merge_initial_filled(None, intent_fields)
-    if prepared and prepared_filled:
-        # The preflight's validation already extracted these values; reuse them so a later accept
-        # refill keeps the operator's values instead of falling back to the intent fields alone.
-        initial_filled = _merge_initial_filled(
-            TaskValidation("passed", None, [], None, 0, dict(prepared_filled), 1),
-            initial_filled,
+            corrected = await correction(request)
+        except Exception as exc:  # noqa: BLE001 - a failed operator hand-off keeps the block
+            _LOGGER.warning("correction provider failed; keeping the blocked request: %s", exc)
+            return False
+        text = corrected.strip() if isinstance(corrected, str) else ""
+        if not text:
+            return False
+        emit_trace(
+            "correction_applied",
+            phase=initial_phase,
+            title="Request corrected",
+            detail={
+                "attempt": attempt,
+                "originalRequest": request_text,
+                "correctedRequest": text,
+                "verdict": validation.verdict,
+                "reason": validation.reason,
+                "errors": list(request.slot_errors),
+                "promptText": blocked_prompt[:4000],
+            },
         )
-    validation: TaskValidation | None = None
-    required_unknown = False
-    if not prepared and (validate_before_send or enforce_required_fields):
-        validation = await _validate_task_prompt(
-            prompt_client,
-            prompt_text,
-            validation_schema,
-            task_template_uri,
-            language=language,
-            enforce_required_fields=enforce_required_fields,
-            site_level_rate_optional=site_level_rate_optional,
+        request_text = text
+        prepared = False
+        attempt += 1
+        return True
+
+    while True:
+        # OSP `AL`: the moment OSS calls the A2A-T SDK. The span is written after the Task-T
+        # exists, so the SDK call's own start/end is carried on it (the inner LLM spans are
+        # separate).
+        sdk_started = time.perf_counter()
+        sdk_started_at = now_iso()
+        if prepared:
+            # The caller already generated and validated this exact Task-T. Re-running the two SDK
+            # calls would duplicate two model turns and could, on a non-deterministic model,
+            # disagree with the verdict already recorded next to this run.
+            prompt_text = str(prepared_task_t)
+            prompt_content = SimpleNamespace(
+                prompt_text=prompt_text,
+                template_uri=task_template_uri,
+                extension_uri=None,
+            )
+        else:
+            try:
+                with trace_stage(
+                    "task_t_modify_extraction" if modify_only else "task_t_slot_extraction"
+                ):
+                    # Every run, Create and Modify alike, extracts its Task-T from the operator's
+                    # text. There is no structured shortcut: the text is the only source of
+                    # business values. The SDK call is synchronous and can take minutes on a slow
+                    # endpoint; run it off the event loop so the page keeps receiving activity
+                    # frames while it waits.
+                    prompt_content = await asyncio.to_thread(
+                        prompt_client.generate_task_prompt_from_text,
+                        _request_with_context(request_text, conversation_context),
+                        task_template_uri,
+                    )
+            except PromptGenerationError as error:
+                validation = _generation_task_validation(error)
+                if validation is None:
+                    raise
+                # No Task-T exists, so there is nothing to send and no protocol negotiation to
+                # start. Reuse the pre-send validation surface: the operator repairs the request
+                # and the same run retries.
+                emit_validation(validation, "", task_template_uri, initial_phase)
+                if await accept_correction(validation, ""):
+                    continue
+                return end_blocked(with_target=True)
+            prompt_text = _require_prompt_text(prompt_content, "the initial Task-T prompt")
+        # A concurrent intent read (see the runtime) is awaited here, after generation, so the two
+        # model turns overlap instead of running one after the other. Every later use of the
+        # fields sees a plain mapping.
+        intent_fields = await _resolve_intent_fields(intent_fields)
+        emit_trace(
+            "task_prompt_rendered",
+            phase=initial_phase,
+            title="Modify Task-T prompt rendered" if modify_only else "Task-T prompt rendered",
+            started_at=sdk_started_at,
+            ended_at=now_iso(),
+            duration_ms=elapsed_ms(sdk_started),
+            detail={
+                "promptText": prompt_text,
+                **({"prepared": True} if prepared else {}),
+                "templateUri": prompt_content.template_uri or task_template_uri,
+                "length": len(prompt_text),
+                # The request this prompt was generated from. The operator's original request and
+                # a later correction each name their own text next to the Task-T they produced.
+                "userRequest": request_text,
+                "attempt": attempt,
+                **({"samplePhase": SAMPLE_PHASE_MODIFY} if modify_only else {}),
+            },
         )
-        initial_filled = _merge_initial_filled(validation, intent_fields)
-        if enforce_required_fields and validation.verdict == "unavailable":
-            # The semantic pipeline is unavailable (for example a contract-breaking model
-            # response). Keep the real validator reason: reporting "field is empty" would blame
-            # the operator for a validator failure. The missing caller-required values stay in the
-            # error list as secondary context, and the gate still blocks.
-            missing = _missing_required_fields(
+        initial_filled = _merge_initial_filled(None, intent_fields)
+        if prepared and prepared_filled:
+            # The caller's validation already extracted these values; reuse them so a later
+            # accept refill keeps the operator's values instead of falling back to the intent
+            # fields alone.
+            initial_filled = _merge_initial_filled(
+                TaskValidation("passed", None, [], None, 0, dict(prepared_filled), 1),
                 initial_filled,
+            )
+        validation: TaskValidation | None = None
+        required_unknown = False
+        if not prepared and (validate_before_send or enforce_required_fields):
+            validation = await _validate_task_prompt(
+                prompt_client,
+                prompt_text,
                 validation_schema,
-                language,
+                task_template_uri,
+                language=language,
+                enforce_required_fields=enforce_required_fields,
                 site_level_rate_optional=site_level_rate_optional,
             )
-            if missing:
-                required_unknown = True
-                validation = TaskValidation(
-                    "blocked",
-                    None,
-                    [*validation.errors, *missing],
-                    validation.reason or "content.param_missing",
-                    validation.duration_ms,
+            initial_filled = _merge_initial_filled(validation, intent_fields)
+            if enforce_required_fields and validation.verdict == "unavailable":
+                # The semantic pipeline is unavailable (for example a contract-breaking model
+                # response). Keep the real validator reason: reporting "field is empty" would
+                # blame the operator for a validator failure. The missing caller-required values
+                # stay in the error list as secondary context, and the gate still blocks.
+                missing = _missing_required_fields(
                     initial_filled,
-                    validation.attempts,
+                    validation_schema,
+                    language,
+                    site_level_rate_optional=site_level_rate_optional,
                 )
-        if enforce_required_fields and validation.filled:
-            mismatch = _region_consistency_errors(validation.filled, intent_fields, language)
-            if mismatch:
-                validation = TaskValidation(
-                    "blocked",
-                    None,
-                    mismatch,
-                    "content.value_mismatch",
-                    validation.duration_ms,
-                    initial_filled,
-                    validation.attempts,
-                )
-        if validate_before_send:
-            emit_validation(validation, prompt_text, task_template_uri, initial_phase)
-            if validation.verdict == "blocked":
-                # Nothing is sent and no negotiation starts: the operator repairs the request first.
-                blocked = ClientFlowResult()
-                blocked.final_state = FINAL_STATE_INPUT_INVALID
-                _fill_result(blocked, None)
-                return blocked
-        elif required_unknown or validation.reason in {"content.param_missing", "content.value_mismatch"}:
-            # Only the business gate runs when semantic validation is off; negotiable content
-            # still goes to the server.
-            emit_validation(validation, prompt_text, task_template_uri, initial_phase)
-            blocked = ClientFlowResult()
-            blocked.final_state = FINAL_STATE_INPUT_INVALID
-            _fill_result(blocked, None)
-            return blocked
+                if missing:
+                    required_unknown = True
+                    validation = TaskValidation(
+                        "blocked",
+                        None,
+                        [*validation.errors, *missing],
+                        validation.reason or "content.param_missing",
+                        validation.duration_ms,
+                        initial_filled,
+                        validation.attempts,
+                    )
+            if enforce_required_fields and validation.filled:
+                mismatch = _region_consistency_errors(validation.filled, intent_fields, language)
+                if mismatch:
+                    validation = TaskValidation(
+                        "blocked",
+                        None,
+                        mismatch,
+                        "content.value_mismatch",
+                        validation.duration_ms,
+                        initial_filled,
+                        validation.attempts,
+                    )
+            if validate_before_send:
+                emit_validation(validation, prompt_text, task_template_uri, initial_phase)
+                if validation.verdict == "blocked":
+                    # Nothing is sent and no negotiation starts until the request is repaired.
+                    if await accept_correction(validation, prompt_text):
+                        continue
+                    return end_blocked()
+            elif required_unknown or validation.reason in {
+                "content.param_missing",
+                "content.value_mismatch",
+            }:
+                # Only the business gate runs when semantic validation is off; negotiable content
+                # still goes to the server.
+                emit_validation(validation, prompt_text, task_template_uri, initial_phase)
+                if await accept_correction(validation, prompt_text):
+                    continue
+                return end_blocked()
+        break
     if on_intent_ready is not None and not await on_intent_ready(prompt_text):
         # The engineer did not confirm the structured intent, so the Task-T never leaves the OSS
         # side. No message is sent and no task is created.

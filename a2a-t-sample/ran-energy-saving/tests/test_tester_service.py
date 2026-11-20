@@ -59,7 +59,6 @@ from shared.run_constants import (
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
-from shared.trace import record_span
 
 CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
 
@@ -123,10 +122,22 @@ class _PromptClient:
 
 
 class _FakeRuns:
-    """RunManager double recording every ``start`` call."""
+    """RunManager double recording every ``start`` call.
 
-    def __init__(self, builder: Callable[[RunState], None]) -> None:
+    ``gate`` scripts the pre-send gate the real run executes: ``block_then_pass`` (the default
+    when the tester passes a correction) emits the blocked attempt, the correction and the
+    passing retry; ``pass`` emits a single passing verdict (the interception missed); and
+    ``block_then_block`` blocks both attempts. ``None`` emits no gate evidence at all.
+    """
+
+    def __init__(
+        self,
+        builder: Callable[[RunState], None],
+        *,
+        gate: str | None = None,
+    ) -> None:
         self._builder = builder
+        self._gate = gate
         self.calls: list[dict[str, object]] = []
         self.cancelled: list[str] = []
         self.runs: dict[str, RunState] = {}
@@ -157,8 +168,13 @@ class _FakeRuns:
             transport=transport,
             discovery=discovery,
         )
+        run.raw_request = user_request
+        run.correction_request = kwargs.get("correction")  # type: ignore[assignment]
         self.runs[run.run_id] = run
         self._builder(run)
+        gate = self._gate or ("block_then_pass" if run.correction_request else None)
+        if gate is not None:
+            run.traces.extend(_gate_traces(run, gate))
         return run
 
     def get(self, run_id: str) -> RunState | None:
@@ -195,6 +211,72 @@ def _working(run: RunState) -> None:
     run.remote_context_id = "ctx-1"
     run.latest_task_state = "TASK_STATE_WORKING"
     run.traces.append({"kind": "message_sent"})
+
+
+def _blocked_run(run: RunState) -> None:
+    """Make one fake run end at its own pre-send gate without sending anything."""
+    run.status = "finished"
+    run.result = ClientFlowResult(
+        final_state=FINAL_STATE_INPUT_INVALID,
+        error="Task-T 校验未通过。",
+    )
+
+
+def _gate_traces(run: RunState, mode: str) -> list[dict[str, object]]:
+    """Return the pre-send gate evidence of one fake run.
+
+    This mirrors what ``run_client_flow`` records: the first render and its blocked validation,
+    the correction hand-off, and the retry's render and verdict. The real flow owns the behavior;
+    the tester only reads this evidence.
+    """
+    request = str(run.raw_request or "")
+    correction = str(run.correction_request or "")
+    blocked: dict[str, object] = {
+        "kind": "task_validation",
+        "phase": "task_validation",
+        "detail": {
+            "verdict": "blocked",
+            "blocking": True,
+            "errors": [{"slotName": "region", "code": "content.param_missing"}],
+            "reason": "content.param_missing",
+        },
+    }
+    passed: dict[str, object] = {
+        "kind": "task_validation",
+        "phase": "task_validation",
+        "detail": {"verdict": "pass", "blocking": False, "errors": []},
+    }
+
+    def rendered(text: str, attempt: int) -> dict[str, object]:
+        # No promptText: this harness models the gate hand-off (who requested what), while the
+        # Task-T render comparison is the real flow's job and needs a real SDK render.
+        return {
+            "kind": "task_prompt_rendered",
+            "phase": "task_prompt",
+            "detail": {"userRequest": text, "attempt": attempt},
+        }
+
+    if mode == "pass":
+        return [rendered(request, 1), passed]
+    traces: list[dict[str, object]] = [rendered(request, 1), blocked]
+    if correction:
+        traces.append(
+            {
+                "kind": "correction_applied",
+                "phase": "task_prompt",
+                "detail": {
+                    "attempt": 1,
+                    "originalRequest": request,
+                    "correctedRequest": correction,
+                    "verdict": "blocked",
+                    "reason": "content.param_missing",
+                    "errors": [{"slotName": "region", "code": "content.param_missing"}],
+                },
+            }
+        )
+        traces.append(rendered(correction, 2))
+        traces.append(passed if mode == "block_then_pass" else blocked)
+    return traces
 
 
 def _manager(
@@ -620,36 +702,6 @@ async def test_working_is_waiting_while_input_required(tmp_path: Path) -> None:
 
     assert result.status == STAGE_WAITING
     assert "INPUT_REQUIRED" in result.message
-
-
-def test_an_intercepted_validation_is_replayed_as_a_task_validation_span() -> None:
-    stages = {
-        "task_t": StageResult(
-            "task_t",
-            STAGE_RECORDED,
-            actual="## Operation Type\nCreate",
-        ),
-        "validate": StageResult(
-            "validate",
-            STAGE_PASSED,
-            message="blocked by content.param_missing",
-            actual="blocked",
-            detail={
-                "verdict": "blocked",
-                "slotErrors": [{"slotName": "region", "code": "content.param_missing"}],
-            },
-        ),
-    }
-
-    span = service._interception_validation_span(stages, "the blocked original request")
-
-    assert span is not None
-    assert span["kind"] == "task_validation"
-    detail = span["detail"]
-    assert detail["verdict"] == "blocked"
-    assert detail["slotErrors"] == [{"slotName": "region", "code": "content.param_missing"}]
-    assert detail["promptText"].startswith("## Operation Type")
-    assert detail["userRequest"] == "the blocked original request"
 
 
 def test_a_task_t_stage_serializes_its_section_rows() -> None:
@@ -1944,32 +1996,15 @@ async def test_a_blocked_case_with_a_followup_records_the_interception(tmp_path:
     assert runs.calls == []
 
 
-async def test_the_followup_request_is_what_the_full_flow_dispatches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_blocked_case_runs_the_original_and_corrects_inside_the_run(
+    tmp_path: Path,
 ) -> None:
-    calls: list[str] = []
-    real_interception = service.run_interception_case
-
-    def recording_interception(
-        case: Mapping[str, Any], client: Any, *, stop_after: str = "validate"
-    ) -> Any:
-        calls.append(stop_after)
-        record_span(
-            kind="llm",
-            phase="task_t_client_validation",
-            title="LLM call · interception",
-            prefix="llm_interception",
-        )
-        return real_interception(case, client, stop_after=stop_after)
-
-    def forbidden_run_case(*args: object, **kwargs: object) -> Any:
-        raise AssertionError("a full-flow blocked case runs only the interception segment")
-
-    monkeypatch.setattr(service, "run_interception_case", recording_interception)
-    monkeypatch.setattr(service, "run_case", forbidden_run_case)
-    runs = _FakeRuns(_finish)
+    """The gate is a run phase: the run starts with the operator request and dispatches the
+    replacement only after its own block. The replacement never becomes the run's request."""
+    runs = _FakeRuns(_finish, gate="block_then_pass")
     manager = _manager(tmp_path, runs)
     _inject_followup(manager, 22)
+    original = str(CASES[22]["user_input"])
     created = manager.create(
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
@@ -1982,23 +2017,22 @@ async def test_the_followup_request_is_what_the_full_flow_dispatches(
     finished = await _wait_status(manager, str(created["batchId"]), "finished")
 
     assert len(runs.calls) == 1
-    assert runs.calls[0]["userRequest"] == FOLLOWUP_INPUT
-    # The original request is judged once; the follow-up segment and the intent extraction are
-    # left to the run, so a deterministic block costs one slot extraction at most.
-    assert calls == ["validate"]
+    assert runs.calls[0]["userRequest"] == original
+    assert runs.calls[0]["correction"] == FOLLOWUP_INPUT
     item = _only_item(finished)
     interception = item["interception"]
     assert isinstance(interception, Mapping)
+    assert interception["input"] == original
+    assert interception["followupInput"] == FOLLOWUP_INPUT
     intercepted_stages = interception["stages"]
     assert isinstance(intercepted_stages, Mapping)
-    assert "validate" in intercepted_stages
-    assert "intent" not in intercepted_stages
-    # The blocked attempt belongs to the run's trace, as in the presentation UI's workflow. A
-    # silenced preflight would drop this span; a replayed interception keeps it.
-    run = next(iter(runs.runs.values()))
-    assert any(span.get("title") == "LLM call · interception" for span in run.traces)
+    assert intercepted_stages["validate"]["actual"] == "blocked"
+    assert intercepted_stages["validate"]["status"] == STAGE_PASSED
+    # The run's own validate stage judges the request it actually dispatched.
     stages = item["stages"]
     assert isinstance(stages, Mapping)
+    assert stages["validate"]["expected"] == "pass"
+    assert stages["validate"]["status"] == STAGE_PASSED
     assert stages["send"]["expected"] is True
     assert stages["send"]["status"] == STAGE_PASSED
     assert stages["final"]["expected"] == "task_completed"
@@ -2006,24 +2040,25 @@ async def test_the_followup_request_is_what_the_full_flow_dispatches(
     assert item["status"] == CASE_PASSED
     refs = item["refs"]
     assert isinstance(refs, Mapping)
-    assert refs["userInput"] == FOLLOWUP_INPUT
+    assert refs["userInput"] == original
+    assert refs["dispatchedRequest"] == FOLLOWUP_INPUT
     assert refs["expectedFinalState"] == "task_completed"
 
 
-async def test_a_blocked_modify_dispatches_its_followup_not_the_original(
+async def test_a_blocked_modify_runs_the_original_then_corrects_to_the_followup(
     tmp_path: Path,
 ) -> None:
-    """A blocked Modify seeds its baseline Create, then sends the corrected request.
+    """A blocked Modify seeds its baseline Create, then runs the original with a correction.
 
-    The follow-up input is the only request the Modify run may dispatch: the original input is
-    incomplete by contract (that is why the case expects an interception), so sending it would
-    block the item at validation instead of exercising the continuation.
+    The Modify run keeps the operator's original text and reaches the replacement through its own
+    gate; the replacement never replaces the run's request.
     """
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs)
     case = manager._catalog.get(63)
     assert case is not None
     assert case.get("operation") == "Modify"
+    original = str(case["user_input"])
     supplement = followup_input(case)
     assert supplement
     created = manager.create(
@@ -2037,10 +2072,11 @@ async def test_a_blocked_modify_dispatches_its_followup_not_the_original(
     await manager.start(str(created["batchId"]))
     await _wait_status(manager, str(created["batchId"]), "finished")
 
-    # Call 1 is the paired Create baseline; call 2 is the case's Modify request.
+    # Call 1 is the paired Create baseline; call 2 is the case's Modify run.
     assert len(runs.calls) == 2
     assert runs.calls[0]["userRequest"] != supplement
-    assert runs.calls[1]["userRequest"] == supplement
+    assert runs.calls[1]["userRequest"] == original
+    assert runs.calls[1]["correction"] == supplement
     assert runs.calls[1]["target_task_id"] == "task-1"
     assert runs.calls[1]["target_context_id"] == "ctx-1"
 
@@ -2101,25 +2137,7 @@ async def test_a_followup_that_is_still_blocked_fails_the_item(tmp_path: Path) -
 
 async def test_a_full_flow_followup_that_is_still_blocked_says_so(tmp_path: Path) -> None:
     """The run dispatches the replacement request; blocking it is not the expected interception."""
-
-    def blocked_in_run(run: RunState) -> None:
-        run.status = "finished"
-        run.result = ClientFlowResult(
-            final_state=FINAL_STATE_INPUT_INVALID, error="Task-T 校验未通过。"
-        )
-        run.traces.append(
-            {
-                "kind": "task_validation",
-                "phase": "task_validation",
-                "detail": {
-                    "verdict": "blocked",
-                    "errors": [],
-                    "reason": "content.param_missing",
-                },
-            }
-        )
-
-    manager = _manager(tmp_path, _FakeRuns(blocked_in_run))
+    manager = _manager(tmp_path, _FakeRuns(_blocked_run, gate="block_then_block"))
     _inject_followup(manager, 22)
     created = manager.create(
         case_ids=[22],
@@ -2187,13 +2205,10 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_o
     tmp_path: Path,
 ) -> None:
     """The original request goes downstream; the replacement is not sent."""
-    runs = _FakeRuns(_finish)
+    runs = _FakeRuns(_finish, gate="pass")
     manager = _manager(tmp_path, runs)
     _inject_followup(manager, 22)
-    client = manager._prompt_client
-    assert isinstance(client, _PromptClient)
     original = str(CASES[22]["user_input"])
-    client.unblocked_texts.add(original)
     created = manager.create(
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
@@ -2211,12 +2226,9 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_o
     assert item["error"] is None
     assert len(runs.calls) == 1
     assert runs.calls[0]["userRequest"] == original
+    assert runs.calls[0]["correction"] == FOLLOWUP_INPUT
     interception = item["interception"]
     assert isinstance(interception, Mapping)
-    # The run reuses the Task-T the preflight already produced instead of paying for the same slot
-    # extraction and validation a second time.
-    assert runs.calls[0]["prepared_task_t"] == interception["stages"]["task_t"]["actual"]
-    assert runs.calls[0]["prepared_filled"] is None
     assert interception["followupSkipped"] is True
     assert interception["originalDispatched"] is True
     assert interception["stages"]["validate"]["status"] == STAGE_RECORDED
@@ -2236,14 +2248,11 @@ async def test_a_full_flow_blocked_modify_that_did_not_fire_falls_back_to_the_or
     tmp_path: Path,
 ) -> None:
     """A Modify still needs its paired baseline, then continues with the original request."""
-    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
+    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED), gate="pass")
     manager = _manager(tmp_path, runs)
     case = manager._catalog.get(63)
     assert case is not None
     original = str(case["user_input"])
-    client = manager._prompt_client
-    assert isinstance(client, _PromptClient)
-    client.unblocked_texts.add(original)
     created = manager.create(
         case_ids=[63],
         protocols=[PROTOCOL_A2A_T],

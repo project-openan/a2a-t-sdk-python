@@ -452,6 +452,44 @@ def test_exporter_joins_the_current_otel_parent(offline_config: SampleConfig) ->
     assert f"{root.context.trace_id:032x}" == f"{parent.get_span_context().trace_id:032x}"
 
 
+def test_a_correction_keeps_the_original_request_and_names_the_dispatched_one(
+    offline_config: SampleConfig,
+) -> None:
+    """The trace names the operator's request; the corrected text is a separate field."""
+    metadata = replace(
+        _metadata(),
+        user_request="original request",
+        request_role="blocked_followup",
+    )
+    exporter, runtime = _exporter(offline_config, span_level="phase", metadata=metadata)
+    exporter(
+        {
+            "kind": "correction_applied",
+            "phase": "task_prompt",
+            "title": "Request corrected",
+            "detail": {
+                "attempt": 1,
+                "originalRequest": "original request",
+                "correctedRequest": "corrected request",
+                "verdict": "blocked",
+                "errors": [],
+            },
+        }
+    )
+    exporter.finish()
+
+    spans = _by_name(runtime)
+    root = spans["run · night · a2a-t"]
+    attributes = dict(root.attributes)
+    assert attributes["langfuse.trace.metadata.userRequest"] == "original request"
+    assert attributes["langfuse.trace.metadata.requestRole"] == "blocked_followup"
+    assert attributes["langfuse.trace.metadata.dispatchedRequest"] == "corrected request"
+
+    correction = spans["Request corrected"]
+    assert correction.attributes["langfuse.observation.input"] == "original request"
+    assert correction.attributes["langfuse.observation.output"] == "corrected request"
+
+
 def _reduced_run_spans() -> list[dict[str, object]]:
     """A small run with the status noise the reduced levels are meant to remove."""
     return [

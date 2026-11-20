@@ -15,7 +15,7 @@ from a2a.types import Artifact, Message, Role, Task, TaskState, TaskStatus
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from demo.catalog import DemoRunCatalog
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
-from protocol.client_flow import ClientFlowResult
+from protocol.client_flow import ClientFlowResult, CorrectionProvider, CorrectionRequest
 from protocol.client_service import RunConflictError, RunManager
 from protocol.client_service.run_manager import HANDED_OVER
 from protocol.client_store import (
@@ -66,6 +66,7 @@ class FakeRuntime:
         self.trace_id = ""
         self.downstream_trace_id = ""
         self.reply_only_accept = False
+        self.correction_provider: CorrectionProvider | None = None
 
     def set_decision_wait_sink(self, sink: Callable[[DecisionTimeoutError], None] | None) -> bool:
         """Accept the manager's expired-window observer."""
@@ -95,8 +96,10 @@ class FakeRuntime:
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
+        correction_provider: CorrectionProvider | None = None,
     ) -> ClientFlowResult:
         self.reply_only_accept = reply_only_accept
+        self.correction_provider = correction_provider
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del require_rate_target, site_level_rate_optional, run_mode, target_task_id, target_context_id
         del target_server_task_id, target_server_context_id
@@ -214,6 +217,37 @@ async def _finish(manager: RunManager, run_id: str) -> None:
     run = manager.get(run_id)
     assert run is not None and run.task is not None
     await run.task
+
+
+async def test_a_run_correction_reaches_the_client_flow(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The gate correction is a run-phase input, so it crosses the manager boundary intact."""
+    manager, _store, runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "night",
+        "auto",
+        "sse",
+        user_request="original request",
+        correction="corrected request",
+    )
+    await _finish(manager, run.run_id)
+
+    assert run.correction_request == "corrected request"
+    provider = runtimes[0].correction_provider
+    assert provider is not None
+    answer = await provider(
+        CorrectionRequest(
+            user_request="original request",
+            attempt=1,
+            verdict="blocked",
+            reason="content.param_missing",
+            slot_errors=(),
+            prompt_text="",
+        )
+    )
+    assert answer == "corrected request"
 
 
 async def test_run_persists_lifecycle_negotiation_and_task_snapshot(

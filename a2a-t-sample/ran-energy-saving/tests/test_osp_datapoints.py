@@ -108,6 +108,49 @@ def test_a_blocked_followup_original_needs_the_interception_replay() -> None:
     assert with_interception["request.original"].copies[0].value == "blocked original"
 
 
+def test_a_correction_trace_reads_the_original_first_and_the_dispatched_last() -> None:
+    """The run has two gate attempts: its first render is the operator request, the last is what
+    the correction dispatched. The key-data columns must not mix them."""
+    observations = [
+        _obs("task_prompt_rendered", user_request="original", promptText="ORIGINAL TASK-T"),
+        _obs(
+            "llm",
+            stage="task_t_slot_extraction",
+            response='{"slots": {"region": "bad"}}',
+            type="GENERATION",
+        ),
+        _obs("task_validation", verdict="blocked", slotErrors=[], reason="content.param_missing"),
+        _obs("correction_applied", originalRequest="original", correctedRequest="corrected"),
+        _obs("task_prompt_rendered", user_request="corrected", promptText="CORRECTED TASK-T"),
+        _obs(
+            "llm",
+            stage="task_t_slot_extraction",
+            response='{"slots": {"region": "A2ATestRegion"}}',
+            type="GENERATION",
+        ),
+        _obs("task_validation", verdict="pass", slotErrors=[]),
+        _obs(
+            "run · night · a2a-t",
+            user_request="original",
+            request_role="blocked_followup",
+        ),
+    ]
+    results = _by_id(
+        resolve_data_points(
+            {"observations": observations},
+            _context(blocked=True, followup=True),
+            include_values=True,
+        )
+    )
+
+    assert results["request.original"].status == STATUS_PRESENT
+    assert results["request.original"].copies[0].value == "original"
+    assert results["request.dispatched"].status == STATUS_PRESENT
+    assert results["request.dispatched"].copies[0].value == "corrected"
+    assert results["slot_extraction"].copies[0].value == '{"slots": {"region": "A2ATestRegion"}}'
+    assert results["task_t"].copies[0].value == "CORRECTED TASK-T"
+
+
 def test_pure_a2a_marks_the_task_t_only_items_not_applicable() -> None:
     results = _by_id(
         resolve_data_points(

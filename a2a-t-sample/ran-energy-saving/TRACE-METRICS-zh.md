@@ -47,6 +47,7 @@ token/时延统计的载体。
 | `message_sent` | `Task-T sent` / `Accept sent` / `Counter proposal sent · Rn` / `Pure A2A message sent` | task_prompt / task_validation / negotiation / resolution | `client_flow`、`pure_client_flow`、`plain_client_flow` | performative、templateUri、`taskT`（≤4000 字）、`negotiationT`、messageId | AM、AS；X 列 Task-T 原文 |
 | `task_prompt_rendered` | `Task-T prompt rendered` / `Modify …` | task_prompt / task_modify | `client_flow` | Task-T 全文、templateUri、**SDK 调用起止/duration** | AL、X 列 |
 | `task_validation` | `Task-T validation <verdict>` | task_validation / task_modify | `client_flow` | verdict、errors、negotiationKind、reason | Y 列（拦截结论） |
+| `correction_applied` | `Request corrected` | task_prompt / task_modify | `client_flow`（run 内 gate 阻塞后） | attempt、originalRequest、correctedRequest、verdict、errors、被拦截的 `promptText` | 拦截后补充请求的唯一 hand-off；`userRequest` 仍是原请求 |
 | `intent_processed` | `Intent processed` | task_prompt | `client_runtime`（A2A-T）/ `run_state`（pure 提升） | rawRequest、normalizedText、结构化 intent、missingFields | Z 列（A2A 侧） |
 | `task_created` | `Task created` / `Task modified` | execution | `run_state._maybe_emit_task_created` | operation、state=`TASK_STATE_SUBMITTED`、taskId/contextId | **AN** |
 | `propose` | `Propose · <kind> · Rn` | negotiation | `run_state.record_event` 按 performative 把入站协商报文标为 `propose`；或按 `metadata.pure.kind == negotiation` | round、templateUri、协商正文、negotiationContext；pure 另带 `negotiationType`、`hop` | **AJ**、AO/AP、AW |
@@ -200,9 +201,18 @@ root span 上写入（`shared/langfuse_tracing.py::_root_attributes`）：
 
 `runId`、`scenario`、`chainId`、`parentRunId`、`language`、`mode`、`protocol`、`transport`、
 `discovery`、`intentMode`、`modelMode`、`modelLabel`、`runMode`、`sourceKind`、`caseId`、
-`caseName`、`batchId`、`receivedAt`、`userRequest`；`phase`/`minimal` 在 `finish()` 时再写
-`rounds`、`negotiated`。`session.id = chainId`（无纠错链时等于 conversationId），
-`user.id = userId`。
+`caseName`、`batchId`、`receivedAt`、`userRequest`、`requestRole`；`phase`/`minimal` 在
+`finish()` 时再写 `rounds`、`negotiated`。`session.id = chainId`（无纠错链时等于
+conversationId），`user.id = userId`。
+
+- `userRequest` 是**操作员原始请求**：A2A-T 的发送前 gate 属于 run 的一个阶段，被拦截后
+  的补充请求是同一次 run 内的修正，不会替换它。
+- gate 真正拦截并应用修正时，root 再写 `dispatchedRequest`（实际下发的补充文本）和
+  `requestRole=blocked_followup`；未拦截（miss）时只有 `requestRole`，`userRequest` 就是
+  实际下发的原请求。
+- 一次 run 内可能出现两次 `task_prompt_rendered` / `task_validation`、两条同名
+  `LLM call · task_t_slot_extraction`；第一次是被拦截的原请求，第二次是修正后的下发请求，
+  中间以 `correction_applied` 分隔。
 
 因此 Langfuse 里可以：按 `protocol` / `caseId` / `modelMode` 过滤 → 对 generation 的
 `usage_details` 求和得到 AX/AY/AZ/BA；按 `rounds`/`negotiated` 出 AW/BB；用
@@ -214,8 +224,9 @@ root span 上写入（`shared/langfuse_tracing.py::_root_attributes`）：
 
 1. tester 启动 run，写入 `caseId/batchId/receivedAt`；
 2. run 结束读 `run_metrics`（本地，完整 token/accuracy）或 Langfuse trace；
-3. 按 §3 填 AK–BB；U 列填工作流 `traceId`。被拦截的 preflight 与修正重试共享它，
-   `attemptCount`/`attemptRunIds` 列出 attempt；
+3. 按 §3 填 AK–BB；U 列填工作流 `traceId`。被拦截的原请求与修正后的下发在同一次 run /
+   同一条 trace 内完成（`correction_applied` 分隔），不产生第二个 trace；只有 SDK-only
+   批次（`stop_after ∈ intent/task_t/validate`）仍无 run、无 Langfuse trace；
 4. A2A 与 A2A-T 用同一 `caseId` 对齐比较；
 5. 行内的 token/时延列只来自有效 attempt（真正发出 Task-T 的那次），不是整条 trace 求和；
    需要看另一个 attempt 时传 `--run-id`。
@@ -255,5 +266,7 @@ curl localhost:8080/api/metrics/export.csv
   拆分；Langfuse 中按 observation metadata `side` 过滤。
 - **offline** 运行 token 标记为 `scripted`，不导出 Langfuse；只用于确定性回归。
 - **`transport`** 只在 `full` 出现，真机长任务的长轮询不会进入 dashboard。
-- **纠错重试**：被拦截、未发出 Task-T 的 attempt 没有 AM/AN/协商列，AU/AX 等应按“有效
-  attempt”统计；多次 attempt 用 `chainId` 归组、各自保留 traceId。
+- **纠错重试**：同一 run 的第一次 gate 被拦截时没有 AM/AN/协商列；只有 `correction_applied`
+  之后的那次下发产生 AM/AN/协商列。AU/AX 等 token 列仍是整条 trace 的求和（两次抽取都真实
+  发生了）；需要只算有效下发时按 `correction_applied` 之后的时间窗截取。
+  presentation 的人工纠错仍是多次 attempt：用 `chainId` 归组、各自保留 traceId。

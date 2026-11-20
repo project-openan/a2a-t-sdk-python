@@ -339,10 +339,17 @@ def dispatched_task_t(
         for observation in observations
         if _text(observation.get("kind")) == "task_prompt_rendered" and _text(observation.get("promptText"))
     ]
-    candidates.sort(key=lambda observation: observation.get("interception") is True)
     if not candidates:
         return "", False
-    chosen = candidates[0]
+    regular = [item for item in candidates if item.get("interception") is not True]
+    pool = regular or candidates
+    # The run's first render is the blocked original and its last is the dispatched Task-T; the
+    # legacy replay shape marks the original explicitly. Sorting by start time picks the
+    # dispatch in both shapes instead of relying on the export's observation order.
+    pool.sort(
+        key=lambda item: str(item.get("startedAt") or item.get("started_at") or "")
+    )
+    chosen = pool[-1]
     return _text(chosen.get("promptText")), chosen.get("promptTruncated") is True
 
 
@@ -430,20 +437,10 @@ def expected_client_points(context: TraceContext) -> tuple[TracePoint, ...]:
             )
         )
     if context.blocked and context.followup:
+        # A blocked case is one run with two gate attempts; the hand-off between them is the
+        # evidence that the replacement is a correction, not the run's own request.
         points.append(
-            TracePoint(
-                "blocked_replay_extraction",
-                "拦截回放的抽取调用",
-                stage="task_t_slot_extraction",
-            )
-        )
-        points.append(
-            TracePoint(
-                "blocked_replay_validation",
-                "拦截回放的校验结果",
-                kind="task_validation",
-                interception=True,
-            )
+            TracePoint("correction_applied", "请求修正", kind="correction_applied")
         )
     if modify:
         points.append(TracePoint("gen:task_t_modify_extraction", "LLM 修改抽取", stage="task_t_modify_extraction"))
