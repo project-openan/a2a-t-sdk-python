@@ -18,22 +18,25 @@
 """Recording, metered LLM client (port of the Java ``RecordingMeteredLlmClient``).
 
 Decorator wrapping the real LLM client as the single test seam of the corpus: it records every
-invocation with the complete request (messages, schema, parameters, model), the complete response
-(content, model, usage), the latency and the token counters, then delegates transparently. The
-production pipeline is otherwise assembled unchanged.
+invocation with the actual HTTP wire request (or a provider-shaped fallback for non-HTTP
+delegates), the complete response (content, model, usage), the latency and the token counters,
+then delegates transparently. The production pipeline is otherwise assembled unchanged.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from engine.errors_serializer import to_map
 
 from a2a_t.llm.models import LLMResponse
 from a2a_t.llm.provider import LLMClient
+from a2a_t.llm.providers.openai import STRUCTURED_OUTPUT_SCHEMA_NAME
 
 __all__ = ["RecordedLlmCall", "RecordingMeteredLlmClient"]
 
@@ -75,15 +78,31 @@ class RecordingMeteredLlmClient:
         """Record and delegate one structured invocation."""
         started_at = time.perf_counter()
         effective_temperature = temperature if temperature is not None else self._default_temperature
-        request: dict[str, object] = {
-            "messages": [dict(message) for message in messages],
-            "jsonSchema": copy.deepcopy(json_schema) if json_schema is not None else {},
-        }
-        if effective_temperature is not None:
-            request["temperature"] = effective_temperature
-        if max_tokens is not None:
-            request["maxTokens"] = max_tokens
-        request["model"] = self._model_name
+        fallback_request = self._logical_request(
+            messages=messages,
+            json_schema=json_schema,
+            temperature=effective_temperature,
+            max_tokens=max_tokens,
+        )
+        wire_request: dict[str, object] | None = None
+        original_send = httpx.Client.send
+
+        def send_and_capture(
+            client: httpx.Client,
+            request: httpx.Request,
+            *args: Any,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            nonlocal wire_request
+            try:
+                decoded = json.loads(request.content)
+            except (json.JSONDecodeError, UnicodeDecodeError, httpx.RequestNotRead):
+                decoded = None
+            if isinstance(decoded, dict):
+                wire_request = decoded
+            return original_send(client, request, *args, **kwargs)
+
+        setattr(httpx.Client, "send", send_and_capture)
         try:
             response = self._delegate.structured(
                 messages=messages,
@@ -91,6 +110,7 @@ class RecordingMeteredLlmClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            request = wire_request if wire_request is not None else fallback_request
             self._record(
                 RecordedLlmCall(
                     request=request,
@@ -107,6 +127,7 @@ class RecordingMeteredLlmClient:
             )
             return response
         except BaseException as error:
+            request = wire_request if wire_request is not None else fallback_request
             self._record(
                 RecordedLlmCall(
                     request=request,
@@ -118,6 +139,34 @@ class RecordingMeteredLlmClient:
                 )
             )
             raise
+        finally:
+            setattr(httpx.Client, "send", original_send)
+
+    def _logical_request(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        json_schema: dict[str, Any],
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> dict[str, object]:
+        """Build the OpenAI-compatible request when the delegate does not use HTTP."""
+        request: dict[str, object] = {
+            "model": self._model_name,
+            "messages": [dict(message) for message in messages],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": STRUCTURED_OUTPUT_SCHEMA_NAME,
+                    "schema": copy.deepcopy(json_schema) if json_schema is not None else {},
+                },
+            },
+        }
+        if temperature is not None:
+            request["temperature"] = temperature
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        return request
 
     def drain(self) -> list[RecordedLlmCall]:
         """Return the calls recorded since the previous drain and forget them."""
