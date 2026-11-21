@@ -42,9 +42,9 @@ from tests.corpus.llm_stub import LiveLlmCall
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 
 
-def _load_tool(module_name: str) -> ModuleType:
-    """Load one tools script as a module (``tools/`` is not a package)."""
-    path = REPO_ROOT / "tools" / f"{module_name}.py"
+def _load_tool(module_name: str, *, tools_dir: Path | None = None) -> ModuleType:
+    """Load one tools script as a module (the tools directories are not packages)."""
+    path = (tools_dir or REPO_ROOT / "tools") / f"{module_name}.py"
     spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -55,6 +55,7 @@ def _load_tool(module_name: str) -> ModuleType:
 
 corpus_index = _load_tool("corpus_index")
 live_transcript_export = _load_tool("live_transcript_export")
+output_json_to_csv = _load_tool("outputJsonToCsv", tools_dir=REPO_ROOT / "a2a-t-corpus" / "tools")
 
 
 # --------------------------------------------------------------------- corpus_index
@@ -219,3 +220,44 @@ def test_live_transcript_export_fails_on_a_missing_transcript(tmp_path: Path) ->
         live_transcript_export.main([str(tmp_path)])
 
     assert "transcript not found" in str(aborted.value)
+
+
+# --------------------------------------------------------------------- outputJsonToCsv
+
+
+def _output_record(llm_calls: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "id": "CSV-01",
+        "output": {
+            "interactions": [
+                {"type": "generate", "request": {}, "response": {}},
+                *llm_calls,
+            ]
+        },
+    }
+
+
+def test_output_json_to_csv_collapses_a_single_llm_call_to_bare_objects() -> None:
+    record = _output_record(
+        [{"type": "LLM", "request": {"model": "qwen"}, "response": {"content": "{}"}}]
+    )
+
+    rows, max_steps = output_json_to_csv.records_to_rows([record])
+
+    assert max_steps == 1
+    assert json.loads(rows[0]["step1_llm_requests"]) == {"model": "qwen"}
+    assert json.loads(rows[0]["step1_llm_responses"]) == {"content": "{}"}
+
+
+def test_output_json_to_csv_keeps_multiple_llm_calls_as_arrays() -> None:
+    record = _output_record(
+        [
+            {"type": "LLM", "request": {"model": "qwen-1"}, "response": {"content": "first"}},
+            {"type": "LLM", "request": {"model": "qwen-2"}, "response": {"content": "second"}},
+        ]
+    )
+
+    rows, _ = output_json_to_csv.records_to_rows([record])
+
+    assert json.loads(rows[0]["step1_llm_requests"]) == [{"model": "qwen-1"}, {"model": "qwen-2"}]
+    assert json.loads(rows[0]["step1_llm_responses"]) == [{"content": "first"}, {"content": "second"}]
