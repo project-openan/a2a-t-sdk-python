@@ -53,9 +53,15 @@ class RecordedLlmCall:
 class RecordingMeteredLlmClient:
     """Records every ``structured`` call, then delegates to the wrapped client."""
 
-    def __init__(self, delegate: LLMClient, model_name: str) -> None:
+    def __init__(
+        self,
+        delegate: LLMClient,
+        model_name: str,
+        default_temperature: float | None = None,
+    ) -> None:
         self._delegate = delegate
         self._model_name = model_name
+        self._default_temperature = default_temperature
         self._calls: list[RecordedLlmCall] = []
 
     def structured(
@@ -68,12 +74,13 @@ class RecordingMeteredLlmClient:
     ) -> LLMResponse:
         """Record and delegate one structured invocation."""
         started_at = time.perf_counter()
+        effective_temperature = temperature if temperature is not None else self._default_temperature
         request: dict[str, object] = {
             "messages": [dict(message) for message in messages],
             "jsonSchema": copy.deepcopy(json_schema) if json_schema is not None else {},
         }
-        if temperature is not None:
-            request["temperature"] = temperature
+        if effective_temperature is not None:
+            request["temperature"] = effective_temperature
         if max_tokens is not None:
             request["maxTokens"] = max_tokens
         request["model"] = self._model_name

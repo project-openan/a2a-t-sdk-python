@@ -136,6 +136,64 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertIs(payload["messages"], messages)
         self.assertEqual(payload["messages"], [{"role": "user", "content": "extract router"}])
 
+    def test_structured_uses_configured_default_temperature(self) -> None:
+        from dataclasses import replace
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        config = replace(build_config(base_url="https://api.example.test/v1"), temperature=0.0)
+        client = OpenAIClient(config)
+        client._client = sdk_client
+
+        client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(sdk_client.chat.completions.create.call_args.kwargs["temperature"], 0.0)
+
+    def test_structured_call_temperature_overrides_configured_default(self) -> None:
+        from dataclasses import replace
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        config = replace(build_config(base_url="https://api.example.test/v1"), temperature=0.0)
+        client = OpenAIClient(config)
+        client._client = sdk_client
+
+        client.structured(
+            messages=[{"role": "user", "content": "extract"}],
+            json_schema={"type": "object"},
+            temperature=0.7,
+        )
+
+        self.assertEqual(sdk_client.chat.completions.create.call_args.kwargs["temperature"], 0.7)
+
+    def test_structured_omits_temperature_when_not_configured(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertNotIn("temperature", sdk_client.chat.completions.create.call_args.kwargs)
+
     @patch("a2a_t.llm.providers.openai.httpx")
     @patch("a2a_t.llm.providers.openai.OpenAI")
     def test_ssl_verification_disabled_uses_trust_all_http_client(self, openai_cls: Mock, httpx_module: Mock) -> None:

@@ -34,10 +34,13 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
+from engine.recorder import RecordingMeteredLlmClient
 
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
+from a2a_t.llm.models import LLMResponse
 from tests.corpus.assemblers import (
     INJECT_FAILING_SEMANTIC_VALIDATOR,
     INJECT_FAILING_TEMPLATE_LOADER,
@@ -854,6 +857,47 @@ class TestTaskFamily:
 
         with pytest.raises(RuntimeError, match="paramsFromStep 1"):
             CaseEngine().run(test_case)
+
+
+# --------------------------------------------------------------------------- LLM recording
+
+
+class TestRecordingMeteredLlmClientTemperature:
+    @staticmethod
+    def _recorded_request(
+        default_temperature: float | None,
+        temperature: float | None = None,
+    ) -> dict[str, object]:
+        delegate = Mock()
+        delegate.structured.return_value = LLMResponse(content="{}", model="qwen", usage={}, metadata={})
+        recorder = RecordingMeteredLlmClient(
+            delegate,
+            "qwen",
+            default_temperature=default_temperature,
+        )
+
+        recorder.structured(
+            messages=[{"role": "user", "content": "extract"}],
+            json_schema={"type": "object"},
+            temperature=temperature,
+        )
+
+        return recorder.drain()[0].request
+
+    def test_uses_the_configured_default_temperature(self) -> None:
+        request = self._recorded_request(default_temperature=0.0)
+
+        assert request["temperature"] == 0.0
+
+    def test_single_call_temperature_overrides_the_default(self) -> None:
+        request = self._recorded_request(default_temperature=0.0, temperature=0.7)
+
+        assert request["temperature"] == 0.7
+
+    def test_omits_temperature_when_it_is_not_configured(self) -> None:
+        request = self._recorded_request(default_temperature=None)
+
+        assert "temperature" not in request
 
 
 # --------------------------------------------------------------------------- outcome record

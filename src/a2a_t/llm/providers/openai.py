@@ -75,10 +75,11 @@ class OpenAIClient(LLMClient):
         max_tokens: int | None = None,
     ) -> LLMResponse:
         """Generate a structured response constrained by a JSON schema."""
+        effective_temperature = temperature if temperature is not None else self._config.temperature
         payload = self._build_structured_payload(
             messages=messages,
             json_schema=json_schema,
-            temperature=temperature,
+            temperature=effective_temperature,
             max_tokens=max_tokens,
         )
         started = time.perf_counter()
