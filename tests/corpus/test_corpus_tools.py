@@ -189,19 +189,18 @@ def test_live_transcript_export_renders_the_report(tmp_path: Path) -> None:
 
 
 def test_live_transcript_export_replay_request_mirrors_the_openai_client_payload(tmp_path: Path) -> None:
-    """The replay body carries exactly the JSON-mode instruction and schema message the
-    production ``OpenAIClient`` prepends (the sync guarantee the Java copy keeps by hand)."""
+    """The replay body passes messages through and uses the production JSON-schema contract."""
     run_dir = _sample_run(tmp_path)
     transcript = json.loads((run_dir / "transcript.json").read_text(encoding="utf-8"))
     call = transcript[0]["llmCalls"][0]
 
     replay = live_transcript_export.build_replay_request(call)
 
-    from a2a_t.llm.providers.openai import _JSON_MODE_INSTRUCTION_DEFAULT
-
-    assert replay["messages"][0] == {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT}
-    assert replay["messages"][1]["content"].startswith("Return JSON that conforms to this JSON schema: ")
-    assert replay["response_format"] == {"type": "json_object"}
+    assert replay["messages"] == [{"role": "user", "content": "投诉文本"}]
+    assert replay["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "structured_output", "schema": {"type": "object"}},
+    }
     assert replay["temperature"] == 0.0
     assert replay["model"] == "qwen3-27b"
 
