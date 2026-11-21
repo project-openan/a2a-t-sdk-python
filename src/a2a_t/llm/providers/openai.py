@@ -32,12 +32,7 @@ from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
 from a2a_t.llm.provider import LLMClient
 
-_JSON_MODE_INSTRUCTION_DEFAULT = (
-    "Return a valid JSON object string. "
-    "The output must be valid json. "
-    "Do not wrap the response in markdown code fences. "
-    "Do not include any explanation outside the JSON object."
-)
+STRUCTURED_OUTPUT_SCHEMA_NAME = "structured_output"
 
 
 class OpenAIClient(LLMClient):
@@ -80,10 +75,11 @@ class OpenAIClient(LLMClient):
         max_tokens: int | None = None,
     ) -> LLMResponse:
         """Generate a structured response constrained by a JSON schema."""
+        effective_temperature = temperature if temperature is not None else self._config.temperature
         payload = self._build_structured_payload(
             messages=messages,
             json_schema=json_schema,
-            temperature=temperature,
+            temperature=effective_temperature,
             max_tokens=max_tokens,
         )
         started = time.perf_counter()
@@ -118,8 +114,11 @@ class OpenAIClient(LLMClient):
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self._config.model,
-            "messages": self._build_structured_messages(messages, json_schema),
-            "response_format": {"type": "json_object"},
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": STRUCTURED_OUTPUT_SCHEMA_NAME, "schema": json_schema},
+            },
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -130,18 +129,6 @@ class OpenAIClient(LLMClient):
         if self._config.reasoning_effort:
             payload["reasoning_effort"] = self._config.reasoning_effort
         return payload
-
-    def _build_structured_messages(
-        self,
-        messages: list[dict[str, str]],
-        json_schema: dict[str, Any],
-    ) -> list[dict[str, str]]:
-        schema_text = json.dumps(json_schema, ensure_ascii=False)
-        return [
-            {"role": "system", "content": _JSON_MODE_INSTRUCTION_DEFAULT},
-            {"role": "system", "content": f"Return JSON that conforms to this JSON schema: {schema_text}"},
-            *messages,
-        ]
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)

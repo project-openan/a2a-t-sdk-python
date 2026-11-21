@@ -22,14 +22,13 @@ Python port of the Java repository's ``tools/live_transcript_export.py`` (1.1.0,
 ``.live-corpus/<run>/transcript.json`` (+ ``summary.json`` when present) and writes a single
 ``export/report.md``: one section per case -- input, parsed params, every LLM call's full request
 messages / schema / raw response -- and, per call, the exact OpenAI-compatible
-``/v1/chat/completions`` request body OpenAIClient sent (the JSON-mode system instruction, the
-schema system message, ``response_format`` json_object, and the recorded messages),
-pretty-printed inline so it can be copied straight into Postman for prompt tuning outside the
-test suite.
+``/v1/chat/completions`` request body OpenAIClient sent (the recorded messages and the standard
+``response_format`` json_schema), pretty-printed inline so it can be copied straight into Postman
+for prompt tuning outside the test suite.
 
-The JSON-mode instruction and the schema message prefix are imported from the production
+The structured-output schema name is imported from the production
 :class:`a2a_t.llm.providers.openai.OpenAIClient`, so the replay section cannot drift from what the
-client actually sends (the Java copy keeps them in sync by hand).
+client actually sends (the Java copy keeps it in sync by hand).
 
 Usage:
   uv run python tools/live_transcript_export.py <run-dir-or-transcript.json> [--out DIR]
@@ -43,10 +42,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from a2a_t.llm.providers.openai import _JSON_MODE_INSTRUCTION_DEFAULT as JSON_MODE_INSTRUCTION
-
-# The schema message prefix OpenAIClient prepends (OpenAIClient._build_structured_messages).
-SCHEMA_MESSAGE_PREFIX = "Return JSON that conforms to this JSON schema: "
+from a2a_t.llm.providers.openai import STRUCTURED_OUTPUT_SCHEMA_NAME
 
 # Temperature the live .env pins (LiveLlmEnvWriter, A2AT_LLM_TEMPERATURE=0); used when the
 # per-call record carries none, which is the production default path.
@@ -73,20 +69,16 @@ def load_run(source: Path) -> tuple[Path, list[dict[str, Any]], dict[str, Any] |
 
 def build_replay_request(call: dict[str, Any]) -> dict[str, Any]:
     """Rebuild the ``/v1/chat/completions`` body OpenAIClient sent for one recorded call."""
-    messages = [
-        {"role": "system", "content": JSON_MODE_INSTRUCTION},
-        {
-            "role": "system",
-            "content": SCHEMA_MESSAGE_PREFIX + json.dumps(call.get("jsonSchema") or {}, ensure_ascii=False),
-        },
-    ]
-    for message in call.get("messages") or []:
-        role = message.get("role", "user")
-        messages.append({"role": "system" if role == "system" else "user", "content": message.get("content", "")})
     request: dict[str, Any] = {
         "model": call.get("model"),
-        "messages": messages,
-        "response_format": {"type": "json_object"},
+        "messages": call.get("messages") or [],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": STRUCTURED_OUTPUT_SCHEMA_NAME,
+                "schema": call.get("jsonSchema") or {},
+            },
+        },
     }
     temperature = call.get("temperature")
     request["temperature"] = temperature if temperature is not None else DEFAULT_TEMPERATURE

@@ -34,10 +34,14 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import Mock
 
+import httpx
 import pytest
+from engine.recorder import RecordingMeteredLlmClient
 
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
+from a2a_t.llm.models import LLMResponse
 from tests.corpus.assemblers import (
     INJECT_FAILING_SEMANTIC_VALIDATOR,
     INJECT_FAILING_TEMPLATE_LOADER,
@@ -854,6 +858,136 @@ class TestTaskFamily:
 
         with pytest.raises(RuntimeError, match="paramsFromStep 1"):
             CaseEngine().run(test_case)
+
+
+# --------------------------------------------------------------------------- LLM recording
+
+
+class TestRecordingMeteredLlmClientTemperature:
+    @staticmethod
+    def _recorded_request(
+        default_temperature: float | None,
+        temperature: float | None = None,
+    ) -> dict[str, object]:
+        delegate = Mock()
+        delegate.structured.return_value = LLMResponse(content="{}", model="qwen", usage={}, metadata={})
+        recorder = RecordingMeteredLlmClient(
+            delegate,
+            "qwen",
+            default_temperature=default_temperature,
+        )
+
+        recorder.structured(
+            messages=[{"role": "user", "content": "extract"}],
+            json_schema={"type": "object"},
+            temperature=temperature,
+        )
+
+        return recorder.drain()[0].request
+
+    def test_uses_the_configured_default_temperature(self) -> None:
+        request = self._recorded_request(default_temperature=0.0)
+
+        assert request["temperature"] == 0.0
+
+    def test_single_call_temperature_overrides_the_default(self) -> None:
+        request = self._recorded_request(default_temperature=0.0, temperature=0.7)
+
+        assert request["temperature"] == 0.7
+
+    def test_omits_temperature_when_it_is_not_configured(self) -> None:
+        request = self._recorded_request(default_temperature=None)
+
+        assert "temperature" not in request
+
+    def test_non_http_delegate_uses_the_provider_shaped_fallback(self) -> None:
+        request = self._recorded_request(default_temperature=None)
+
+        assert request == {
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "extract"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "structured_output", "schema": {"type": "object"}},
+            },
+        }
+
+    def test_records_the_actual_http_wire_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        wire_request = {
+            "model": "wire-model",
+            "messages": [{"role": "user", "content": "actual wire message"}],
+            "response_format": {"type": "json_schema"},
+            "temperature": 0.9,
+            "max_tokens": 99,
+        }
+        delegate = Mock()
+
+        def invoke_http(**kwargs: Any) -> LLMResponse:
+            request = httpx.Request("POST", "https://example.test/v1/chat/completions", json=wire_request)
+            httpx.Client().send(request)
+            return LLMResponse(content="{}", model="wire-model", usage={}, metadata={})
+
+        def fake_send(
+            client: httpx.Client,
+            request: httpx.Request,
+            *args: Any,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            return httpx.Response(200, request=request, json={})
+
+        delegate.structured.side_effect = invoke_http
+        monkeypatch.setattr(httpx.Client, "send", fake_send)
+        recorder = RecordingMeteredLlmClient(delegate, "logical-model")
+
+        recorder.structured(
+            messages=[{"role": "user", "content": "logical message"}],
+            json_schema={"type": "object"},
+            temperature=0.1,
+            max_tokens=10,
+        )
+
+        recorded = recorder.drain()[0]
+        assert recorded.result == "success"
+        assert recorded.request == wire_request
+        assert "jsonSchema" not in recorded.request
+        assert "maxTokens" not in recorded.request
+
+    def test_records_the_http_wire_request_when_the_call_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        wire_request = {
+            "model": "wire-model",
+            "messages": [{"role": "user", "content": "actual wire message"}],
+        }
+        delegate = Mock()
+
+        def invoke_http(**kwargs: Any) -> None:
+            request = httpx.Request("POST", "https://example.test/v1/chat/completions", json=wire_request)
+            httpx.Client().send(request)
+
+        def fake_send(
+            client: httpx.Client,
+            request: httpx.Request,
+            *args: Any,
+            **kwargs: Any,
+        ) -> httpx.Response:
+            raise httpx.ConnectError("connection failed", request=request)
+
+        delegate.structured.side_effect = invoke_http
+        monkeypatch.setattr(httpx.Client, "send", fake_send)
+        recorder = RecordingMeteredLlmClient(delegate, "logical-model")
+
+        with pytest.raises(httpx.ConnectError, match="connection failed"):
+            recorder.structured(
+                messages=[{"role": "user", "content": "logical message"}],
+                json_schema={"type": "object"},
+            )
+
+        recorded = recorder.drain()[0]
+        assert recorded.result == "error"
+        assert recorded.request == wire_request
+        assert httpx.Client.send is fake_send
 
 
 # --------------------------------------------------------------------------- outcome record

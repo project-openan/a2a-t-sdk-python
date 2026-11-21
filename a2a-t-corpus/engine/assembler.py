@@ -83,7 +83,7 @@ def _new_recorder(env: CorpusEnvConfig) -> RecordingMeteredLlmClient:
         session_max_per_provider=_SESSION_MAX_PER_PROVIDER,
     )
     real_client = LLMClientFactory.create(env.provider, llm_client_config)
-    return RecordingMeteredLlmClient(real_client, env.model)
+    return RecordingMeteredLlmClient(real_client, env.model, default_temperature=env.temperature)
 
 
 @dataclass(slots=True)
