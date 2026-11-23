@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
@@ -86,14 +86,32 @@ class OpenAIClient(LLMClient):
         debug_enabled = self._call_logger.isEnabledFor(logging.DEBUG)
         if debug_enabled:
             self._log_request(payload)
-        try:
-            raw_response = self._get_client().chat.completions.create(**payload)
-        except LLMConfigError:
-            raise
-        except Exception as exc:  # pragma: no cover - provider failure path
-            if debug_enabled:
-                self._log_error(started, exc)
-            raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        attempts = self._config.timeout_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                raw_response = self._get_client().chat.completions.create(**payload)
+                break
+            except LLMConfigError:
+                raise
+            except APITimeoutError as exc:
+                if attempt >= attempts:
+                    if debug_enabled:
+                        self._log_error(started, exc)
+                    raise LLMRuntimeError(
+                        f"{self._config.provider} invocation timed out after {attempts} attempt(s): {exc}"
+                    ) from exc
+                self._logger.warning(
+                    "%s invocation timed out (attempt %s/%s); retrying",
+                    self._config.provider,
+                    attempt,
+                    attempts,
+                )
+            except Exception as exc:  # pragma: no cover - provider failure path
+                if debug_enabled:
+                    self._log_error(started, exc)
+                raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        else:  # pragma: no cover - the loop always breaks or raises
+            raise RuntimeError("unreachable")
         try:
             response = self._parse_response(raw_response)
         except LLMRuntimeError as exc:

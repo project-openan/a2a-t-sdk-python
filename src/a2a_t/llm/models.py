@@ -49,6 +49,8 @@ class LLMClientConfig:
             Summary logs (timestamp, token usage, elapsed time) are recorded at DEBUG level on the
             dedicated logger ``a2a_t.llm.call`` independently of this flag. Java
             ``LLMClientConfig.detailLogEnabled``.
+        timeout_retries: how many extra attempts one structured call makes after a transport timeout;
+            ``0`` keeps the original single-attempt behavior.
     """
 
     provider: str
@@ -64,3 +66,4 @@ class LLMClientConfig:
     reasoning_effort: str | None = None
     ssl_verify: bool = True
     detail_log_enabled: bool = False
+    timeout_retries: int = 0

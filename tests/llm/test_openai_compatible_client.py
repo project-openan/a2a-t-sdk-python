@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -275,6 +276,80 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertEqual(response.usage["prompt_tokens"], 7)
         self.assertEqual(response.usage["completion_tokens"], 2)
         self.assertEqual(response.usage["total_tokens"], 9)
+
+    def test_structured_retries_a_timeout_when_configured(self) -> None:
+        import httpx
+        from openai import APITimeoutError
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = [
+            APITimeoutError(request=httpx.Request("POST", "http://example.test/v1")),
+            SimpleNamespace(
+                model="gpt-4o-mini",
+                choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+                usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+            ),
+        ]
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), timeout_retries=1))
+        client._client = sdk_client
+
+        response = client.structured(
+            messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"}
+        )
+
+        self.assertEqual(response.usage["prompt_tokens"], 7)
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 2)
+
+    def test_structured_does_not_retry_a_timeout_by_default(self) -> None:
+        import httpx
+        from openai import APITimeoutError
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = APITimeoutError(
+            request=httpx.Request("POST", "http://example.test/v1")
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        with self.assertRaisesRegex(LLMRuntimeError, "timed out after 1 attempt"):
+            client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 1)
+
+    def test_structured_reports_exhausted_timeout_attempts(self) -> None:
+        import httpx
+        from openai import APITimeoutError
+
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = APITimeoutError(
+            request=httpx.Request("POST", "http://example.test/v1")
+        )
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), timeout_retries=2))
+        client._client = sdk_client
+
+        with self.assertRaisesRegex(LLMRuntimeError, "timed out after 3 attempt"):
+            client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 3)
+
+    def test_structured_does_not_retry_a_non_timeout_failure(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.side_effect = ValueError("boom")
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), timeout_retries=2))
+        client._client = sdk_client
+
+        with self.assertRaisesRegex(LLMRuntimeError, "invocation failed"):
+            client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        self.assertEqual(sdk_client.chat.completions.create.call_count, 1)
 
 
 class _ListHandler(logging.Handler):

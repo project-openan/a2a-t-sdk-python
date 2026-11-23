@@ -29,6 +29,7 @@ from a2a_t.llm.models import LLMClientConfig
 _MAX_HISTORY_WINDOW = 100
 _MAX_SESSION_MAX_TOTAL = 3000
 _MAX_SESSION_MAX_PER_PROVIDER = 1000
+_MAX_TIMEOUT_RETRIES = 5
 
 #: Accepted reasoning-effort values (Java ``LLMClientConfig.VALID_REASONING_EFFORTS``).
 _VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
@@ -99,6 +100,16 @@ def coerce_boolean(value: str | None, key: str, *, default: bool) -> bool:
     raise LLMConfigError(f"{key} must be a boolean value (true/false)")
 
 
+def coerce_timeout_retries(value: str | None, key: str) -> int:
+    """Parse and bound the optional number of retries after a transport timeout."""
+    parsed = coerce_optional_int(value, key)
+    if parsed is None:
+        return 0
+    if parsed < 0 or parsed > _MAX_TIMEOUT_RETRIES:
+        raise LLMConfigError(f"{key} must be between 0 and {_MAX_TIMEOUT_RETRIES}")
+    return parsed
+
+
 def coerce_bounded_int(value: int | str, key: str, *, max_value: int) -> int:
     """Parse an integer config value and enforce a positive upper bound."""
     try:
@@ -166,6 +177,9 @@ class LLMConfigLoader:
             session_max_total=session_max_total,
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
+            timeout_retries=coerce_timeout_retries(
+                values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
+            ),
             ssl_verify=coerce_boolean(values.get("A2AT_LLM_SSL_VERIFY"), "A2AT_LLM_SSL_VERIFY", default=True),
             detail_log_enabled=coerce_boolean(
                 values.get("A2AT_LLM_DETAIL_LOG_ENABLED"),
