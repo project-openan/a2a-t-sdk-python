@@ -51,6 +51,7 @@ from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
 from protocol.client_service import RunState
+from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INCOMPLETE,
     FINAL_STATE_INPUT_INVALID,
@@ -287,7 +288,11 @@ def _manager(
     nms_sim: bool = False,
     nms_sim_pure_question: str = "issue",
     protocol_defaults: dict[str, dict[str, str]] | None = None,
+    judge: Any | None = None,
 ) -> EvalBatchManager:
+    # Only pass ``judge`` when a test supplies one: every historical test keeps constructing the
+    # manager without the P2 keyword so an unimplemented judge cannot make them fail too.
+    judge_kwarg: dict[str, Any] = {"judge": judge} if judge is not None else {}
     return EvalBatchManager(
         runs=runs,  # type: ignore[arg-type]
         catalog=CaseCatalog(),
@@ -300,6 +305,81 @@ def _manager(
         language="en-US",
         model_mode=model_mode,
         prompt_client=_PromptClient(),
+        **judge_kwarg,
+    )
+
+
+class _StubJudge:
+    """Fake judge returned by the tester integration tests.
+
+    ``response`` is either one structured answer or an exception instance the client raises.
+    """
+
+    configured = True
+
+    def __init__(self, response: object) -> None:
+        self.response = response
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    async def complete_json(
+        self,
+        prompt: str,
+        *,
+        system: str = "",
+        json_schema: object | None = None,
+    ) -> dict[str, object]:
+        del system, json_schema
+        self.calls += 1
+        self.prompts.append(prompt)
+        if isinstance(self.response, BaseException):
+            raise self.response
+        assert isinstance(self.response, Mapping)
+        return dict(self.response)
+
+
+def _accepted_negotiation(run: RunState) -> None:
+    """Finish one run that observed an information proposal and accepted it."""
+    _finish(run)
+    run.proposals.append(
+        NegotiationProposeView(
+            negotiation_id="nego-1",
+            kind="information",
+            round=1,
+            max_rounds=1,
+            content="Region: A2ATestRegion.",
+        )
+    )
+    assert run.result is not None
+    run.result.decisions.append(
+        NegotiationDecision(action="accept", rationale="Accept the proposed region.")
+    )
+    #: The protocol really dispatched an ACCEPT: the quality judge's structure check reads it.
+    #: ``summary`` is the Task-T action label the real flow emits, not the negotiation reply.
+    run.traces.append(
+        {
+            "kind": "message_sent",
+            "phase": "negotiation",
+            "round": 1,
+            "detail": {
+                "performative": "ACCEPT",
+                "summary": "create ran energy saving task",
+                "templateUri": "urn:a2a:negotiation:v1",
+            },
+        }
+    )
+    #: The substantive reply lives on the decision trace, exactly as ``record_decision`` writes it.
+    run.traces.append(
+        {
+            "kind": "accept",
+            "phase": "negotiation",
+            "round": 1,
+            "detail": {
+                "action": "accept",
+                "rationale": "Accept the proposed region.",
+                "confirmedIntent": "A2ATestRegion",
+            },
+        }
     )
 
 
@@ -934,6 +1014,84 @@ async def test_a_non_negotiation_agent_case_keeps_its_normal_mode(tmp_path: Path
     assert isinstance(runs, _FakeRuns)
     assert runs.calls[0]["mode"] == MODE_AUTO
     assert runs.calls[0]["scripted_decisions"] is None
+
+
+async def test_an_agent_negotiation_item_gets_its_client_quality(tmp_path: Path) -> None:
+    """P2: an agent-authored A2A-T negotiation item carries the quality appendix."""
+    judge = _StubJudge(
+        {"verdict": "equal", "covered": True, "reason": "the accepted region matches"}
+    )
+    manager = _manager(
+        tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live", judge=judge
+    )
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = manager._batches[str(created["batchId"])].items[0]
+    assert isinstance(item.client_quality, Mapping)
+    assert item.client_quality["quality"] == "pass"
+    assert judge.calls == 1
+    # The judge must see the decision's confirmed intent, never the Task-T action label.
+    assert "A2ATestRegion" in judge.prompts[0]
+    assert "create ran energy saving task" not in judge.prompts[0]
+    # The JSON export is the batch snapshot, so the same field must be exposed there.
+    assert finished["items"][0]["clientQuality"] == item.client_quality
+
+
+async def test_client_quality_never_changes_the_item_status(tmp_path: Path) -> None:
+    """A failing quality row is an appendix: the NMS acceptance verdict stays authoritative."""
+    judge = _StubJudge(
+        {"verdict": "not_equal", "covered": True, "reason": "the reply differs"}
+    )
+    manager = _manager(
+        tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live", judge=judge
+    )
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = manager._batches[str(created["batchId"])].items[0]
+    assert item.status == CASE_PASSED
+    assert isinstance(item.client_quality, Mapping)
+    assert item.client_quality["quality"] == "fail"
+
+
+async def test_an_unavailable_judge_leaves_the_item_green(tmp_path: Path) -> None:
+    """A judge outage records "unjudged"; it must not fail the item or the batch."""
+    from shared.judge_llm import JudgeUnavailable
+
+    judge = _StubJudge(JudgeUnavailable("judge endpoint is not configured"))
+    manager = _manager(
+        tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live", judge=judge
+    )
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    finished = await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = manager._batches[str(created["batchId"])].items[0]
+    assert item.status == CASE_PASSED
+    assert isinstance(item.client_quality, Mapping)
+    assert item.client_quality["quality"] == "unjudged"
+    assert finished["items"][0]["clientQuality"]["quality"] == "unjudged"
 
 
 def test_a_batch_round_trips_the_negotiation_source(tmp_path: Path) -> None:

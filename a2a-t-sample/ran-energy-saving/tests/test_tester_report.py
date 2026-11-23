@@ -391,3 +391,77 @@ def test_a_single_round_report_keeps_the_existing_columns() -> None:
 
     assert rows[0] == REFERENCE_HEADERS
     assert len(rows[0]) == len(REFERENCE_HEADERS)
+
+
+#: One client decision-quality appendix of a negotiation item (P2).
+CLIENT_QUALITY: dict[str, Any] = {
+    "quality": "fail",
+    "method": "model",
+    "needsHumanReview": True,
+    "reason": "the accepted rate is 5Mbps instead of 2Mbps",
+    "rounds": [
+        {
+            "round": 1,
+            "proposal": "Reduce the throughput target to 5Mbps.",
+            "expected": "Reduce throughput target from 10Mbps to 2Mbps.",
+            "decision": "accept",
+            "action": "pass",
+            "value": "fail",
+            "structure": "pass",
+            "review": "pass",
+            "coverage": "pass",
+            "quality": "fail",
+            "method": "model",
+            "reason": "the accepted rate is 5Mbps instead of 2Mbps",
+        }
+    ],
+}
+
+
+def _quality_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:
+    workbook = load_workbook(BytesIO(write_report(batch)))
+    assert "client 决策质量" in workbook.sheetnames
+    return list(workbook["client 决策质量"].iter_rows(values_only=True))
+
+
+def test_the_client_quality_appendix_is_exported_as_its_own_sheet() -> None:
+    batch = _snapshot()
+    batch["items"][0]["clientQuality"] = CLIENT_QUALITY
+
+    rows = _quality_sheet(batch)
+
+    header = [str(cell) for cell in rows[0]]
+    for column in (
+        "用例编号",
+        "协议",
+        "协商轮次",
+        "决策",
+        "提案",
+        "期望",
+        "动作",
+        "值",
+        "结构",
+        "复核",
+        "覆盖",
+        "质量",
+        "人工复核",
+        "判定方式",
+        "理由",
+    ):
+        assert column in header
+    row = dict(zip(header, rows[1], strict=False))
+    assert row["用例编号"] == 1
+    assert row["协议"] == "a2a-t"
+    assert row["协商轮次"] == 1
+    assert row["决策"] == "accept"
+    assert row["值"] == "fail"
+    assert row["质量"] == "fail"
+    assert row["人工复核"] == "是"
+    assert row["判定方式"] == "model"
+    assert row["理由"] == "the accepted rate is 5Mbps instead of 2Mbps"
+
+
+def test_a_batch_without_client_quality_keeps_the_four_existing_sheets() -> None:
+    workbook = load_workbook(BytesIO(write_report(_snapshot())))
+
+    assert workbook.sheetnames == ["仲裁格式", "用例结果", "阶段差异", "汇总"]

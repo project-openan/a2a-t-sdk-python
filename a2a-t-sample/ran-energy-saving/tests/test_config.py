@@ -175,6 +175,11 @@ _ENV_KEYS = (
     RUNS_DIR_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
     PURE_MESSAGE_MODE_ENV_KEY,
+    "A2AT_OSP_JUDGE_MODEL",
+    "A2AT_OSP_JUDGE_API_BASE",
+    "A2AT_OSP_JUDGE_API_KEY",
+    "A2AT_OSP_JUDGE_TIMEOUT_SECONDS",
+    "A2AT_OSP_JUDGE_MAX_TOKENS",
 )
 
 
@@ -1497,3 +1502,108 @@ def test_the_prompt_overlay_switch_mounts_the_sample_slot_deltas(
         assert "preserve the operator's own wording; do not normalize it" in text
     finally:
         shutil.rmtree(sdk_env.directory)
+
+
+# ---------------------------------------------------------------------------
+# Independent OSP judge model (P2)
+# ---------------------------------------------------------------------------
+
+
+#: Keys of the independent judge model. They are the external contract, so the tests name them
+#: literally instead of importing constants that would turn a missing key into a collection error.
+JUDGE_MODEL_KEY = "A2AT_OSP_JUDGE_MODEL"
+JUDGE_API_BASE_KEY = "A2AT_OSP_JUDGE_API_BASE"
+JUDGE_API_KEY_KEY = "A2AT_OSP_JUDGE_API_KEY"
+JUDGE_TIMEOUT_KEY = "A2AT_OSP_JUDGE_TIMEOUT_SECONDS"
+JUDGE_MAX_TOKENS_KEY = "A2AT_OSP_JUDGE_MAX_TOKENS"
+
+
+def _judge_env_file(tmp_path: Path, body: str) -> Path:
+    env_file = tmp_path / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text(body, encoding="utf-8")
+    return env_file
+
+
+def _judge_configured(config: SampleConfig) -> object:
+    return getattr(config, "judge_configured", False)
+
+
+def test_the_judge_is_configured_only_with_both_model_and_endpoint(tmp_path: Path) -> None:
+    """The judge is a separate client: a partial endpoint must stay unconfigured."""
+    missing = tmp_path / "missing.env"
+    assert _judge_configured(load_config(env_path=missing)) is False
+
+    model_only = _judge_env_file(
+        tmp_path / "model", f"{JUDGE_MODEL_KEY}=judge-model\n"
+    )
+    assert _judge_configured(load_config(env_path=model_only)) is False
+
+    base_only = _judge_env_file(
+        tmp_path / "base", f"{JUDGE_API_BASE_KEY}=http://judge.example/v1\n"
+    )
+    assert _judge_configured(load_config(env_path=base_only)) is False
+
+    both = _judge_env_file(
+        tmp_path / "both",
+        f"{JUDGE_MODEL_KEY}=judge-model\n"
+        f"{JUDGE_API_BASE_KEY}=http://judge.example/v1\n",
+    )
+    assert _judge_configured(load_config(env_path=both)) is True
+
+
+def test_the_judge_api_key_is_optional(tmp_path: Path) -> None:
+    """An OpenAI-compatible local endpoint accepts requests without a key."""
+    env_file = _judge_env_file(
+        tmp_path,
+        f"{JUDGE_MODEL_KEY}=judge-model\n"
+        f"{JUDGE_API_BASE_KEY}=http://judge.example/v1\n",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert _judge_configured(config) is True
+    assert getattr(config, "judge_model", None) == "judge-model"
+    assert getattr(config, "judge_api_base", None) == "http://judge.example/v1"
+    assert getattr(config, "judge_api_key", None) == ""
+
+
+def test_the_judge_endpoint_keys_and_optional_api_key_are_read(tmp_path: Path) -> None:
+    env_file = _judge_env_file(
+        tmp_path,
+        f"{JUDGE_MODEL_KEY}=judge-model\n"
+        f"{JUDGE_API_BASE_KEY}=http://judge.example/v1\n"
+        f"{JUDGE_API_KEY_KEY}=judge-secret\n",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert _judge_configured(config) is True
+    assert getattr(config, "judge_api_key", None) == "judge-secret"
+
+
+def test_the_judge_timeout_and_token_budget_have_defaults(tmp_path: Path) -> None:
+    config = load_config(env_path=tmp_path / "missing.env")
+
+    timeout = getattr(config, "judge_timeout_seconds", None)
+    max_tokens = getattr(config, "judge_max_tokens", None)
+    assert isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+    assert timeout > 0
+    assert isinstance(max_tokens, int) and not isinstance(max_tokens, bool)
+    assert max_tokens > 0
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "NaN", "inf", "not-a-number"])
+def test_the_judge_timeout_rejects_an_invalid_value(tmp_path: Path, value: str) -> None:
+    env_file = _judge_env_file(tmp_path, f"{JUDGE_TIMEOUT_KEY}={value}\n")
+
+    with pytest.raises(ValueError, match=JUDGE_TIMEOUT_KEY):
+        load_config(env_path=env_file)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "2.5", "many"])
+def test_the_judge_token_budget_rejects_an_invalid_value(tmp_path: Path, value: str) -> None:
+    env_file = _judge_env_file(tmp_path, f"{JUDGE_MAX_TOKENS_KEY}={value}\n")
+
+    with pytest.raises(ValueError, match=JUDGE_MAX_TOKENS_KEY):
+        load_config(env_path=env_file)

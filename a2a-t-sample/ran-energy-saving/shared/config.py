@@ -256,6 +256,16 @@ PLANNER_API_KEY_ENV_KEY = "A2AT_SAMPLE_PLANNER_API_KEY"
 PLANNER_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_PLANNER_TIMEOUT_SECONDS"
 PLANNER_MAX_STEPS_ENV_KEY = "A2AT_SAMPLE_PLANNER_MAX_STEPS"
 
+#: Independent OSP judge model (the tester's decision-quality appendix). It is deliberately
+#: separate from the negotiation model: the same process must not grade its own negotiation
+#: decisions. Only model and endpoint are required; a local OpenAI-compatible endpoint accepts an
+#: empty API key.
+JUDGE_MODEL_ENV_KEY = "A2AT_OSP_JUDGE_MODEL"
+JUDGE_API_BASE_ENV_KEY = "A2AT_OSP_JUDGE_API_BASE"
+JUDGE_API_KEY_ENV_KEY = "A2AT_OSP_JUDGE_API_KEY"
+JUDGE_TIMEOUT_ENV_KEY = "A2AT_OSP_JUDGE_TIMEOUT_SECONDS"
+JUDGE_MAX_TOKENS_ENV_KEY = "A2AT_OSP_JUDGE_MAX_TOKENS"
+
 #: Defaults matching ``env.example``.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -366,6 +376,10 @@ DEFAULT_NMS_TOKEN_PATH = "/rest/plat/smapp/v1/sessions"
 
 #: LangGraph planner defaults (the server's post-accept execution agent).
 DEFAULT_PLANNER_MAX_STEPS = 12
+#: Independent OSP judge budget. The 16k completion cap matters: a reasoning model given 2000
+#: tokens returns an empty content instead of a verdict; the judge would then look unavailable.
+DEFAULT_JUDGE_TIMEOUT_SECONDS = 120.0
+DEFAULT_JUDGE_MAX_TOKENS = 16384
 DEFAULT_ADK_MODEL_PROVIDER = "litellm"
 DEFAULT_ADK_MODEL_NAME = "openai/mass/volcengine/deepseek-v4.1-flash"
 DEFAULT_ADK_MODEL_API_BASE = "http://127.0.0.1:31943/v1"
@@ -766,6 +780,12 @@ class SampleConfig:
         langfuse_environment: Langfuse environment label (``demo`` by default).
         langfuse_flush_at: spans per OTLP request; it bounds the request body, which the egress
             proxy rejects above 1 MB (one LLM span is ~34 KB with content capture on).
+        judge_model: model id of the independent OSP judge, empty when the judge is unconfigured.
+        judge_api_base: OpenAI-compatible endpoint of the judge, empty when unconfigured.
+        judge_api_key: API key of the judge endpoint; may be empty for a local endpoint.
+        judge_timeout_seconds: budget of one judge call.
+        judge_max_tokens: completion cap of one judge call; must leave room for a reasoning
+            model's thinking, or the response comes back empty.
     """
 
     model_mode: ModelMode
@@ -866,6 +886,16 @@ class SampleConfig:
     langfuse_capture_content: bool = True
     langfuse_environment: str = DEFAULT_LANGFUSE_ENVIRONMENT
     langfuse_flush_at: int = DEFAULT_LANGFUSE_FLUSH_AT
+    judge_model: str = ""
+    judge_api_base: str = ""
+    judge_api_key: str = ""
+    judge_timeout_seconds: float = DEFAULT_JUDGE_TIMEOUT_SECONDS
+    judge_max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS
+
+    @property
+    def judge_configured(self) -> bool:
+        """Return whether an independent judge model and endpoint are both configured."""
+        return bool(self.judge_model and self.judge_api_base)
 
     @property
     def is_offline(self) -> bool:
@@ -1166,4 +1196,11 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
             values, LANGFUSE_ENVIRONMENT_ENV_KEY, DEFAULT_LANGFUSE_ENVIRONMENT
         ),
         langfuse_flush_at=_langfuse_flush_at(values),
+        judge_model=_env_value(values, JUDGE_MODEL_ENV_KEY, "").strip(),
+        judge_api_base=_env_value(values, JUDGE_API_BASE_ENV_KEY, "").strip(),
+        judge_api_key=_env_value(values, JUDGE_API_KEY_ENV_KEY, "").strip(),
+        judge_timeout_seconds=_positive_seconds(
+            values, JUDGE_TIMEOUT_ENV_KEY, DEFAULT_JUDGE_TIMEOUT_SECONDS
+        ),
+        judge_max_tokens=_positive_int(values, JUDGE_MAX_TOKENS_ENV_KEY, DEFAULT_JUDGE_MAX_TOKENS),
     )

@@ -31,6 +31,7 @@ from typing import Any, Final
 
 import httpx
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
+from eval.osp.client_quality import ClientQualityObservation, judge_client_quality
 from eval.osp.compare import (
     compare_intent,
     compare_task_t,
@@ -427,6 +428,9 @@ class CaseItem:
     #: Set by an operator cancelling this item alone. Transient: never persisted, and reset by a
     #: rerun. The item's outcome is the persisted ``status`` once it unwinds.
     cancel_requested: bool = False
+    #: Decision-quality appendix of an agent-authored A2A-T negotiation (P2). It never changes
+    #: ``status``: the NMS acceptance verdict stays authoritative.
+    client_quality: dict[str, object] | None = None
 
     def intent_comparison(self) -> list[dict[str, object]]:
         """Return the flattened expected-vs-server intent rows, empty when one side is absent."""
@@ -461,6 +465,7 @@ class CaseItem:
             "refs": dict(self.refs),
             "answer": self.answer,
             "interception": self.interception,
+            "clientQuality": self.client_quality,
         }
 
 
@@ -534,6 +539,8 @@ class EvalBatchManager:
         metrics_grace_seconds: float = 0.0,
         prompt_client: Any | None = None,
         env_path: Path | None = None,
+        judge: Any | None = None,
+        judge_model_label: str = "",
     ) -> None:
         self._runs = runs
         self._catalog = catalog
@@ -555,6 +562,9 @@ class EvalBatchManager:
         #: file the run runtime reads, or the preflight and the run can resolve different models
         #: and disagree on the same request (2026-11-17 incident: deepseek vs qwen3.8-27b).
         self._env_path = Path(env_path) if env_path is not None else None
+        #: Independent judge of the decision-quality appendix (P2); ``None`` leaves it unjudged.
+        self._judge = judge
+        self._judge_model_label = judge_model_label
         #: One SDK client per model mode: a live batch must not reuse the offline scripted client.
         self._prompt_clients: dict[str, Any] = {}
         #: Idle clients per model mode, used only by the concurrent path. Each pool slot owns one
@@ -1034,6 +1044,7 @@ class EvalBatchManager:
         item.refs = {}
         item.answer = None
         item.interception = None
+        item.client_quality = None
         batch.status = BATCH_RUNNING
         batch.cancel_requested = False
         batch.active_indices = []
@@ -1529,12 +1540,59 @@ class EvalBatchManager:
                 # The correction was applied; a block of the corrected Task-T is the follow-up
                 # being rejected, not the interception the case expects.
                 self._stamp_followup_block(item, run)
+            if agent_negotiation:
+                # The decision-quality appendix reads the run evidence; it must never change the
+                # item's acceptance status, so it is recorded after every other verdict.
+                await self._record_client_quality(item, case, run, resolved_conditions)
             # The evidence is collected; release the remote Task unless this batch keeps Tasks for
             # long-task verification. ``accepted``/``working`` end the observation window, and the
             # tester — unlike the presentation page — never reattaches to that run, so leaving the
             # Task running through a 51-case acceptance batch would exhaust the NMS quota.
             if not batch.keep_tasks:
                 await self._release_item_runs(item, run)
+
+    async def _record_client_quality(
+        self,
+        item: CaseItem,
+        case: Mapping[str, Any],
+        run: RunState,
+        conditions: str,
+    ) -> None:
+        """Record the decision-quality appendix of one agent-authored negotiation item.
+
+        The appendix is advisory: a judge outage or a checker bug is recorded as ``unjudged`` and
+        never touches ``item.status``.
+        """
+        final_state = run.result.final_state if run.result is not None else None
+        gate_reason = ""
+        if final_state in (FINAL_STATE_INPUT_INVALID, FINAL_STATE_DECISION_UNGROUNDED):
+            gate_reason = (run.result.error if run.result is not None else None) or ""
+        try:
+            result = await judge_client_quality(
+                case=case,
+                observations=_client_quality_observations(run),
+                judge=self._judge,
+                final_state=final_state,
+                gate_reason=gate_reason,
+                client_conditions=conditions,
+                judge_label=self._judge_model_label,
+            )
+        except Exception as exc:  # noqa: BLE001 - the appendix must never fail the item
+            _LOGGER.warning(
+                "tester client quality of %s/%s failed: %s",
+                item.case_id,
+                item.protocol,
+                exc,
+                exc_info=True,
+            )
+            item.client_quality = {
+                "quality": "unjudged",
+                "method": "unjudged",
+                "needsHumanReview": False,
+                "rounds": [],
+            }
+            return
+        item.client_quality = result.to_dict()
 
     async def _run_scratch(self, batch: _Batch, index: int, item: CaseItem) -> None:
         """Run an ad-hoc request through the full flow; no expectations are asserted."""
@@ -2916,6 +2974,7 @@ class EvalBatchManager:
                 refs=_mapping_or_empty(item.get("refs")),
                 answer=_optional_mapping(item.get("answer")),
                 interception=_optional_mapping(item.get("interception")),
+                client_quality=_optional_mapping(item.get("clientQuality")),
             )
             for item in raw_items
             if isinstance(item, Mapping)
@@ -3073,6 +3132,145 @@ def _round_groups(batch: _Batch, selected: Sequence[int]) -> list[list[int]]:
     for index in selected:
         groups.setdefault(batch.items[index].round_index, []).append(index)
     return [group for _, group in sorted(groups.items())]
+
+
+#: Trace kinds the client runtime emits for a decision (the decision's action is the kind).
+_DECISION_TRACE_KINDS: Final[frozenset[str]] = frozenset(
+    {"accept", "reject", "abort", "counter"}
+)
+#: Outbound performative that proves a decision was actually dispatched.
+_PERFORMATIVE_BY_ACTION: Final[dict[str, str]] = {
+    "accept": "ACCEPT",
+    "reject": "REJECT",
+    "abort": "ABORT",
+    "counter": "PROPOSE",
+}
+
+
+def _round_number(value: object) -> int | None:
+    """Return a positive 1-based round number, or ``None`` when the value is not one."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return None
+
+
+def _decision_text(value: object) -> str:
+    """Return the best reply text a decision carries, empty when it carries none."""
+    if not isinstance(value, Mapping):
+        return ""
+    for key in ("feasibilitySummary", "confirmedIntent", "counterProposal"):
+        text = value.get(key)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    rationale = value.get("rationale")
+    if isinstance(rationale, str) and rationale.strip():
+        return rationale.strip()
+    filled = value.get("filledParams")
+    if isinstance(filled, Mapping) and filled:
+        return "; ".join(f"{key}={item_value}" for key, item_value in sorted(filled.items()))
+    return ""
+
+
+def _client_quality_observations(run: RunState) -> list[ClientQualityObservation]:
+    """Reduce one run's negotiation evidence to the decisions the quality judge reads.
+
+    The real client flow records a decision as a trace whose ``kind`` is the action and a
+    ``message_sent`` trace when it dispatches it. A test harness may only fill
+    ``RunResult.decisions``; the fallback pairs those with the recorded proposals, so the appendix
+    sees the same decision either way.
+    """
+    traces = [trace for trace in (run.traces or []) if isinstance(trace, Mapping)]
+    proposals = list(run.proposals or [])
+    proposals_by_round = {proposal.round: proposal for proposal in proposals}
+    sent: list[dict[str, object]] = []
+    records: list[dict[str, object]] = []
+    for index, trace in enumerate(traces):
+        kind = trace.get("kind")
+        if kind == "message_sent":
+            detail = trace.get("detail")
+            detail_map = detail if isinstance(detail, Mapping) else {}
+            sent.append(
+                {
+                    "round": _round_number(trace.get("round")),
+                    "performative": str(detail_map.get("performative") or "").upper(),
+                    "summary": str(detail_map.get("summary") or ""),
+                }
+            )
+            continue
+        if not isinstance(kind, str) or kind not in _DECISION_TRACE_KINDS:
+            continue
+        detail = trace.get("detail")
+        detail_map = detail if isinstance(detail, Mapping) else {}
+        records.append(
+            {
+                "round": _round_number(trace.get("round"))
+                or _round_number(detail_map.get("round"))
+                or index + 1,
+                "action": str(detail_map.get("action") or kind).strip().lower(),
+                "text": _decision_text(detail_map),
+            }
+        )
+    if not records:
+        result = run.result
+        decisions = list(result.decisions) if result is not None else []
+        for index, decision in enumerate(decisions):
+            proposal = proposals[index] if index < len(proposals) else None
+            records.append(
+                {
+                    "round": proposal.round if proposal is not None else index + 1,
+                    "action": str(decision.action).strip().lower(),
+                    "text": _decision_text(
+                        {
+                            "feasibilitySummary": decision.feasibility_summary,
+                            "confirmedIntent": decision.confirmed_intent,
+                            "counterProposal": decision.counter_proposal,
+                            "rationale": decision.rationale,
+                            "filledParams": decision.filled_params,
+                        }
+                    ),
+                }
+            )
+    observations: list[ClientQualityObservation] = []
+    for index, record in enumerate(records):
+        raw_round = record["round"]
+        round_number = raw_round if isinstance(raw_round, int) else None
+        proposal = proposals_by_round.get(round_number) if round_number is not None else None
+        if proposal is None and index < len(proposals):
+            proposal = proposals[index]
+        action = str(record["action"])
+        wanted = _PERFORMATIVE_BY_ACTION.get(action)
+        matching = next(
+            (
+                entry
+                for entry in sent
+                if wanted is not None
+                and entry["performative"] == wanted
+                and (
+                    round_number is None
+                    or entry["round"] is None
+                    or entry["round"] == round_number
+                )
+            ),
+            None,
+        )
+        # The dispatched message's summary is the Task-T action label, not the negotiation reply;
+        # the substantive answer is the decision trace. Only use the summary when no decision text
+        # was recorded at all.
+        accepted_text = str(record["text"]).strip()
+        if not accepted_text and matching is not None:
+            accepted_text = str(matching["summary"])
+        observations.append(
+            ClientQualityObservation(
+                round=round_number if isinstance(round_number, int) else index + 1,
+                kind=proposal.kind if proposal is not None else "",
+                proposal=proposal.content if proposal is not None else "",
+                decision=action,
+                accepted_text=accepted_text,
+                # A decision that never dispatched its performative is structurally wrong.
+                structure_ok=matching is not None,
+            )
+        )
+    return observations
 
 
 def _pairs(items: Sequence[CaseItem]) -> list[dict[str, object]]:

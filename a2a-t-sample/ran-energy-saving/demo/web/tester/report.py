@@ -252,9 +252,78 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     if multi:
         _write_round_sheet(workbook.create_sheet("轮次汇总"), batch, rounds)
 
+    # The decision-quality appendix is only meaningful when at least one agent-authored negotiation
+    # produced it; a batch without it keeps exactly the four historical sheets.
+    if _has_client_quality(batch):
+        _write_client_quality_sheet(workbook.create_sheet("client 决策质量"), batch)
+
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _has_client_quality(batch: Mapping[str, Any]) -> bool:
+    """Return whether any item carries a decision-quality appendix."""
+    items = batch.get("items")
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, Mapping) and isinstance(item.get("clientQuality"), Mapping):
+            return True
+    return False
+
+
+def _write_client_quality_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> None:
+    """Write one row per ``(case, protocol, round)`` of the client decision-quality appendix."""
+    sheet.append(
+        [
+            "用例编号",
+            "协议",
+            "协商轮次",
+            "决策",
+            "提案",
+            "期望",
+            "动作",
+            "值",
+            "结构",
+            "复核",
+            "覆盖",
+            "质量",
+            "人工复核",
+            "判定方式",
+            "理由",
+        ]
+    )
+    _style_header(sheet)
+    items = batch.get("items")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        quality = item.get("clientQuality")
+        if not isinstance(quality, Mapping):
+            continue
+        rounds = quality.get("rounds")
+        for row in rounds if isinstance(rounds, list) else []:
+            if not isinstance(row, Mapping):
+                continue
+            sheet.append(
+                [
+                    item.get("caseId", ""),
+                    item.get("protocol", ""),
+                    row.get("round", ""),
+                    row.get("decision", ""),
+                    _cell(row.get("proposal", "")),
+                    _cell(row.get("expected", "")),
+                    row.get("action", ""),
+                    row.get("value", ""),
+                    row.get("structure", ""),
+                    row.get("review", ""),
+                    row.get("coverage", ""),
+                    row.get("quality", ""),
+                    "是" if quality.get("needsHumanReview") is True else "否",
+                    row.get("method", ""),
+                    _cell(row.get("reason", "")),
+                ]
+            )
+    _set_widths(sheet, (12, 10, 10, 10, 48, 48, 10, 10, 10, 10, 10, 10, 10, 12, 48))
 
 
 def _write_reference_sheet(

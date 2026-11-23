@@ -89,6 +89,7 @@ from shared.http_security import (
     sqlite_ready,
     validate_bind_security,
 )
+from shared.judge_llm import build_judge_client
 from shared.models import NegotiationDecision
 from shared.run_constants import (
     BRAND_ORANGE,
@@ -558,6 +559,9 @@ def create_app(
         annotation_overlay=lambda: confirmed_overlay(annotation_store_path),
         annotation_token=lambda: overlay_token(annotation_store_path),
     )
+    # The independent decision-quality judge is a separate model; an unconfigured process passes
+    # None and the appendix records every semantic check as unjudged.
+    tester_judge = build_judge_client(config) if config.judge_configured else None
     tester_routes, tester_batches = build_tester_routes(
         runs=manager,
         protocols=advertised_protocols,
@@ -579,6 +583,8 @@ def create_app(
         # The SDK stages must read the same .env the run runtime reads; otherwise the preflight
         # and the run can resolve different models and disagree on the same request.
         env_path=env_path,
+        judge=tester_judge,
+        judge_model_label=config.judge_model if tester_judge is not None else "",
     )
     run_console_routes = build_run_console_routes(
         runs=manager,
