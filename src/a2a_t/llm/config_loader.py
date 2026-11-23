@@ -19,7 +19,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from a2a_t.config.errors import ConfigFileNotFoundError
 from a2a_t.config.source import DotEnvConfigSource
@@ -110,6 +112,19 @@ def coerce_timeout_retries(value: str | None, key: str) -> int:
     return parsed
 
 
+def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
+    """Parse the optional provider-specific ``extra_body`` JSON object."""
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise LLMConfigError(f"{key} must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise LLMConfigError(f"{key} must be a JSON object")
+    return parsed
+
+
 def coerce_bounded_int(value: int | str, key: str, *, max_value: int) -> int:
     """Parse an integer config value and enforce a positive upper bound."""
     try:
@@ -177,6 +192,7 @@ class LLMConfigLoader:
             session_max_total=session_max_total,
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
+            extra_body=coerce_extra_body(values.get("A2AT_LLM_EXTRA_BODY"), "A2AT_LLM_EXTRA_BODY"),
             timeout_retries=coerce_timeout_retries(
                 values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
             ),

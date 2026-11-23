@@ -351,6 +351,25 @@ class OpenAIClientTest(unittest.TestCase):
 
         self.assertEqual(sdk_client.chat.completions.create.call_count, 1)
 
+    def test_structured_forwards_the_configured_extra_body(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+        client = OpenAIClient(replace(build_config(base_url="https://api.example.test/v1"), extra_body=extra_body))
+        client._client = sdk_client
+
+        client.structured(messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"})
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["extra_body"], extra_body)
+        self.assertIsNot(payload["extra_body"], extra_body)
+
 
 class _ListHandler(logging.Handler):
     def __init__(self) -> None:

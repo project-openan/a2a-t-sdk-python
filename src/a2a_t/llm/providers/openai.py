@@ -146,6 +146,8 @@ class OpenAIClient(LLMClient):
         # value, so non-reasoning models never receive the parameter.
         if self._config.reasoning_effort:
             payload["reasoning_effort"] = self._config.reasoning_effort
+        if self._config.extra_body:
+            payload["extra_body"] = dict(self._config.extra_body)
         return payload
 
     def _parse_response(self, response: Any) -> LLMResponse:
