@@ -370,6 +370,28 @@ class OpenAIClientTest(unittest.TestCase):
         self.assertEqual(payload["extra_body"], extra_body)
         self.assertIsNot(payload["extra_body"], extra_body)
 
+    def test_structured_can_fall_back_to_json_object_response_format(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2),
+        )
+        client = OpenAIClient(
+            replace(build_config(base_url="https://api.example.test/v1"), response_format="json_object")
+        )
+        client._client = sdk_client
+
+        client.structured(
+            messages=[{"role": "user", "content": "validate"}],
+            json_schema={"type": "object", "properties": {"semantic_verdict": {"type": "boolean"}}},
+        )
+
+        payload = sdk_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+
 
 class _ListHandler(logging.Handler):
     def __init__(self) -> None:

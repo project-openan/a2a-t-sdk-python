@@ -133,10 +133,7 @@ class OpenAIClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self._config.model,
             "messages": messages,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": STRUCTURED_OUTPUT_SCHEMA_NAME, "schema": json_schema},
-            },
+            "response_format": self._response_format(json_schema),
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -149,6 +146,15 @@ class OpenAIClient(LLMClient):
         if self._config.extra_body:
             payload["extra_body"] = dict(self._config.extra_body)
         return payload
+
+    def _response_format(self, json_schema: dict[str, Any]) -> dict[str, Any]:
+        """Return the request ``response_format`` selected by the configuration."""
+        if self._config.response_format == "json_schema":
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": STRUCTURED_OUTPUT_SCHEMA_NAME, "schema": json_schema},
+            }
+        return {"type": "json_object"}
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)

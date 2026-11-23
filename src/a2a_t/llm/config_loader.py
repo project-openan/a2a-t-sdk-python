@@ -35,6 +35,8 @@ _MAX_TIMEOUT_RETRIES = 5
 
 #: Accepted reasoning-effort values (Java ``LLMClientConfig.VALID_REASONING_EFFORTS``).
 _VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+#: Accepted ``A2AT_LLM_RESPONSE_FORMAT`` values.
+_VALID_RESPONSE_FORMATS = ("json_object", "json_schema")
 
 
 def default_env_path() -> Path:
@@ -110,6 +112,16 @@ def coerce_timeout_retries(value: str | None, key: str) -> int:
     if parsed < 0 or parsed > _MAX_TIMEOUT_RETRIES:
         raise LLMConfigError(f"{key} must be between 0 and {_MAX_TIMEOUT_RETRIES}")
     return parsed
+
+
+def coerce_response_format(value: str | None, key: str) -> str:
+    """Parse the structured-call response format; a blank value keeps ``json_schema``."""
+    if value is None or not value.strip():
+        return "json_schema"
+    normalized = value.strip().lower()
+    if normalized not in _VALID_RESPONSE_FORMATS:
+        raise LLMConfigError(f"{key} must be one of {_VALID_RESPONSE_FORMATS}")
+    return normalized
 
 
 def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
@@ -193,6 +205,9 @@ class LLMConfigLoader:
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
             extra_body=coerce_extra_body(values.get("A2AT_LLM_EXTRA_BODY"), "A2AT_LLM_EXTRA_BODY"),
+            response_format=coerce_response_format(
+                values.get("A2AT_LLM_RESPONSE_FORMAT"), "A2AT_LLM_RESPONSE_FORMAT"
+            ),
             timeout_retries=coerce_timeout_retries(
                 values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
             ),

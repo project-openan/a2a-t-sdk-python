@@ -51,6 +51,9 @@ class LLMClientConfig:
             ``LLMClientConfig.detailLogEnabled``.
         extra_body: optional provider-specific request fields forwarded verbatim as the OpenAI SDK
             ``extra_body`` argument. ``None`` sends nothing.
+        response_format: ``json_schema`` (default) asks the gateway to enforce the caller's output
+            schema; ``json_object`` falls back to portable JSON mode for gateways that do not accept
+            schema enforcement.
         timeout_retries: how many extra attempts one structured call makes after a transport timeout;
             ``0`` keeps the original single-attempt behavior.
     """
@@ -69,4 +72,5 @@ class LLMClientConfig:
     ssl_verify: bool = True
     detail_log_enabled: bool = False
     extra_body: dict[str, Any] | None = None
+    response_format: str = "json_schema"
     timeout_retries: int = 0
