@@ -39,6 +39,10 @@ class LLMClientConfig:
     """Resolved default configuration for the shared LLM client.
 
     Attributes:
+        max_tokens: default completion cap of a structured call whose call site passes
+            ``max_tokens=None``; ``None`` means "no cap" (the provider decides). The config loader
+            fills ``DEFAULT_MAX_TOKENS`` when ``A2AT_LLM_MAX_TOKENS`` is unset and keeps ``None``
+            only for the explicit ``none``/``null`` value. Java ``LLMClientConfig.maxTokens``.
         reasoning_effort: optional reasoning effort for reasoning models, one of
             ``none``/``minimal``/``low``/``medium``/``high``/``xhigh`` (already normalized to lower
             case); ``None`` leaves the provider parameter unset. Java ``LLMClientConfig.reasoningEffort``.
@@ -49,6 +53,13 @@ class LLMClientConfig:
             Summary logs (timestamp, token usage, elapsed time) are recorded at DEBUG level on the
             dedicated logger ``a2a_t.llm.call`` independently of this flag. Java
             ``LLMClientConfig.detailLogEnabled``.
+        extra_body: optional provider-specific request fields forwarded verbatim as the OpenAI SDK
+            ``extra_body`` argument. ``None`` sends nothing.
+        response_format: ``json_schema`` (default) asks the gateway to enforce the caller's output
+            schema; ``json_object`` falls back to portable JSON mode for gateways that do not accept
+            schema enforcement.
+        timeout_retries: how many extra attempts one structured call makes after a transport timeout;
+            ``0`` keeps the original single-attempt behavior.
     """
 
     provider: str
@@ -64,3 +75,6 @@ class LLMClientConfig:
     reasoning_effort: str | None = None
     ssl_verify: bool = True
     detail_log_enabled: bool = False
+    extra_body: dict[str, Any] | None = None
+    response_format: str = "json_schema"
+    timeout_retries: int = 0

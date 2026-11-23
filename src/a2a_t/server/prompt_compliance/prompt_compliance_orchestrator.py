@@ -126,6 +126,14 @@ class PromptComplianceOrchestrator:
         self._language = language
         self._logger = logger if logger is not None else _LOGGER
 
+    @staticmethod
+    def _provider_fact(source: Any) -> str:
+        """Return the provider label rendered into ``llm.invocation_failed`` messages."""
+        provider = getattr(source, "provider", None)
+        if isinstance(provider, str) and provider.strip():
+            return provider
+        return type(source).__name__
+
     def check(
         self,
         *,
@@ -218,7 +226,7 @@ class PromptComplianceOrchestrator:
                 )
             return self._catalog_failure(
                 entry=ErrorCatalog.LLM_INVOCATION_FAILED,
-                facts={"reason": str(error)},
+                facts={"provider": self._provider_fact(self._extractor), "reason": str(error)},
                 stage=SLOT_EXTRACTION_STAGE,
             )
 

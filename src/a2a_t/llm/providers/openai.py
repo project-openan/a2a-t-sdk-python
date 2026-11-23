@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from openai import OpenAI
+from openai import APITimeoutError, OpenAI
 
 from a2a_t.llm.errors import LLMConfigError, LLMRuntimeError
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
@@ -45,6 +45,11 @@ class OpenAIClient(LLMClient):
         self._logger = logger if logger is not None else logging.getLogger(__name__)
         self._call_logger = logging.getLogger("a2a_t.llm.call")
         self._client: Any | None = None
+
+    @property
+    def provider(self) -> str:
+        """Return the configured provider name."""
+        return self._config.provider
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -86,14 +91,32 @@ class OpenAIClient(LLMClient):
         debug_enabled = self._call_logger.isEnabledFor(logging.DEBUG)
         if debug_enabled:
             self._log_request(payload)
-        try:
-            raw_response = self._get_client().chat.completions.create(**payload)
-        except LLMConfigError:
-            raise
-        except Exception as exc:  # pragma: no cover - provider failure path
-            if debug_enabled:
-                self._log_error(started, exc)
-            raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        attempts = self._config.timeout_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                raw_response = self._get_client().chat.completions.create(**payload)
+                break
+            except LLMConfigError:
+                raise
+            except APITimeoutError as exc:
+                if attempt >= attempts:
+                    if debug_enabled:
+                        self._log_error(started, exc)
+                    raise LLMRuntimeError(
+                        f"{self._config.provider} invocation timed out after {attempts} attempt(s): {exc}"
+                    ) from exc
+                self._logger.warning(
+                    "%s invocation timed out (attempt %s/%s); retrying",
+                    self._config.provider,
+                    attempt,
+                    attempts,
+                )
+            except Exception as exc:  # pragma: no cover - provider failure path
+                if debug_enabled:
+                    self._log_error(started, exc)
+                raise LLMRuntimeError(f"{self._config.provider} invocation failed: {exc}") from exc
+        else:  # pragma: no cover - the loop always breaks or raises
+            raise RuntimeError("unreachable")
         try:
             response = self._parse_response(raw_response)
         except LLMRuntimeError as exc:
@@ -115,34 +138,49 @@ class OpenAIClient(LLMClient):
         payload: dict[str, Any] = {
             "model": self._config.model,
             "messages": messages,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": STRUCTURED_OUTPUT_SCHEMA_NAME, "schema": json_schema},
-            },
+            "response_format": self._response_format(json_schema),
         }
         if temperature is not None:
             payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        resolved_max_tokens = max_tokens if max_tokens is not None else self._config.max_tokens
+        if resolved_max_tokens is not None:
+            payload["max_tokens"] = resolved_max_tokens
         # Java parity: the reasoning effort is only forwarded when configured with a non-blank
         # value, so non-reasoning models never receive the parameter.
         if self._config.reasoning_effort:
             payload["reasoning_effort"] = self._config.reasoning_effort
+        if self._config.extra_body:
+            payload["extra_body"] = dict(self._config.extra_body)
         return payload
+
+    def _response_format(self, json_schema: dict[str, Any]) -> dict[str, Any]:
+        """Return the request ``response_format`` selected by the configuration."""
+        if self._config.response_format == "json_schema":
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": STRUCTURED_OUTPUT_SCHEMA_NAME, "schema": json_schema},
+            }
+        return {"type": "json_object"}
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)
-        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
-        return LLMResponse(
-            content=self._extract_json_object_string(response),
-            model=str(getattr(response, "model", self._config.model)),
-            usage={
+        token_usage: dict[str, int] = {}
+        if usage is not None:
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+            token_usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
-            },
+            }
+            cached_tokens = _cached_tokens(usage)
+            if cached_tokens is not None:
+                token_usage["cached"] = cached_tokens
+        return LLMResponse(
+            content=self._extract_json_object_string(response),
+            model=str(getattr(response, "model", self._config.model)),
+            usage=token_usage,
             metadata={"response": response},
         )
 
@@ -320,3 +358,24 @@ class OpenAIClient(LLMClient):
         if content is None:
             raise LLMRuntimeError(f"{self._config.provider} response did not include message content")
         return str(content)
+
+
+def _cached_tokens(usage: Any) -> int | None:
+    """Return the cached-prefix token count reported by the provider, when present.
+
+    OpenAI-compatible gateways report it as ``usage.prompt_tokens_details.cached_tokens``;
+    DeepSeek's native endpoint reports it as ``usage.prompt_cache_hit_tokens``. ``None`` means the
+    provider did not report a cache count (distinct from a reported miss of ``0``).
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        if isinstance(details, dict):
+            cached = details.get("cached_tokens")
+        else:
+            cached = getattr(details, "cached_tokens", None)
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    hit = getattr(usage, "prompt_cache_hit_tokens", None)
+    if isinstance(hit, int) and not isinstance(hit, bool):
+        return hit
+    return None

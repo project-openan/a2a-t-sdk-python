@@ -415,7 +415,7 @@ def test_generate_returns_generation_failure_when_slot_extraction_runtime_fails(
     assert result.failure is not None
     assert result.failure.code == ErrorCatalog.LLM_INVOCATION_FAILED.value
     assert result.failure.stage == GENERATION_STAGE
-    assert result.failure.message == "LLM invocation failed (provider {provider}): llm transport down"
+    assert result.failure.message == "LLM invocation failed (provider RaisingSlotExtractor): llm transport down"
 
 
 def test_generate_returns_render_failure_when_renderer_rejects_slots() -> None:
@@ -458,7 +458,7 @@ def test_generate_returns_render_failure_when_renderer_rejects_slots() -> None:
         (
             LLMRuntimeError("openai invocation failed: timeout"),
             ErrorCatalog.LLM_INVOCATION_FAILED,
-            "LLM invocation failed (provider {provider}): openai invocation failed: timeout",
+            "LLM invocation failed (provider RaisingSlotExtractor): openai invocation failed: timeout",
         ),
     ],
     ids=["config-error", "invalid-json", "empty-content", "transport-failure"],

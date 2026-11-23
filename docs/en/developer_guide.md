@@ -1511,7 +1511,7 @@ The sample configuration file provided by the SDK is `env.example`; copy it to `
 | `A2AT_LLM_MODEL`                      | Model name                                                     |
 | `A2AT_LLM_API_KEY`                    | LLM API key                                                  |
 | `A2AT_LLM_BASE_URL`                   | LLM service endpoint (OpenAI-compatible)                            |
-| `A2AT_LLM_MAX_TOKENS`                 | Maximum number of generated tokens for completion calls, sample value `2000`; the provider default is used when empty |
+| `A2AT_LLM_MAX_TOKENS`                 | Maximum number of generated tokens for structured completion calls; default `16384` (leaves room for a reasoning model's thinking plus the JSON object); `none`/`null` disables the cap and leaves the provider parameter unset; zero, negative and non-integer values are configuration errors |
 | `A2AT_LLM_TEMPERATURE`                | Sampling temperature, sample value `0`; the provider default is used when empty                   |
 | `A2AT_LLM_TIMEOUT_SECONDS`            | LLM request timeout (seconds), sample value `60`; the provider default is used when empty    |
 | `A2AT_LLM_HISTORY_WINDOW`             | Number of conversation history messages to keep, default `10`                            |
