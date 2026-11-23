@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Implement energy saving in the A2ATestRegion area and turn off the carrier frequencies during energy saving. The guaranteed rate targets for each time period are set as follows: 00:00-07:00 → 2 Mbps, 07:00-18:00 → 10 Mbps, 18:00-24:00 → 2 Mbps.
+client_conditions: |-
+  The carrier frequency available for shutdown is LTE EARFCN 1600.
 expect:
   intent:
     Operation type: Create

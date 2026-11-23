@@ -11,6 +11,8 @@ tags:
   - terminology
 user_input: |-
   Implement energy-saving in A2ATestRegion region, the time range  is from 00:00 to 22:00. User experience first.
+client_conditions: |-
+  'User experience first' means experience-preserving energy saving is required.
 expect:
   intent:
     Operation type: Create

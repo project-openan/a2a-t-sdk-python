@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Hi team, two earlier tasks under this program: one covered all indoor communities in A2ATestRegion1 region — NR cells, 00:00:00–06:00:00 nightly, 20 Mbps floor; the other covered A2ATestRegion2 region — same RAT and window, 2 Mbps floor. Create the next one: same as the previous task, but the area moves to A2ATestRegion3 region.
+client_conditions: |-
+  'The previous task' means the most recently listed task; reuse its RAT, window and rate.
 expect:
   intent:
     Operation type: Create

@@ -14,6 +14,8 @@ tags:
   - negotiation-a2at
 user_input: |-
   Modify the energy-saving plan for LTE_26441_LNR_OCL, NRES_XCS_6102937, and a few others in A2ATestRegion region. There will be a power outage from 00:00 to 05:00 tomorrow. Set the throughput rate guarantee to 5Mbps during the outage.
+client_conditions: |-
+  The sites affected by the outage in A2ATestRegion are LTE_26441_LNR_OCL, NRES_XCS_6102937 and LNR_KPI_7745.
 expect:
   intent:
     Operation type: Modify

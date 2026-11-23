@@ -12,6 +12,8 @@ tags:
   - terminology
 user_input: |-
   Implement energy-saving in A2ATestRegion region, during 19:00–22:00 apply high GS and guarantee 10 Mbps throughput.
+client_conditions: |-
+  A 'high GS' objective means aggressive energy saving.
 expect:
   intent:
     Operation type: Create

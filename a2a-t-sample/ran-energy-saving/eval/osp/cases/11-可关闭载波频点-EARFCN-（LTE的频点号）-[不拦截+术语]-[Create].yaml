@@ -12,6 +12,8 @@ tags:
 user_input: |-
   Implement energy saving in the A2ATestRegion region.
   EARFCN 1600 can be shut down during the energy-saving period.
+client_conditions: |-
+  EARFCN is the LTE carrier frequency number; EARFCN 1600 is the LTE carrier that can be shut down.
 expect:
   intent:
     Operation type: Create

@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Implement energy-saving in A2ATestRegion1 region for 2G. Set the guaranteed throughput targets: 00:00-08:00→2Mbps, 08:00-24:00→10Mbps.
+client_conditions: |-
+  2G is not a supported RAT in this environment; the energy-saving cell RAT is NR.
 expect:
   intent:
     Operation type: Create

@@ -12,6 +12,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Modify the energy-saving plan for LTE_26441_LNR_OCL in A2ATestRegion region. There will be a power outage tomorrow. Set the throughput rate guarantee to 10Mbps during the outage.
+client_conditions: |-
+  The outage period for this request is 00:00-04:00.
 expect:
   intent:
     Operation type: Modify

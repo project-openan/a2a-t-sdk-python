@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Create an energy-saving task with the green energy-saving  aggressiveness in the A2ATestRegion1 area. The guaranteed rate objectives for each time period are set as follows: 00:00-07:00 → 2 Mbps, 07:00-18:00 → 10 Mbps, 18:00-24:00 → 2 Mbps.
+client_conditions: |-
+  'Green energy saving' means conservative energy saving.
 expect:
   intent:
     Operation type: Create

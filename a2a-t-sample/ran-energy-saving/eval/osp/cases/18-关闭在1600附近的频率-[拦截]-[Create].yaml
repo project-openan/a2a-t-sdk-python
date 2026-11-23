@@ -10,6 +10,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Implement energy-saving in A2ATestRegion region. Shut down the frequency band centered at approximately 1600. Set the guaranteed throughput targets: 00:00-08:00→2Mbps, 08:00-24:00→10Mbps.
+client_conditions: |-
+  The carrier frequencies available for shutdown near 1600 are 1550 and 1600.
 expect:
   intent:
     Operation type: Create

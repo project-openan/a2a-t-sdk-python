@@ -10,6 +10,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   The power outage will start at 3:00 a.m. tomorrow and last for 3 hours. During the outage, sites such as NRES_XCS_6102937 and LTE_26441_LNR_OCL within the A2ATestRegion must maintain a throughput of 10 Mbps.
+client_conditions: |-
+  The sites affected by the outage in A2ATestRegion are NRES_XCS_6102937, LTE_26441_LNR_OCL and LNR_KPI_7745.
 expect:
   intent:
     Operation type: Modify

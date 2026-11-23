@@ -12,6 +12,8 @@ tags:
   - terminology
 user_input: |-
   Implement energy saving in the A2ATestRegion region, ensuring a 10 Mbps throughput guarantee from 19:00 to 22:00. Energy-Saving Scope is NG-RAN
+client_conditions: |-
+  NG-RAN is the NR RAT; the energy-saving cell RAT is NR.
 expect:
   intent:
     Operation type: Create

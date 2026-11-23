@@ -11,6 +11,8 @@ tags:
   - terminology
 user_input: |-
   Implement energy saving in the A2ATestRegion region during the 19:00 to 22:00 time window, with the objective to maximize energy savings.
+client_conditions: |-
+  The objective 'maximize energy savings' means aggressive energy saving.
 expect:
   intent:
     Operation type: Create

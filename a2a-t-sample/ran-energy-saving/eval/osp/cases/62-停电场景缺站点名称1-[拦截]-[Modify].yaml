@@ -13,6 +13,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Modify the energy-saving plan in A2ATestRegion1 region. A power outage will occur from 00:00 to 04:00 tomorrow. Set the throughput rate guarantee to 10Mbps during the outage.
+client_conditions: |-
+  The site affected by the outage in A2ATestRegion1 is Chengdu_BTS5900_NE1654.
 expect:
   intent:
     Operation type: Modify

@@ -14,6 +14,8 @@ tags:
   - negotiation-a2at
 user_input: |-
   Make energy-saving targets for RegionA: 00:00-07:00→2Mbps, 07:00-18:00→10Mbps, 18:00-24:00→2Mbps.
+client_conditions: |-
+  The only valid test region is A2ATestRegion; RegionA is a placeholder for A2ATestRegion.
 expect:
   intent:
     Operation type: Create

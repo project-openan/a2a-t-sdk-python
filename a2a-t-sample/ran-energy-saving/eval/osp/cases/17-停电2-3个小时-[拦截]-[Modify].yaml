@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   A power outage will occur for 2 or 3 hours on 12:00, affecting LTE_26441_LNR_OCL, NRES_XCS_6102937 in the A2ATestRegion area. The Time-segmented rate guarantee target for LTE_26441_LNR_OCL, NRES_XCS_6102937 needs to be modified to 10Mbps during the power outage period
+client_conditions: |-
+  The outage starts at 12:00 and lasts 4 hours; the outage period is 12:00-16:00.
 expect:
   intent:
     Operation type: Modify

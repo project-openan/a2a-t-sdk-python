@@ -13,6 +13,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   A power outage will occur from 08:00 to 12:00 tomorrow, affecting NES_27A_321071 in the A2ATestRegion area. The guaranteed rate targets for NES_27A_321071 need to be adjusted from 08:00 to 12:00.
+client_conditions: |-
+  The guaranteed rate the client requires for the outage is 10Mbps.
 expect:
   intent:
     Operation type: Modify

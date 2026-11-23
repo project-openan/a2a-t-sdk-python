@@ -12,6 +12,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   The power outage will begin at 3:00 AM tomorrow and last for 3 hours. During the outage, all sites within the A2ATestRegion area must maintain a throughput of 10 Mbps.
+client_conditions: |-
+  The sites affected by the outage in A2ATestRegion are NRES_XCS_6102937.
 expect:
   intent:
     Operation type: Modify

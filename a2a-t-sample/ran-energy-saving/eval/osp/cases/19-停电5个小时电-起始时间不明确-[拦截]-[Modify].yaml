@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   There will be a five-hour power outage tomorrow. During the outage, NRES_XCS_6102937 in the A2ATestRegion area need to maintain a throughput of 2 Mbps.
+client_conditions: |-
+  The outage starts at 08:00 and lasts five hours; the outage period is 08:00-13:00.
 expect:
   intent:
     Operation type: Modify

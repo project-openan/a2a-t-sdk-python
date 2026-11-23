@@ -11,6 +11,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Enable energy saving in A2ATestRegion, A2ATestRegion2, and A2ATestRegion3. The guaranteed rates in each time segment are as follows: 00:00-07:00: 2 Mbit/s; 07:00-18:00: 10 Mbit/s; 18:00-24:00: 2 Mbit/s.
+client_conditions: |-
+  When the request names several test regions, the single region to use is A2ATestRegion1.
 expect:
   intent:
     Operation type: Create

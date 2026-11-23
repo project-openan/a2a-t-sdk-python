@@ -11,6 +11,8 @@ tags:
   - terminology
 user_input: |-
   Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00.  Ensuring user experience for 720p video.
+client_conditions: |-
+  The user's 720p video experience target corresponds to a 2Mbps guaranteed throughput target.
 expect:
   intent:
     Operation type: Create

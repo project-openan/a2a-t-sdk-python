@@ -12,6 +12,8 @@ tags:
   - terminology
 user_input: |-
   Implement energy saving in the A2ATestRegion region, ensuring a 10 Mbps throughput guarantee from 19:00 to 22:00, with coverage restricted to E-UTRAN cell.
+client_conditions: |-
+  E-UTRAN is the LTE RAT; the energy-saving cell RAT is LTE.
 expect:
   intent:
     Operation type: Create

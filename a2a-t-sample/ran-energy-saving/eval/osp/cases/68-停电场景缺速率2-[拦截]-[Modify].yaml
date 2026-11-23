@@ -13,6 +13,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   A power outage will occur from 08:00 to 12:00 tomorrow, affecting Chengdu_BTS5900_NE1654 in the A2ATestRegion1 area. The guaranteed rate targets for Chengdu_BTS5900_NE1654 need to be adjusted from 08:00 to 12:00.
+client_conditions: |-
+  The guaranteed rate the client requires for the outage is 10Mbps.
 expect:
   intent:
     Operation type: Modify

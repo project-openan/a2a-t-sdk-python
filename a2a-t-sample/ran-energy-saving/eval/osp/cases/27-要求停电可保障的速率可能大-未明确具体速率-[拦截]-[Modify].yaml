@@ -12,6 +12,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Due to a power outage at LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion area from 08:00 to 12:00 tomorrow, LNR_KPI_7745 and NES_27A_321071 should maintain the outage duration while maximizing the rate as much as possible.
+client_conditions: |-
+  The maximum guaranteed rate the client accepts for this outage is 10Mbps.
 expect:
   intent:
     Operation type: Modify

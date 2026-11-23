@@ -12,6 +12,8 @@ tags:
 user_input: |-
   Implement energy-saving in A2ATestRegion region, the time range  is from 00:00 to 22:00.
   Set the DL rate floor to 10.
+client_conditions: |-
+  The DL rate floor value 10 is expressed in Mbps: the guaranteed throughput target is 10Mbps.
 expect:
   intent:
     Operation type: Create

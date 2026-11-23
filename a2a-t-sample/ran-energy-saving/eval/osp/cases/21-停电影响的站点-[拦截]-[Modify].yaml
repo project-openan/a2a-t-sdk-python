@@ -12,6 +12,8 @@ tags:
   - negotiation-a2a
 user_input: |-
   Due to a power outage in the A2ATestRegion area from 08:00 to 11:00 tomorrow, the guaranteed bandwidth for sites in this area affected by the power outage needs to be modified to 10 Mbps.
+client_conditions: |-
+  The sites affected by the outage in A2ATestRegion are NRES_XCS_6102937.
 expect:
   intent:
     Operation type: Modify

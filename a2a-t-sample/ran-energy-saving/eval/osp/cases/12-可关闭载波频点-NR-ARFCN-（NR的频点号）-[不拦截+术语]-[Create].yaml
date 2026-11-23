@@ -12,6 +12,8 @@ tags:
 user_input: |-
   Implement energy saving in the A2ATestRegion region.
   NR-ARFCN 633333 can be shut down during the energy-saving period.
+client_conditions: |-
+  NR-ARFCN is the NR carrier frequency number; NR-ARFCN 633333 is the NR carrier that can be shut down.
 expect:
   intent:
     Operation type: Create
