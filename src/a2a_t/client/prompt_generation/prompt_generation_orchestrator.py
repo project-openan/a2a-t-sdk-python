@@ -104,6 +104,14 @@ class PromptGenerationOrchestrator:
         self._input_limit = input_limit if input_limit is not None else InputLimitConfig()
         self._logger = logger if logger is not None else _LOGGER
 
+    @staticmethod
+    def _provider_fact(source: Any) -> str:
+        """Return the provider label rendered into ``llm.invocation_failed`` messages."""
+        provider = getattr(source, "provider", None)
+        if isinstance(provider, str) and provider.strip():
+            return provider
+        return type(source).__name__
+
     def generate(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
         """Run prompt generation from input normalization through prompt rendering."""
         self._log_info("prompt_generation_started")
@@ -543,7 +551,7 @@ class PromptGenerationOrchestrator:
         except A2ATError as error:
             raise self._generation_exception(
                 ErrorCatalog.LLM_INVOCATION_FAILED,
-                {"reason": str(error)},
+                {"provider": self._provider_fact(self._slot_extractor), "reason": str(error)},
             ) from error
 
     def _map_slot_errors(
@@ -692,7 +700,7 @@ class PromptGenerationOrchestrator:
             )
         return self._generation_exception(
             ErrorCatalog.LLM_INVOCATION_FAILED,
-            {"reason": str(error)},
+            {"provider": self._provider_fact(self._slot_extractor), "reason": str(error)},
             cause=error,
         )
 
@@ -791,7 +799,7 @@ class PromptGenerationOrchestrator:
             )
         return self._catalog_failure(
             entry=ErrorCatalog.LLM_INVOCATION_FAILED,
-            facts={"reason": str(error)},
+            facts={"provider": self._provider_fact(self._slot_extractor), "reason": str(error)},
             stage=GENERATION_STAGE,
         )
 
