@@ -177,7 +177,7 @@ class ClientQualityResult:
     #: Judge model label, empty when no judge answered; the report names it for D8/D14.
     judge_model: str = ""
     #: Checker queries recorded as decision evidence (D19); they never affect ``quality``.
-    checker_calls: list[object] = field(default_factory=list)
+    checker_calls: list[dict[str, object] | str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation the report and the item snapshot read."""
@@ -316,7 +316,7 @@ async def judge_client_quality(
         The aggregated quality result. It never raises for a judge failure: an unavailable judge
         leaves the semantic checks unjudged.
     """
-    recorded_queries = [
+    recorded_queries: list[dict[str, object] | str] = [
         dict(query) if isinstance(query, Mapping) else str(query) for query in checker_queries
     ]
     conditions = (
