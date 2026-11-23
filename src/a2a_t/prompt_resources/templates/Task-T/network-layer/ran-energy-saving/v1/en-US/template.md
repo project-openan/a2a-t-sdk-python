@@ -47,27 +47,23 @@ Requirement:
 7. Rate guarantee target (optional): the minimum downlink throughput target that must be guaranteed and its effective time period
     - Supports both area-level and site-level configuration modes, where site-level configuration is supported only when [Operation Type](#operation-type) is set to `Modify`.
     - **For the area-level setting**, the following information needs to be provided:
-
-      Option 1: Time-segmented rate guarantee target
-        - Time Window (required): Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving. All configured time windows must fall within the active energy-saving execution period;
-        - Rate (required): Specify a target throughput for each time window (rate must be a specific value), e.g., 10 Mbps;
-        - Example: Time-segmented rate guarantee target: {00:00-06:00, 2Mbps}, {06:00-18:00, 10Mbps}
-
-      Option 2: Full-period rate guarantee target
-        - Rate (optional): If no throughput guarantee target is configured, energy saving will default to Lossless Experience Energy Saving;
-        - Example: Rate guarantee target: 10Mbps
+        - Time Window (required): Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving. All configured time windows must fall within the active energy saving time range; If a rate guarantee target is configured for the entire energy saving time range, the configured time window MUST be identical to the energy saving time range.
+        - Rate (required): Specify a target throughput for each time window (rate must be a specific value), e.g., 10 Mbps.
+        - Example 1: Multiple time window rate guarantee targets: {00:00-06:00, 2Mbps}, {06:00-18:00, 10Mbps}
+        - Example 2: Single time window rate guarantee target: {08:00-22:00, 10 Mbps}
 
     - **For the site-level setting**, the following information needs to be provided:
-        - Site list (required): site names must be concrete and complete; 
+        - Site list (required): site names must be concrete and complete.
         - Time-segmented rate guarantee target:
           - Time Window (required): Time windows MUST NOT overlap; Specific and explicit time windows must be provided; unclear time intervals such as busy hours or idle hours are not allowed. For any time window where no throughput guarantee target is specified, energy saving will default to Lossless Experience Energy Saving;
-          - Rate (optional): Specify a target throughput for each time window, e.g., 10 Mbps;
+          - Rate (required): Specify a target throughput for each time window, e.g., 10 Mbps;
         - Background event and event duration (optional): for a power outage scenario where the operation type is Modify, the affected site list and the outage start/end time are required; outage duration must be a specific number;
         - Example:
             - Site list 1: ["Site Name 1", "Site Name 2"], Time-segmented rate guarantee target: {00:00-06:00,2Mbps}, {06:00-18:00,10Mbps}, Background event: power outage from 00:00 to 18:00.
             - Site list 2: ["Site Name 3", "Site Name 4"], Time-segmented rate guarantee target: {01:00-06:00,2Mbps}, {06:00-18:00,10Mbps}, Background event: power outage from 01:00 to 18:00.
 8. When [Operation Type](#operation-type) is set to `Modify`, the only configurable parameter is: Rate guarantee target.
 9. Cross-task reference: when the input inherits parameters by referencing earlier tasks, if multiple earlier tasks exist and the reference does not specify which one (e.g. 'same as the previous task'), the reference is considered ambiguous, and the configuration is invalid.
+
 ## Expected Output
 {{expected_output}} (optional)
 
