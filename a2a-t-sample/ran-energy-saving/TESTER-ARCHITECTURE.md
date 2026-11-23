@@ -14,7 +14,7 @@
 flowchart LR
   subgraph TEST["测试侧（不属于产品）"]
     C["用例<br/>请求 + 可选决策指令 + 期望说明"]
-    GP["通用决策原则<br/>（所有用例共享）"]
+    GP["通用协商原则<br/>（所有用例共享）"]
     H["测试执行器"]
     EV["证据采集"]
     JD["判定器"]
@@ -63,7 +63,7 @@ flowchart LR
 
 | 侧 | 包含 | 说明 |
 |---|---|---|
-| 测试侧 | 用例、通用决策原则、测试执行器、证据采集、判定器、独立评委 | 不属于产品，不被测 |
+| 测试侧 | 用例、通用协商原则、测试执行器、证据采集、判定器、独立评委 | 不属于产品，不被测 |
 | OSS 侧 | client agent、协议层、客户条件检查器、发送前复核 | 我们的产品；既是测试驱动器，也单独评估决策质量 |
 | 网管侧 | 接入/发现、任务管理、协商处理、规划/执行、任务存储、推送/回调、报告 | **被测方**；内部结构仅示意，测试不假设 |
 
@@ -155,7 +155,18 @@ sequenceDiagram
 
 ## 3. 主判定：网管验收
 
-网管是唯一被测方。测试只看边界，判定到 **accepted** 为止，三项：
+网管是唯一被测方。判定直接复用现有 OSP 用例的断言维度，**不新增判定字段**：
+
+| 现有维度 | 在主判定里的含义 | 真机批次 |
+|---|---|---|
+| `send` | 请求是否按用例预期发出 | 保留 |
+| `final_state` | 任务是否到达预期状态 | 只判到 accepted；执行后的完成状态只记录（§2.1） |
+| `negotiation` | 该协商时是否发起、类型与轮次是否在预期内、协商内容是否符合预期 | 保留 |
+| `intent` | 最终结构化意图是否与 `expect.intent` 一致 | 保留；结构化优先（§3.1） |
+| `validate` / `task_t` | 发送前校验与 Task-T 是否符合预期 | 保留 |
+| `trace` | 证据链是否完整 | 保留 |
+
+用例里的 `assert` 开关继续决定哪些维度参与判定，语义不变。下面对最关心的三项给出判定顺序：
 
 ```mermaid
 flowchart TD
@@ -168,15 +179,15 @@ flowchart TD
   C -- 是 --> T["网管验收成立"]
 ```
 
-| 判定项 | 通过条件 | 失败示例 |
-|---|---|---|
-| 受理 | 任务到达 accepted（定义见 §2.1），身份与用例一致 | 创建被拒、只回 submitted 且无回执/意图副本、任务 id 错配 |
-| 协商 | 该协商时发起；类型与轮次在预期内；提案是协议与业务上合法的替代方案 | 该协商却不协商；提案违反协议或业务约束（如负速率、窗口不覆盖停电） |
-| 最终意图 | 协商结束时的最终意图（速率/窗口/站点）与用例预期一致 | 同意的速率错误、窗口未覆盖停电、站点被改动 |
+| 判定项 | 现有维度 | 通过条件 | 失败示例 |
+|---|---|---|---|
+| 受理 | `send` + `final_state` | 任务到达 accepted（定义见 §2.1），身份与用例一致 | 创建被拒、只回 submitted 且无回执/意图副本、任务 id 错配 |
+| 协商 | `negotiation` | 该协商时发起；类型与轮次在预期内；提案是协议与业务上合法的替代方案 | 该协商却不协商；提案违反协议或业务约束（如负速率、窗口不覆盖停电） |
+| 最终意图 | `intent` | 协商结束时的最终意图（速率/窗口/站点）与 `expect.intent` 一致 | 同意的速率错误、窗口未覆盖停电、站点被改动 |
 
-**当前不纳入**：任务执行、任务完成、执行报告、业务效果——真机环境暂时观测不到。
+**当前不纳入**：任务执行、任务完成、执行报告、业务效果——真机环境暂时观测不到；对应 `final_state` 的执行后状态只记录。
 
-**“该协商时发起”“最终意图是什么”怎么写**：用自然语言的 `nms_expect` 描述，不写规则语言（见 §4）。
+**期望写在哪**：仍在现有 `expect` 与 `assert` 里，不新增字段；用例的协商期望文本继续放在 `negotiation.rounds`（见 §4）。
 
 ### 3.1 最终意图：结构化优先，模型兜底
 
@@ -225,15 +236,39 @@ flowchart TD
 
 ## 4. 用例长什么样
 
-一个用例 = 业务请求 + 网管期望 + client 质量期望说明，外加**可选**的用例级决策指令。全部是人话；判定到 accepted 为止。
+用例**沿用现有 OSP YAML**（`schema: osp-eval-case/v1`），字段和断言逻辑不变；引入 agent 决策只加一个可选字段。
 
-### 4.1 客户决策依据分两层
+### 4.1 保留什么，改什么
+
+| 环节 | 处理 |
+|---|---|
+| `user_input`、`expect.intent`、`expect.protocols.*`、`assert`、`blocked_followup`、`baseline`、`runner`、`source` | **不变** |
+| 意图抽取、Task-T、发送前校验、拦截后补充、发送、状态跟踪、证据采集 | **不变** |
+| 断言维度（`intent` / `validate` / `task_t` / `send` / `negotiation` / `final_state` / `trace`） | **不变**；真机批次 `final_state` 只判到 accepted |
+| 协商答复来源 | **改动**：从 `negotiation.rounds`（原 Q 列脚本）改为 agent 现场决策 |
+| `negotiation.rounds` 字段 | **保留**，作用从“运行输入”改为“协商维度的期望文本” |
+| 用例级决策指令 | **新增、可选**：`client_conditions` |
+
+不新增 `nms_expect` / `client_expect_note` / `observed` 等字段：期望仍在 `expect`，判定仍在 `assert`。
+
+```mermaid
+flowchart LR
+  A["请求原文"] --> B["意图抽取<br/>不变"]
+  B --> C["Task-T<br/>不变"]
+  C --> D["发送前校验 / 拦截后补充<br/>不变"]
+  D --> E["发送 / 状态跟踪 / 证据<br/>不变"]
+  E --> F["协商答复"]
+  F -.->|"唯一改动"| G["agent 决策<br/>通用原则 + 可选用例条件"]
+  G --> H["协议层渲染<br/>不变"]
+```
+
+### 4.2 决策依据分两层
 
 agent 在协商时看到的客户侧输入分两层，避免每个用例重复写通用规则：
 
 | 层 | 内容 | 作用范围 | 写在哪 |
 |---|---|---|---|
-| 通用决策原则 | 所有用例共享的默认行为，类似 system prompt | 所有用例 | 一份，全用例共用 |
+| 通用协商原则 | 所有用例共享的默认行为，类似 system prompt | 所有用例 | 一份，全用例共用 |
 | 用例级决策指令 | 本用例特有的接受条件或客户端已知事实，例如“停电期间可以接受到 2Mbps”“区域是 A2ATestRegion” | 仅该用例 | 可选；需要时才写 |
 
 通用原则按协商类型给出默认做法，所有用例共用：
@@ -254,121 +289,132 @@ agent 在协商时看到的客户侧输入分两层，避免每个用例重复�
 - 用例级指令给出的边界优先：推荐方案或修正结果超出边界时拒绝，并说明原因；
 - 没有用例级指令时，以上默认做法单独完成判断。
 
-用例级指令只补充本用例特有的边界（速率底线、可让步的窗口等）或客户端已知的事实（如区域），可以放宽或收紧通用原则里的业务默认。结构与值的安全性（不编造、结构合法）由发送前复核兜底，不靠指令约束。
+用例级指令只补充本用例特有的边界（速率底线、可让步的窗口等）或客户端已知的事实（如区域）。结构与值的安全性（不编造、结构合法）由发送前复核兜底。
 
-下面四个例子改写自现有 OSP 用例，分别覆盖：**可行性协商（30，带用例级指令）**、**按站点协商（29，带用例级指令）**、**无协商（45，只用通用原则）**、**复合场景（28，只回复本轮协商请求）**。
+下面三个例子仍取自现有 OSP 用例，分别覆盖：**可行性协商（30）**、**无协商（45）**、**复合场景（28）**。
 
-### 4.2 例一：分段停电触发可行性协商（30）
+### 4.3 例一：可行性协商（30）
 
 ```yaml
+schema: osp-eval-case/v1
 id: 30
+operation: Create
 
-request: |
+user_input: |
   2 号 08:00-10:00 与 15:00-18:00 两段停电，影响 LNR_KPI_7745 和 NES_27A_321071，
   停电期间保障速率改为 10Mbps。
 
-nms_expect: |
-  因分段停电时间较长，应当在受理前发起 feasibility 协商，
-  提出一个可执行的替代速率（例如 2Mbps）；client accept 后受理任务（accepted）。
-
-client_conditions: |
+client_conditions: |        # 新增，可选
   停电期间可以接受把速率降到 2Mbps；低于 2Mbps 不能接受。
   同意的窗口必须覆盖两段停电；站点不能改。
 
-client_expect_note: |
-  提案不低于 2Mbps 且覆盖两段停电时应当接受本轮提案值；
-  低于 2Mbps 时应当拒绝，并说明该速率不可接受。
+expect:
+  intent: { ... }           # 原有 11 键，不变
+  protocols:
+    a2a-t:
+      validate: pass
+      send: true
+      task_t: "..."         # 原有：期望 Task-T 全文，不变
+      negotiation:
+        expected: true
+        expected_rounds: 1
+        kinds: [feasibility]
+        rounds:             # 原有 Q 列：现在是期望文本，不再驱动运行
+          - "Accept; reduce the throughput target to 2Mbps."
+        messages: []
+      final_state: task_completed   # 原有；真机批次只判到 accepted
 
-observed: |
-  accepted；协商 1 轮；最终意图为停电期间 2Mbps。
+assert:                     # 原有开关，不变
+  intent: true
+  a2a-t:
+    validate: true
+    task_t: true
+    send: true
+    negotiation: true
+    final_state: true
 ```
 
-### 4.3 例二：只对部分站点协商（29）
+### 4.4 例二：无协商（45）
 
 ```yaml
-id: 29
-
-request: |
-  2 号 08:00-18:00 停电影响 LNR_KPI_7745 和 NES_27A_321071；
-  LNR_KPI_7745 的保障速率改为 10Mbps，NES_27A_321071 保持 2Mbps。
-
-nms_expect: |
-  对 10Mbps 的站点在受理前发起 feasibility 协商，
-  client accept 后受理任务（accepted）；2Mbps 的站点不应被改动。
-
-client_conditions: |
-  两个站点在停电期间都可以接受降到 2Mbps；站点与时间窗口不能改。
-
-client_expect_note: |
-  提案把 LNR_KPI_7745 降到 2Mbps、NES_27A_321071 保持 2Mbps 时应当接受；
-  提案改动站点或窗口时应当拒绝。
-
-observed: |
-  accepted；协商 1 轮；最终意图为两个站点停电期间均 2Mbps。
-```
-
-### 4.4 例三：无协商（45）
-
-```yaml
+schema: osp-eval-case/v1
 id: 45
+operation: Create
 
-request: |
+user_input: |
   在 A2ATestRegion 执行节能，分时段保障速率：
   00:00-07:00 2Mbps，07:00-18:00 10Mbps，18:00-24:00 2Mbps。
 
-nms_expect: |
-  受理任务，不发起协商，直接到达 accepted。
+# 不写 client_conditions：通用原则即可完成判断
 
-client_expect_note: |
-  本轮没有协商，client 不产生协商决策；通用原则即可覆盖，不需要用例级指令。
-
-observed: |
-  accepted；协商 0 轮。
+expect:
+  intent: { ... }
+  protocols:
+    a2a-t:
+      validate: pass
+      send: true
+      task_t: "..."
+      negotiation:
+        expected: false
+        expected_rounds: 0
+        kinds: []
+        rounds: []
+      final_state: task_completed
 ```
 
-### 4.5 例四：复合场景，只回复本轮协商请求（28）
+### 4.5 例三：复合场景（28）
+
+用例 28 同时存在时间重叠与可行性问题。现有用例的处理是：发送前校验判 `blocked`，由 `blocked_followup` 补一条不重叠的请求；这一段**保持不变**。如果网管在协商里先只提出可行性问题，client 只按本轮协商请求回答可行性，不主动处理时间重叠。
 
 ```yaml
+schema: osp-eval-case/v1
 id: 28
+operation: Modify
 
-request: |
+user_input: |
   2 号 A2ATestRegion 的 LNR_KPI_7745 与 NES_27A_321071 在 08:00-18:00 停电；
   保障速率改为 08:00-12:00 10Mbps、11:00-18:00 5Mbps。
 
-nms_expect: |
-  请求同时存在时间重叠与可行性两个问题；网管第一轮只发起 feasibility 协商，
-  推荐把 5Mbps 调整为 2Mbps。时间重叠不在本轮协商请求里。
+# 不写 client_conditions：通用原则即可
 
-client_conditions: |
-  停电期间可以接受到 2Mbps；站点不能改。
+expect:
+  intent: { ... }           # 原有：期望意图里时间已不重叠
+  protocols:
+    a2a-t:
+      validate: blocked     # 原有：发送前校验拦截
+      send: false
+      task_t: "..."
+      negotiation:
+        expected: true
+        expected_rounds: 1
+        kinds: [feasibility]
+        rounds:
+          - "Accept; reduce the 5Mbps target to 2Mbps for the outage period."
+      final_state: input_invalid
 
-client_expect_note: |
-  本轮只按协商请求解决可行性：接受 2Mbps，不改时间窗口，也不主动处理时间重叠。
-  网管后续发起时间重叠协商时，再给出不重叠的窗口。
-
-observed: |
-  第一轮为 feasibility 协商；client 只回复可行性；后续轮次按网管实际发起记录。
+blocked_followup:           # 原有：拦截后补充不重叠的请求
+  input: |
+    ...
 ```
 
 | 字段 | 给谁 | 用途 |
 |---|---|---|
-| `request` | agent | 业务意图 |
-| `client_conditions` | agent | **可选**：本用例特有的接受条件或客户端已知事实（如区域）；没有时只用通用决策原则 |
-| `nms_expect` | 网管评委 | 判断网管行为是否符合预期；两协议预期不同时按协议分别写，只写一份表示两者相同 |
-| `client_expect_note` | client 质量评委 | 判断 client 决策是否合理 |
-| `observed` | 报告读者 | 本次运行在边界上实际观测到的结果；不进入运行 |
+| `user_input` | agent | 业务请求原文 |
+| `client_conditions` | agent | **可选**：本用例特有的接受条件或客户端已知事实；没有时只用通用协商原则 |
+| `expect` | 判定器 | 原有：意图、validate、Task-T、协商、final_state |
+| `assert` | 判定器 | 原有：哪些维度参与判定 |
 
-通用决策原则不写在用例里：按批次固定一份（见 §7）。`nms_expect` 与 `client_expect_note` 运行时都不展示给 agent。无协商用例（45）没有 client 决策质量行，也不需要用例级指令。
+`client_conditions` 是唯一新增字段；其余字段、`assert` 与判定逻辑保持现状。通用协商原则不写在用例里：按批次固定一份（见 §7）。
 
 ---
 
-## 5. 旧的协商 round 怎么用
+## 5. 协商 round 文本（Q 列）怎么用
 
 现有用例里的协商 round 文本**不再作为运行输入**：
 
 ```mermaid
 flowchart LR
-  Q["现有用例中的协商 round 文本"] -->|整理| O["nms_expect / client_expect_note<br/>给评委"]
+  Q["现有用例中的协商 round 文本"] -->|保留| O["negotiation.rounds<br/>协商维度的期望文本"]
   Q -->|人工参考| H["复核时的期望说明"]
   Q -.->|禁止| B["作为运行输入"]
   Q -.->|禁止| A["直接拼成协议报文"]
@@ -398,12 +444,12 @@ flowchart TB
 
 | 判定项 | 通过条件 |
 |---|---|
-| 动作 | accept / reject 与 `client_expect_note` 一致 |
+| 动作 | accept / reject 与 `negotiation.rounds`（原 Q 列）的期望答复一致 |
 | 值可追溯 | 同意的值可追溯到请求、提案或决策依据；目标协商的修正值要能说明依据 |
 | 结构合法 | 协议层能产出合法内容 |
 | 发送前复核 | 未被 L4 拦截 |
 
-> client 决策失败**不等于**网管验收失败；两者分别记录，责任域分开。
+> client 决策失败**不等于**网管验收失败；两者分别记录，责任域分开。期望来源是现有的 `negotiation.rounds`（原 Q 列）与可选的 `client_conditions`，不新增字段。
 
 ---
 
@@ -426,11 +472,11 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  C["用例：nms_expect"] --> JN["网管评委"]
+  C["用例：expect<br/>（意图 / 协商 / validate / Task-T / final_state）"] --> JN["网管评委"]
   E["边界报文 / 状态 / 报告"] --> JN
   JN --> DN["网管验收判定（主）"]
 
-  CC["用例：client_expect_note"] --> JC["Client 质量评委"]
+  CC["用例：negotiation.rounds"] --> JC["Client 质量评委"]
   A["Agent 决策"] --> JC
   JC --> DC["client 决策质量（次）"]
 
@@ -447,6 +493,8 @@ flowchart TD
 | 45 | A2A-T | 是 | 未协商 | 三段分时目标 | 结构化 | 成立 | — |
 
 意图判定列取值：**结构化**（精确或归一化后全等）、**模型**（差异字段由判定模型判为意图相等）、**未判定**（无结构化副本或模型不可用，转人工）。
+
+判定列直接来自现有 `assert` 维度；`意图判定` 只是 `intent` 维度的结构化/模型标注，不新增判定维度。
 
 **责任域**：网管 / OSS 侧 / 测试侧 / 环境；“—”表示没有失败。
 
@@ -489,12 +537,12 @@ flowchart TB
 
 | 组件 | 属于 | 职责 |
 |---|---|---|
-| 用例库 | 测试侧 | 请求、可选用例级决策指令、网管期望、质量期望说明 |
-| 通用决策原则 | 测试侧 | 所有用例共享的默认决策规则；按批次固定一个版本 |
+| 用例库 | 测试侧 | `user_input`、可选的 `client_conditions`、`expect`、`assert` |
+| 通用协商原则 | 测试侧 | 所有用例共享的默认决策规则；按批次固定一个版本 |
 | 测试执行器 | 测试侧 | 按用例发起一次运行、提供输入、控制节奏（即“跑用例的程序”） |
 | 证据采集 | 测试侧 | 边界报文、任务状态（到 accepted）、推送 |
-| 网管评委 | 测试侧 | 按 `nms_expect` 判定网管行为 |
-| client 质量评委 | 测试侧 | 按 `client_expect_note` 判定 client 决策（参考决策依据） |
+| 网管评委 | 测试侧 | 按现有 `expect`（意图、协商、validate、Task-T、final_state）判定网管行为 |
+| client 质量评委 | 测试侧 | 按 `negotiation.rounds`（原 Q 列）判定 client 决策，参考 `client_conditions` |
 | 意图判定模型 | 测试侧配置 | 只在结构化与归一化后仍有差异时，判断差异字段是否意图相等 |
 | Client Agent | OSS 侧 | 理解请求与决策依据，做出决策 |
 | 条件检查器 | OSS 侧 | 回答提案或给定值是否可接受 |
@@ -523,8 +571,8 @@ flowchart TB
 
 | # | 问题 | 选项 | 本文建议 | 状态 |
 |---|---|---|---|---|
-| D1 | 网管验收的粒度 | 只看 accepted / 逐边界检查（受理、协商、最终意图）/ 两者 | 逐边界检查，到 accepted 为止 | 待评审 |
-| D2 | 网管期望怎么写 | 自然语言 `nms_expect` / 结构化条款 / 两者 | 自然语言，结构化仅作补充 | 待评审 |
+| D1 | 网管验收的粒度 | 只看 accepted / 逐边界检查（受理、协商、最终意图）/ 两者 | 复用现有断言维度逐项判定；真机批次只到 accepted | 已对齐（2026-11-23） |
+| D2 | 网管期望怎么写 | 自然语言 `nms_expect` / 结构化条款 / 两者 | 沿用现有 `expect`（意图、validate、Task-T、协商、final_state），不新增 `nms_expect` | 已对齐（2026-11-23） |
 | D3 | 提案内容是否要求“在客户可接受范围内” | 是 / 否，只要求协议与业务合法 | 否：客户底线是 OSS 侧私有信息，不能拿来判网管；客户是否接受由 client 质量表判定 | 待评审 |
 | D4 | client 决策质量是否进入主报告 | 主表 / 附表 / 不进报告 | 附表，单独统计 | 待评审（按当前方向） |
 | D5 | 条件检查器的查询范围 | 任意值 / 仅本轮提案 | 任意值，记录查询行为 | 待评审 |
@@ -532,10 +580,10 @@ flowchart TB
 | D7 | 拒绝理由是否披露精确底线 | 允许 / 不允许 / 策略开关 | 策略开关，默认不披露 | 待定 |
 | D8 | 网管评委与 client 评委是否同一套 | 分开 / 同一套 | 分开，口径独立 | 待评审 |
 | D9 | 条件未覆盖的提案怎么判 | 评委先判 / 人工 / 失败 | 评委先判，分歧交人工 | 待评审 |
-| D10 | 网管黑盒的观测范围 | 只边界报文 / 加日志/监控 / 加内部接口 | 只边界报文（黑盒），到 accepted 为止 | 待评审 |
-| D11 | 执行与完成是否纳入验收 | 否（当前不可观测）/ 后续扩展 | 否，本阶段只到 accepted | 待评审 |
+| D10 | 网管黑盒的观测范围 | 只边界报文 / 加日志/监控 / 加内部接口 | 只边界报文（黑盒），到 accepted 为止 | 已对齐（2026-11-23） |
+| D11 | 执行与完成是否纳入验收 | 否（当前不可观测）/ 后续扩展 | 否，本阶段只到 accepted；`final_state` 执行后只记录 | 已对齐（2026-11-23） |
 | D12 | 最终意图的观测来源 | client 最终值 / 网管结构化副本 / 优先网管副本 | 网管在 accepted 返回的结构化意图副本；无副本记“无判定依据” | 已对齐（2026-11-19） |
 | D13 | 判定模型的触发范围 | 任一差异 / 归一化后剩余差异 | 归一化后剩余差异，精确与归一化命中时不调用模型 | 已对齐（2026-11-19） |
 | D14 | 判定模型配置 | 复用协商模型 / 独立角色 | 独立角色：qwen3.8 协商、deepseek-v4.1-flash 判定；独立 endpoint/key，不回退 | 已对齐（2026-11-19） |
 | D15 | 判定结果抽样与一致率 | 现在做 / 后续再做 | 暂不做，先跑通结构化判定与差异字段判定 | 已对齐（2026-11-19） |
-| D16 | 客户决策指令是否分层 | 每个用例写全 / 通用原则 + 可选用例指令 | 分两层：通用决策原则全用例共享，用例级指令可选 | 已对齐（2026-11-23） |
+| D16 | 客户决策指令是否分层 | 每个用例写全 / 通用原则 + 可选用例指令 | 分两层：通用协商原则全用例共享，用例级指令可选 | 已对齐（2026-11-23） |
