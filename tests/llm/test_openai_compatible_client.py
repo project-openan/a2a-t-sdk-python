@@ -434,6 +434,111 @@ class OpenAIClientTest(unittest.TestCase):
         payload = sdk_client.chat.completions.create.call_args.kwargs
         self.assertNotIn("max_tokens", payload)
 
+    def test_usage_is_empty_when_the_provider_does_not_report_it(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=None,
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        response = client.structured(
+            messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"}
+        )
+
+        self.assertEqual(response.usage, {})
+
+    def test_usage_reads_the_openai_cached_tokens_field(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(
+                prompt_tokens=793,
+                completion_tokens=2,
+                total_tokens=795,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=768),
+            ),
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        response = client.structured(
+            messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"}
+        )
+
+        self.assertEqual(response.usage["cached"], 768)
+
+    def test_usage_reads_the_deepseek_native_cache_field(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="deepseek-chat",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=1,
+                total_tokens=11,
+                prompt_cache_hit_tokens=8,
+            ),
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        response = client.structured(
+            messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"}
+        )
+
+        self.assertEqual(response.usage["cached"], 8)
+
+    def test_usage_omits_cached_when_the_provider_does_not_report_it(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(prompt_tokens=11, completion_tokens=2, total_tokens=13),
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        response = client.structured(
+            messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"}
+        )
+
+        self.assertNotIn("cached", response.usage)
+
+    def test_usage_preserves_a_reported_cache_miss(self) -> None:
+        from a2a_t.llm.providers.openai import OpenAIClient
+
+        sdk_client = Mock()
+        sdk_client.chat.completions.create.return_value = SimpleNamespace(
+            model="gpt-4o-mini",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))],
+            usage=SimpleNamespace(
+                prompt_tokens=11,
+                completion_tokens=2,
+                total_tokens=13,
+                prompt_tokens_details={"cached_tokens": 0},
+            ),
+        )
+        client = OpenAIClient(build_config(base_url="https://api.example.test/v1"))
+        client._client = sdk_client
+
+        response = client.structured(
+            messages=[{"role": "user", "content": "extract"}], json_schema={"type": "object"}
+        )
+
+        self.assertEqual(response.usage["cached"], 0)
+
 
 class _ListHandler(logging.Handler):
     def __init__(self) -> None:

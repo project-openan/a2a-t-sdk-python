@@ -159,17 +159,23 @@ class OpenAIClient(LLMClient):
 
     def _parse_response(self, response: Any) -> LLMResponse:
         usage = getattr(response, "usage", None)
-        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
-        return LLMResponse(
-            content=self._extract_json_object_string(response),
-            model=str(getattr(response, "model", self._config.model)),
-            usage={
+        token_usage: dict[str, int] = {}
+        if usage is not None:
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            total_tokens = int(getattr(usage, "total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+            token_usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
-            },
+            }
+            cached_tokens = _cached_tokens(usage)
+            if cached_tokens is not None:
+                token_usage["cached"] = cached_tokens
+        return LLMResponse(
+            content=self._extract_json_object_string(response),
+            model=str(getattr(response, "model", self._config.model)),
+            usage=token_usage,
             metadata={"response": response},
         )
 
@@ -347,3 +353,24 @@ class OpenAIClient(LLMClient):
         if content is None:
             raise LLMRuntimeError(f"{self._config.provider} response did not include message content")
         return str(content)
+
+
+def _cached_tokens(usage: Any) -> int | None:
+    """Return the cached-prefix token count reported by the provider, when present.
+
+    OpenAI-compatible gateways report it as ``usage.prompt_tokens_details.cached_tokens``;
+    DeepSeek's native endpoint reports it as ``usage.prompt_cache_hit_tokens``. ``None`` means the
+    provider did not report a cache count (distinct from a reported miss of ``0``).
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        if isinstance(details, dict):
+            cached = details.get("cached_tokens")
+        else:
+            cached = getattr(details, "cached_tokens", None)
+        if isinstance(cached, int) and not isinstance(cached, bool):
+            return cached
+    hit = getattr(usage, "prompt_cache_hit_tokens", None)
+    if isinstance(hit, int) and not isinstance(hit, bool):
+        return hit
+    return None
