@@ -429,6 +429,22 @@ async def test_accepted_passes_when_a_task_exists(tmp_path: Path) -> None:
     }
 
 
+async def test_accepted_passes_when_the_task_moved_past_submitted(tmp_path: Path) -> None:
+    """WORKING is the other proof of acceptance for A2A-T."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    run.latest_task_state = "TASK_STATE_WORKING"
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+
+    result = await manager._judge_accepted(
+        run, item, CASES[1], True, timeout_seconds=1.0
+    )
+
+    assert result.status == STAGE_PASSED
+
+
 async def test_accepted_waits_for_a_success_state_not_identity_alone(tmp_path: Path) -> None:
     """An INPUT_REQUIRED Task carries identity but the negotiation is not finished."""
     manager = _manager(tmp_path, _FakeRuns(_finish))

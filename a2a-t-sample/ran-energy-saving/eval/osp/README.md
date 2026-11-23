@@ -336,6 +336,10 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
 并标 `final_state_derived: true`。A2A 侧原表没有给最终状态，不臆造，`final_state: null`，
 `assert.a2a.final_state: false`。
 
+**真机批次默认执行到 `accepted`**：`accepted` 指网管已明确受理、协商已结束（不再是 A2A 的
+`submitted` 文案；见架构文档 §2.1）。只回 `TASK_STATE_SUBMITTED`、既无成功回执也无结构化意图副本时
+记“等待受理”，不算 accepted；执行、完成、报告与业务效果当前不观测，`final_state` 的执行后状态只记录。
+
 ## 6. 原表冲突与 `assert` 开关
 
 | id | 情况 | 处理 |
