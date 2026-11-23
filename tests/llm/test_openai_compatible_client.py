@@ -76,6 +76,7 @@ class OpenAIClientTest(unittest.TestCase):
 
         self.assertIsInstance(client, OpenAIClient)
         self.assertIsInstance(client, LLMClient)
+        self.assertEqual(client.provider, "openai")
         openai_cls.assert_not_called()
 
     @patch("a2a_t.llm.providers.openai.OpenAI")
