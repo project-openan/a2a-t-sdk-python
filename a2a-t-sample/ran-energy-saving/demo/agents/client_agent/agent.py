@@ -19,11 +19,15 @@ from pathlib import Path
 from google.adk.agents import LlmAgent
 from google.adk.models.base_llm import BaseLlm
 from protocol.client_policy import ClientPolicy
+from shared.condition_checker import ConditionChecker
 from shared.model_factory import build_adk_model
 from shared.models import NegotiationDecision
 
 from demo.adk_fake_model import build_fake_model
-from demo.agents.client_agent.tools import make_get_client_policy
+from demo.agents.client_agent.tools import (
+    make_check_client_condition,
+    make_get_client_policy,
+)
 
 #: Agent name; the offline fake model keys its client script on this name.
 AGENT_NAME = "ran_energy_request_agent"
@@ -39,6 +43,7 @@ def build_client_agent(
     model: BaseLlm | None = None,
     *,
     policy: ClientPolicy | None = None,
+    condition_checker: ConditionChecker | None = None,
 ) -> LlmAgent:
     """Build the RAN energy-saving client decision agent.
 
@@ -47,8 +52,13 @@ def build_client_agent(
             model in offline mode, ``LiteLlm`` in live mode).
         policy: Client acceptance policy exposed by ``get_client_policy``; the default has no
             throughput floor and never reads the ambient configuration.
+        condition_checker: optional checker exposed by ``check_client_condition``; ``None`` keeps
+            the tool out of the agent.
     """
     resolved_policy = policy or ClientPolicy()
+    tools: list[object] = [make_get_client_policy(resolved_policy)]
+    if condition_checker is not None:
+        tools.append(make_check_client_condition(condition_checker))
     return LlmAgent(
         name=AGENT_NAME,
         model=(
@@ -61,7 +71,7 @@ def build_client_agent(
             "(with the corrected target in the accept content), reject, or abort."
         ),
         instruction=REQUEST_INSTRUCTION,
-        tools=[make_get_client_policy(resolved_policy)],
+        tools=tools,
         output_schema=NegotiationDecision,
     )
 

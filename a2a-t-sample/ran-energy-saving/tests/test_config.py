@@ -1552,6 +1552,17 @@ def test_the_judge_is_configured_only_with_both_model_and_endpoint(tmp_path: Pat
     assert _judge_configured(load_config(env_path=both)) is True
 
 
+def test_the_condition_checker_is_on_by_default_and_switchable(tmp_path: Path) -> None:
+    """The operator can turn the client-side checker off without touching the judge."""
+    assert load_config(env_path=tmp_path / "missing.env").client_condition_checker is True
+
+    env_file = _judge_env_file(
+        tmp_path / "off", "A2AT_SAMPLE_CLIENT_CONDITION_CHECKER=off\n"
+    )
+
+    assert load_config(env_path=env_file).client_condition_checker is False
+
+
 def test_the_judge_api_key_is_optional(tmp_path: Path) -> None:
     """An OpenAI-compatible local endpoint accepts requests without a key."""
     env_file = _judge_env_file(

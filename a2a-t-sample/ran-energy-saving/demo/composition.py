@@ -106,10 +106,20 @@ async def build_demo_runtime(
 
     resolved_config = replace(config, discovery=discovery)
     policy = ClientPolicy.from_config(config)
+    condition_checker = None
+    if config.judge_configured and config.client_condition_checker:
+        from shared.condition_checker import ConditionChecker
+        from shared.judge_llm import build_judge_client
+
+        condition_checker = ConditionChecker(build_judge_client(config))
 
     def client_agent_factory(model: Any) -> Any:
-        """Build the decision agent with this run's client policy."""
-        return build_client_agent(model, policy=policy)
+        """Build the decision agent with this run's policy and condition checker."""
+        return build_client_agent(
+            model,
+            policy=policy,
+            condition_checker=condition_checker,
+        )
 
     if pure_answers is not None:
         pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = _scripted_pure_answer(

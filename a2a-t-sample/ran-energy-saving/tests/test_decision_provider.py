@@ -200,6 +200,41 @@ def test_the_policy_tool_reports_the_current_decision_basis() -> None:
     }
 
 
+async def test_the_condition_tool_answers_from_the_current_basis() -> None:
+    """The tool queries any candidate value, not only the current proposal (D5)."""
+    from demo.agents.client_agent.agent import build_client_agent
+    from demo.agents.client_agent.tools import make_check_client_condition
+    from shared.condition_checker import ConditionChecker
+    from shared.models import DecisionBasis
+
+    class _Judge:
+        configured = True
+
+        async def complete_json(self, prompt: str, **kwargs: object) -> dict[str, object]:
+            del prompt, kwargs
+            return {"allowed": "no", "reason": "below the stated floor"}
+
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
+    provider.set_decision_basis(
+        DecisionBasis(client_conditions="Below 2Mbps is not acceptable.")
+    )
+    try:
+        tool = make_check_client_condition(ConditionChecker(_Judge()))
+        answer = await tool("Is 1Mbps acceptable?", "1Mbps")
+    finally:
+        provider.set_decision_basis(None)
+
+    assert answer == {"allowed": "no", "reason": "below the stated floor"}
+    agent = build_client_agent(
+        model=build_fake_model(),
+        condition_checker=ConditionChecker(_Judge()),
+    )
+    assert any(
+        getattr(tool, "__name__", "") == "check_client_condition"
+        for tool in agent.tools
+    )
+
+
 async def test_scripted_provider_returns_decisions_in_order_and_then_raises() -> None:
     provider = ScriptedDecisionProvider(
         (

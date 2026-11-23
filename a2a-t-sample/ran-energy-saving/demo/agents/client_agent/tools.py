@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 from protocol.client_policy import ClientPolicy
 from protocol.decision_provider import current_decision_basis
+from shared.condition_checker import ConditionChecker
 
 
 def make_get_client_policy(policy: ClientPolicy) -> Callable[[], dict[str, object]]:
@@ -51,4 +52,40 @@ def make_get_client_policy(policy: ClientPolicy) -> Callable[[], dict[str, objec
     return get_client_policy
 
 
-__all__ = ["make_get_client_policy"]
+def make_check_client_condition(
+    checker: ConditionChecker,
+) -> Callable[[str, str], object]:
+    """Build the ``check_client_condition`` ADK tool for one run's condition checker.
+
+    Args:
+        checker: client-side checker backed by the independent judge.
+
+    Returns:
+        A tool that answers any candidate value (not only the current proposal) from the
+        decision basis in force for this task.
+    """
+
+    async def check_client_condition(
+        question: str,
+        candidate_value: str,
+    ) -> dict[str, object]:
+        """Ask whether one candidate value is acceptable under the client's own conditions.
+
+        Use this for any value you are considering, including a value the current proposal does
+        not contain. Answer ``yes`` / ``no`` / ``unknown`` with a short reason. The call is
+        decision evidence; it does not itself change the negotiation.
+
+        Returns:
+            ``{"allowed": "yes|no|unknown", "reason": "..."}``.
+        """
+        answer = await checker.check(
+            question,
+            candidate_value,
+            basis=current_decision_basis(),
+        )
+        return answer.to_dict()
+
+    return check_client_condition
+
+
+__all__ = ["make_check_client_condition", "make_get_client_policy"]
