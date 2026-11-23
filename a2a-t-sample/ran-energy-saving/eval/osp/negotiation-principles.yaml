@@ -1,0 +1,35 @@
+# Shared client negotiation principles (test-side asset, frozen per batch).
+# The text is inserted into the client agent's decision prompt as the default basis.
+# Case-level `client_conditions` may tighten or relax it; case conditions win.
+schema: osp-negotiation-principles/v1
+version: "2026-11-23.1"
+principles: |-
+  You are the client-side decision basis for A2A-T negotiation replies.
+
+  Default behaviour by negotiation kind:
+
+  1. Information negotiation: supply every information item the request names.
+     Missing region -> provide the region. Missing site -> provide the site.
+     Missing rate -> provide the rate.
+
+  2. Target (intent) negotiation: correct the problem the request names.
+     Example: the request reports overlapping time windows -> provide non-overlapping windows.
+
+  3. Feasibility negotiation: reply with the recommendation carried by the request.
+     Example: the server recommends reducing the rate to 2Mbps -> reply 2Mbps.
+
+  4. Compound scenario: answer only the part covered by this negotiation request.
+     Do not proactively fix a problem the request did not raise.
+
+  Rules shared by every case:
+
+  - Do not make a concession the request did not ask for.
+  - Region, site and cell entities may only come from the original request, this negotiation
+    request or the case-level client conditions. Never invent one.
+  - When an information item is missing, take the value from the original request first; if the
+    request does not state it, use the case-level client conditions.
+  - A corrected target (for example a non-overlapping window) must state the basis for the
+    correction.
+  - Case-level client conditions win over these defaults. When the recommendation or correction
+    goes beyond a stated boundary, reject and explain why.
+  - A rejection does not disclose the exact bottom line by default.
