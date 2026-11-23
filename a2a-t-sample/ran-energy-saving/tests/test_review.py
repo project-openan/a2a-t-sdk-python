@@ -481,6 +481,32 @@ def test_scan_derives_the_nms_kind_from_the_declared_keys(tmp_path: Path) -> Non
     assert rows["batch-half"]["nmsSimDeclared"] is None
 
 
+def test_scan_keeps_the_persisted_intent_verdict(tmp_path: Path) -> None:
+    """Review must reuse the batch's model verdict instead of re-failing the residual."""
+    verdict = {
+        "status": "pass",
+        "method": "model",
+        "equal": True,
+        "reason": "",
+        "judgeModel": "judge-model",
+        "expectedSha256": "digest",
+        "residual": [],
+        "fields": [],
+    }
+    item = _evidence_item(intent_status="recorded")
+    item["intentVerdict"] = verdict
+    _write_batch(tmp_path, [item])
+
+    scan = scan_evidence(
+        runs_dir=tmp_path,
+        client_db_path=None,
+        cases={1: _case_document()},
+        days=2.0,
+    )
+
+    assert scan.observations[0]["evidence"]["intentVerdict"] == verdict
+
+
 def test_scan_skips_items_without_stages(tmp_path: Path) -> None:
     item = _evidence_item()
     del item["stages"]

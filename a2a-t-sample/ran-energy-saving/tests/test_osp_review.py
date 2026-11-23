@@ -12,6 +12,7 @@ from eval.osp.review import (
     VERDICT_PARTIAL,
     VERDICT_PASS,
     VERDICT_RECORDED,
+    _intent_verdict,
     case_signature,
     evidence_input_signature,
     judge_protocol,
@@ -135,6 +136,7 @@ def _evidence(
     trace: dict[str, object] | None = None,
     trace_id: str | None = None,
     accepted_status: str | None = None,
+    intent_verdict: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return one stored tester item (trimmed like the review corpus stores it)."""
     stages: dict[str, object] = {
@@ -169,7 +171,7 @@ def _evidence(
     resolved_trace_id = (
         trace_id if trace_id is not None else ("a" * 32 if batch is not None or trace is not None else None)
     )
-    return {
+    evidence: dict[str, object] = {
         "runId": run_id,
         "traceId": resolved_trace_id,
         "batch": batch if batch is not None else {},
@@ -181,6 +183,9 @@ def _evidence(
         "messages": messages or [],
         "interception": interception,
     }
+    if intent_verdict is not None:
+        evidence["intentVerdict"] = dict(intent_verdict)
+    return evidence
 
 
 def _dimension(judgement: Any, name: str) -> Any:
@@ -206,6 +211,143 @@ def test_a_changed_final_intent_fails() -> None:
     assert intent.status == VERDICT_FAIL
     assert [diff["path"] for diff in intent.diffs] == ["intent.Energy saving region"]
     assert judgement.status == VERDICT_FAIL
+
+
+def test_a_persisted_verdict_with_a_stale_expected_digest_is_ignored() -> None:
+    """An edited expectation invalidates the stored model verdict."""
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            server_intent=server,
+            intent_verdict={
+                "method": "model",
+                "status": "pass",
+                "expectedSha256": "stale-digest",
+            },
+        ),
+    )
+
+    assert _dimension(judgement, "intent").status == VERDICT_FAIL
+
+
+def test_a_persisted_model_mismatch_reports_only_the_failed_fields() -> None:
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+    path = "intent.Energy saving region"
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            server_intent=server,
+            intent_verdict={
+                "method": "model",
+                "status": "mismatch",
+                "fields": [{"path": path, "equal": False, "reason": "different region"}],
+                "residual": [{"path": path, "expected": INTENT["Energy saving region"], "observed": "OtherRegion"}],
+            },
+        ),
+    )
+
+    intent = _dimension(judgement, "intent")
+    assert intent.status == VERDICT_FAIL
+    assert [diff["path"] for diff in intent.diffs] == [path]
+    assert intent.diffs[0]["reason"] == "different region"
+
+
+def test_a_persisted_model_pass_wins_over_the_leaf_comparison() -> None:
+    """The batch already asked the model; the review must reuse that verdict, not re-fail it."""
+    server = dict(INTENT)
+    server["Energy saving region"] = "A2ATest-Region"
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            server_intent=server,
+            intent_verdict={
+                "method": "model",
+                "status": "pass",
+                "reason": "the same region, hyphenated",
+            },
+        ),
+    )
+
+    assert _dimension(judgement, "intent").status == VERDICT_PASS
+    assert judgement.status == VERDICT_PASS
+
+
+def test_a_persisted_model_mismatch_fails() -> None:
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            server_intent=server,
+            intent_verdict={"method": "model", "status": "mismatch", "reason": "another region"},
+        ),
+    )
+
+    intent = _dimension(judgement, "intent")
+    assert intent.status == VERDICT_FAIL
+    assert [diff["path"] for diff in intent.diffs] == ["intent.Energy saving region"]
+
+
+def test_a_persisted_unjudged_verdict_is_recorded() -> None:
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(
+            server_intent=server,
+            intent_verdict={"method": "unjudged", "status": "unjudged"},
+        ),
+    )
+
+    assert _dimension(judgement, "intent").status == VERDICT_RECORDED
+    assert judgement.status == VERDICT_PARTIAL
+
+
+def test_a_persisted_no_basis_verdict_is_missing() -> None:
+    judgement = judge_protocol(
+        _case(),
+        "a2a-t",
+        _evidence(intent_verdict={"method": "unjudged", "status": "no_basis"}),
+    )
+
+    assert _dimension(judgement, "intent").status == VERDICT_MISSING
+
+
+def test_intent_verdict_keeps_the_leaf_comparison_for_an_old_batch() -> None:
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+
+    verdict = _intent_verdict(INTENT, server, intent_verdict=None)
+
+    assert verdict.status == VERDICT_FAIL
+    assert [diff["path"] for diff in verdict.diffs] == ["intent.Energy saving region"]
+
+
+def test_intent_verdict_uses_the_persisted_verdict_without_recomputing() -> None:
+    server = dict(INTENT)
+    server["Energy saving region"] = "OtherRegion"
+
+    verdict = _intent_verdict(
+        INTENT,
+        server,
+        intent_verdict={"method": "model", "status": "pass", "reason": "same value"},
+    )
+
+    assert verdict.status == VERDICT_PASS
+    assert verdict.reason == "same value"
 
 
 def test_an_unjudgeable_intent_is_recorded_and_makes_the_task_partial() -> None:

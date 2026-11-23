@@ -1885,6 +1885,7 @@ async def _run_item_with_server_intent(
     nms_sim: bool = False,
     protocol: str = PROTOCOL_A2A_T,
     protocol_defaults: dict[str, dict[str, str]] | None = None,
+    judge: Any | None = None,
 ) -> CaseItem:
     """Run case 1 to ``final`` against a fake run carrying one downstream payload."""
 
@@ -1897,6 +1898,7 @@ async def _run_item_with_server_intent(
         _FakeRuns(builder),
         nms_sim=nms_sim,
         protocol_defaults=protocol_defaults,
+        judge=judge,
     )
     created = manager.create(
         case_ids=[1],
@@ -1911,22 +1913,56 @@ async def _run_item_with_server_intent(
     return manager._batches[batch_id].items[0]
 
 
+def _intent_judge_answer(
+    expected: Mapping[str, object],
+    observed: Mapping[str, object],
+    *,
+    equal: bool,
+) -> dict[str, object]:
+    """Return one intent-judge answer covering every residual field of this comparison."""
+    from eval.osp.compare import compare_intent
+
+    return {
+        "all_equal": equal,
+        "fields": [
+            {
+                "path": diff.path,
+                "equal": equal,
+                "reason": "same business value" if equal else "differs",
+            }
+            for diff in compare_intent(expected, observed)
+        ],
+    }
+
+
+def _clear_intent_judge_cache() -> None:
+    """Clear the process-wide intent-judge cache so each test owns its call counts."""
+    from eval.osp.intent_judge import clear_intent_judge_cache
+
+    clear_intent_judge_cache()
+
+
 async def test_the_intent_stage_judges_the_downstream_payload_not_the_sdk_extraction(
     tmp_path: Path,
 ) -> None:
     """The SDK extraction matches the case, but the server understood something else."""
+    expected = CASES[1]["expect"]["intent"]
+    payload = dict(expected)
+    payload["Operation type"] = "Modify"
+    payload["Energy saving region"] = "OtherRegion"
     item = await _run_item_with_server_intent(
         tmp_path,
-        {"Operation type": "Modify", "Energy saving region": "OtherRegion"},
+        payload,
+        judge=_StubJudge(_intent_judge_answer(expected, payload, equal=False)),
     )
 
     stage = item.stages["intent"]
     assert stage.status == STAGE_FAILED
-    assert stage.actual == {"Operation type": "Modify", "Energy saving region": "OtherRegion"}
+    assert stage.actual == payload
     assert any(diff["path"] == "intent.Energy saving region" for diff in stage.diffs)
     # A full flow no longer runs the SDK preflight, so there is no auxiliary SDK extraction.
     assert item.intent is None
-    assert item.server_intent == {"Operation type": "Modify", "Energy saving region": "OtherRegion"}
+    assert item.server_intent == payload
     assert item.intent_meta["source"] == "server"
     assert item.status == "failed"
 
@@ -2007,13 +2043,15 @@ async def test_a_direct_pure_a2a_run_judges_the_vendor_intent(tmp_path: Path) ->
 
 
 async def test_a_direct_pure_a2a_intent_mismatch_fails_the_stage(tmp_path: Path) -> None:
-    payload = dict(CASES[1]["expect"]["intent"])
+    expected = CASES[1]["expect"]["intent"]
+    payload = dict(expected)
     payload["Energy saving region"] = "OtherRegion"
     item = await _run_item_with_server_intent(
         tmp_path,
         payload,
         protocol=PROTOCOL_A2A,
         protocol_defaults=DIRECT_PURE_DEFAULTS,
+        judge=_StubJudge(_intent_judge_answer(expected, payload, equal=False)),
     )
 
     stage = item.stages["intent"]
@@ -2048,6 +2086,185 @@ async def test_a_pure_a2a_sim_intent_is_recorded_not_judged(tmp_path: Path) -> N
     )
 
     assert item.stages["intent"].status == STAGE_RECORDED
+
+
+async def test_exact_and_normalized_intents_pass_with_no_intent_judge_call(
+    tmp_path: Path,
+) -> None:
+    """Only a genuine residual needs the model; notation is decided structurally."""
+    expected = CASES[1]["expect"]["intent"]
+    judge = _StubJudge({"all_equal": False, "fields": []})
+    _clear_intent_judge_cache()
+
+    exact = await _run_item_with_server_intent(tmp_path / "exact", expected, judge=judge)
+    assert exact.stages["intent"].status == STAGE_PASSED
+    assert isinstance(exact.intent_verdict, Mapping)
+    assert exact.intent_verdict["method"] == "structured"
+    assert exact.intent_verdict["status"] == "pass"
+
+    normalized_payload = dict(expected)
+    normalized_payload["Energy saving region"] = " a2atestregion "
+    normalized = await _run_item_with_server_intent(
+        tmp_path / "normalized", normalized_payload, judge=judge
+    )
+    assert normalized.stages["intent"].status == STAGE_PASSED
+    assert isinstance(normalized.intent_verdict, Mapping)
+    assert normalized.intent_verdict["method"] == "structured"
+    region_row = next(
+        row
+        for row in normalized.intent_comparison()
+        if row["path"] == "intent.Energy saving region"
+    )
+    assert region_row["status"] == "changed"
+    assert region_row["verdict"] == "same"
+    assert judge.calls == 0
+
+
+async def test_a_residual_intent_gets_one_model_call_and_passes_when_equal(
+    tmp_path: Path,
+) -> None:
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    judge = _StubJudge(_intent_judge_answer(expected, observed, equal=True))
+    _clear_intent_judge_cache()
+
+    item = await _run_item_with_server_intent(tmp_path, observed, judge=judge)
+
+    assert item.stages["intent"].status == STAGE_PASSED
+    assert isinstance(item.intent_verdict, Mapping)
+    assert item.intent_verdict["method"] == "model"
+    assert item.intent_verdict["status"] == "pass"
+    assert judge.calls == 1
+
+
+async def test_a_residual_intent_fails_when_the_model_says_not_equal(tmp_path: Path) -> None:
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    judge = _StubJudge(_intent_judge_answer(expected, observed, equal=False))
+    _clear_intent_judge_cache()
+
+    item = await _run_item_with_server_intent(tmp_path, observed, judge=judge)
+
+    assert item.stages["intent"].status == STAGE_FAILED
+    assert item.status == "failed"
+    assert isinstance(item.intent_verdict, Mapping)
+    assert item.intent_verdict["method"] == "model"
+    assert item.intent_verdict["status"] == "mismatch"
+    assert judge.calls == 1
+
+
+async def test_a_residual_intent_without_a_judge_is_recorded_not_failed(tmp_path: Path) -> None:
+    """An unavailable judge is "unjudged", never a fabricated mismatch."""
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    _clear_intent_judge_cache()
+
+    item = await _run_item_with_server_intent(tmp_path, observed)
+
+    assert item.stages["intent"].status == STAGE_RECORDED
+    assert item.status == "partial"
+    assert item.needs_review is True
+    assert isinstance(item.intent_verdict, Mapping)
+    assert item.intent_verdict["method"] == "unjudged"
+    assert item.intent_verdict["status"] == "unjudged"
+
+
+async def test_an_unavailable_intent_judge_is_recorded_not_failed(tmp_path: Path) -> None:
+    from shared.judge_llm import JudgeUnavailable
+
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    judge = _StubJudge(JudgeUnavailable("judge endpoint is down"))
+    _clear_intent_judge_cache()
+
+    item = await _run_item_with_server_intent(tmp_path, observed, judge=judge)
+
+    assert item.stages["intent"].status == STAGE_RECORDED
+    assert item.status == "partial"
+    assert isinstance(item.intent_verdict, Mapping)
+    assert item.intent_verdict["status"] == "unjudged"
+
+
+async def test_an_invalid_intent_judge_answer_is_recorded_not_failed(tmp_path: Path) -> None:
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    judge = _StubJudge({"all_equal": True})  # missing the per-field verdicts
+    _clear_intent_judge_cache()
+
+    item = await _run_item_with_server_intent(tmp_path, observed, judge=judge)
+
+    assert item.stages["intent"].status == STAGE_RECORDED
+    assert item.status == "partial"
+    assert isinstance(item.intent_verdict, Mapping)
+    assert item.intent_verdict["status"] == "unjudged"
+
+
+async def test_an_assertion_off_intent_makes_no_judge_call(tmp_path: Path) -> None:
+    """A disabled intent assertion stays record-only and must not spend a model call."""
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    judge = _StubJudge(_intent_judge_answer(expected, observed, equal=True))
+    _clear_intent_judge_cache()
+
+    def builder(run: RunState) -> None:
+        _finish(run)
+        run.server_intent = observed
+
+    manager = _manager(tmp_path, _FakeRuns(builder), model_mode="live", judge=judge)
+    manager._catalog.get(1)["assert"]["intent"] = False
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert item.stages["intent"].status == STAGE_RECORDED
+    assert judge.calls == 0
+
+
+async def test_the_intent_verdict_is_persisted_in_the_snapshot(tmp_path: Path) -> None:
+    expected = CASES[1]["expect"]["intent"]
+    observed = dict(expected)
+    observed["Energy saving region"] = "OtherRegion"
+    judge = _StubJudge(_intent_judge_answer(expected, observed, equal=True))
+    _clear_intent_judge_cache()
+
+    def builder(run: RunState) -> None:
+        _finish(run)
+        run.server_intent = dict(observed)
+
+    manager = _manager(tmp_path, _FakeRuns(builder), judge=judge)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    finished = await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert isinstance(item.intent_verdict, Mapping)
+    assert item.to_dict()["intentVerdict"] == item.intent_verdict
+    assert finished["items"][0]["intentVerdict"] == item.intent_verdict
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish), judge=judge).get(batch_id)
+    assert reloaded is not None
+    assert reloaded["items"][0]["intentVerdict"] == item.intent_verdict
 
 
 async def test_the_serialized_intent_comparison_lists_every_nested_leaf(

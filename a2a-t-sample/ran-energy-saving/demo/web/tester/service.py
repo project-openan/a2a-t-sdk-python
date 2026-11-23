@@ -52,6 +52,7 @@ from eval.osp.followup import (
     is_blocked_case,
     original_dispatch_case,
 )
+from eval.osp.intent_judge import STATUS_MISMATCH, STATUS_PASS, judge_intent
 from eval.osp.principles import NegotiationPrinciples, load_principles
 from eval.osp.runner import (
     STAGE_ERROR,
@@ -252,6 +253,7 @@ _NO_EXPECTED_INTENT_MESSAGE: Final[str] = "用例没有期望意图，只记录�
 
 #: Message of a failed intent stage: the case asks what the server understood.
 _SERVER_INTENT_MISMATCH_MESSAGE: Final[str] = "服务端意图理解结果与期望不一致。"
+_INTENT_UNJUDGED_MESSAGE: Final[str] = "未判定，转人工复核。"
 
 #: Message of a failed full-flow Task-T stage: the run rendered a different Task-T.
 _TASK_T_MISMATCH_MESSAGE: Final[str] = "Task-T 与期望不一致。"
@@ -431,6 +433,12 @@ class CaseItem:
     #: Decision-quality appendix of an agent-authored A2A-T negotiation (P2). It never changes
     #: ``status``: the NMS acceptance verdict stays authoritative.
     client_quality: dict[str, object] | None = None
+    #: Final-intent verdict (P3): structured exact/normalized, or the model judge's reading of a
+    #: residual. Annotation only — the ``intent`` stage status stays the dimension verdict.
+    intent_verdict: dict[str, object] | None = None
+    #: A residual intent that no judge could decide is not green: it needs human review and makes
+    #: the item ``partial`` instead of ``passed``.
+    needs_review: bool = False
 
     def intent_comparison(self) -> list[dict[str, object]]:
         """Return the flattened expected-vs-server intent rows, empty when one side is absent."""
@@ -466,6 +474,8 @@ class CaseItem:
             "answer": self.answer,
             "interception": self.interception,
             "clientQuality": self.client_quality,
+            "intentVerdict": self.intent_verdict,
+            "needsReview": self.needs_review,
         }
 
 
@@ -1045,6 +1055,8 @@ class EvalBatchManager:
         item.answer = None
         item.interception = None
         item.client_quality = None
+        item.intent_verdict = None
+        item.needs_review = False
         batch.status = BATCH_RUNNING
         batch.cancel_requested = False
         batch.active_indices = []
@@ -2271,6 +2283,16 @@ class EvalBatchManager:
         # The export evidence does not depend on the metrics pipeline; collect it even when the
         # metrics builder fails, because a missing answer is worse than missing token counts.
         self._collect_run_evidence(item, run, case)
+        # The intent judge is async and owns the only model call this stage may make, so it runs
+        # after the synchronous evidence collection has frozen ``refs``/the raw request. A failure
+        # in the evidence/judging code must stay best effort, never turn the item into an error.
+        try:
+            await self._judge_server_intent(item, run, case)
+        except Exception:  # noqa: BLE001 - observation must not change the protocol result
+            _LOGGER.warning("tester intent judge failed for run %s", run.run_id, exc_info=True)
+            item.stages.setdefault(
+                "intent", StageResult(stage="intent", status=STAGE_RECORDED)
+            )
         try:
             metrics = build_run_metrics(
                 run_id=run.run_id,
@@ -2377,15 +2399,10 @@ class EvalBatchManager:
             item.intent_meta["rawRequest"] = raw_request
             item.intent_meta["normalizedText"] = run.normalized_request or raw_request
             # The arbitration intent is what the downstream understood, not our own extraction.
-            # ``item.intent`` keeps the SDK document as auxiliary evidence.
-            self._judge_server_intent(item, run, case)
+            # ``item.intent`` keeps the SDK document as auxiliary evidence. The server-intent
+            # stage is judged asynchronously in ``_collect_metrics``.
             self._judge_run_task_t(item, run, case)
             self._judge_run_validation(item, run, case)
-            item.intent_meta["source"] = (
-                "server"
-                if item.server_intent is not None
-                else ("sdk" if item.intent is not None else "")
-            )
             traceparent, traceparent_source = read_traceparent(
                 self._history_dir.parent if self._history_dir is not None else None,
                 run.run_id,
@@ -2396,7 +2413,7 @@ class EvalBatchManager:
         except Exception:  # noqa: BLE001 - the export evidence must never fail the item
             _LOGGER.warning("tester export evidence failed for run %s", run.run_id, exc_info=True)
 
-    def _judge_server_intent(
+    async def _judge_server_intent(
         self,
         item: CaseItem,
         run: RunState,
@@ -2409,9 +2426,18 @@ class EvalBatchManager:
         actual is the downstream's own payload (``TASK_STATE_SUBMITTED``); an SDK-only batch keeps
         the SDK extraction it already recorded. ``item.intent`` is only filled from an SDK stage,
         so the auxiliary SDK column never duplicates the server payload.
+
+        The comparison is structured first (exact/normalized notation) and only a genuine residual
+        reaches the independent judge — one model call for every residual field. A missing reading
+        or an unavailable judge stays record-only, never a fabricated pass or failure.
         """
         payload = run.server_intent
         item.server_intent = dict(payload) if isinstance(payload, Mapping) else None
+        item.intent_meta["source"] = (
+            "server"
+            if item.server_intent is not None
+            else ("sdk" if item.intent is not None else "")
+        )
         stage = item.stages.get("intent")
         if stage is None and item.protocol == PROTOCOL_A2A and item.server_intent is not None:
             # Pure A2A runs no SDK stages, but a direct vendor payload is still the downstream's
@@ -2426,17 +2452,23 @@ class EvalBatchManager:
             item.stages["intent"] = stage
         if stage is None or case is None:
             return
+        expected = item.refs.get("expectedIntent")
+        has_expected = isinstance(expected, Mapping) and bool(expected)
         if item.server_intent is None:
             # Our own RAN Agent accepts a Task without returning its reading; that is evidence
             # missing, not a wrong understanding, so it must not turn the row red.
+            verdict = await judge_intent(
+                expected if isinstance(expected, Mapping) else {},
+                None,
+                judge=None,
+            )
+            item.intent_verdict = verdict.to_dict()
             stage.status = STAGE_RECORDED
             stage.actual = None
             stage.diffs = []
             stage.message = _NO_SERVER_INTENT_MESSAGE
             return
         stage.actual = dict(item.server_intent)
-        expected = item.refs.get("expectedIntent")
-        has_expected = isinstance(expected, Mapping) and bool(expected)
         if has_expected and stage.expected is None:
             stage.expected = dict(expected)
         stage.diffs = (
@@ -2458,16 +2490,43 @@ class EvalBatchManager:
             stage.status = STAGE_RECORDED
             stage.message = _NO_EXPECTED_INTENT_MESSAGE
             return
-        diffs = stage.diffs
         if not _assertion_enabled(case, "", "intent"):
             stage.status = STAGE_RECORDED
             stage.message = _ASSERTION_OFF_MESSAGE
-        elif diffs:
-            stage.status = STAGE_FAILED
-            stage.message = _SERVER_INTENT_MISMATCH_MESSAGE
-        else:
+            return
+        assert isinstance(expected, Mapping)
+        verdict = await judge_intent(
+            expected,
+            item.server_intent,
+            judge=self._judge,
+            judge_label=self._judge_model_label,
+            user_request=item.run_request or str(item.refs.get("userInput") or ""),
+            proposal_summary=_intent_proposal_summary(run),
+        )
+        item.intent_verdict = verdict.to_dict()
+        if verdict.status == STATUS_PASS:
             stage.status = STAGE_PASSED
             stage.message = ""
+            # The model accepted the residual fields: the deterministic rows are no longer a
+            # failure, so the drawer must not keep showing them as differences.
+            stage.diffs = []
+        elif verdict.status == STATUS_MISMATCH:
+            stage.status = STAGE_FAILED
+            stage.message = _SERVER_INTENT_MISMATCH_MESSAGE
+            stage.diffs = [
+                {
+                    "path": str(field.get("path") or ""),
+                    "expected": "",
+                    "actual": "",
+                    "reason": str(field.get("reason") or ""),
+                }
+                for field in verdict.fields
+                if field.get("equal") is False
+            ] or stage.diffs
+        else:
+            stage.status = STAGE_RECORDED
+            stage.message = verdict.reason or _INTENT_UNJUDGED_MESSAGE
+            item.needs_review = bool(verdict.residual)
 
     def _judge_run_task_t(
         self,
@@ -2845,6 +2904,9 @@ class EvalBatchManager:
             return CASE_FAILED
         if any(status == STAGE_WAITING for status in statuses):
             return CASE_PARTIAL
+        if item.needs_review:
+            # A residual the judge could not decide is unproven, not green.
+            return CASE_PARTIAL
         if item.error:
             # The run failed, but its only red stage was recorded (assertion off / simulator
             # dialogue). A green row would overstate what the batch proved.
@@ -2975,6 +3037,8 @@ class EvalBatchManager:
                 answer=_optional_mapping(item.get("answer")),
                 interception=_optional_mapping(item.get("interception")),
                 client_quality=_optional_mapping(item.get("clientQuality")),
+                intent_verdict=_optional_mapping(item.get("intentVerdict")),
+                needs_review=bool(item.get("needsReview")),
             )
             for item in raw_items
             if isinstance(item, Mapping)
@@ -3169,6 +3233,16 @@ def _decision_text(value: object) -> str:
     if isinstance(filled, Mapping) and filled:
         return "; ".join(f"{key}={item_value}" for key, item_value in sorted(filled.items()))
     return ""
+
+
+def _intent_proposal_summary(run: RunState) -> str:
+    """Return the negotiation proposals of one run as business text for the intent judge."""
+    parts: list[str] = []
+    for proposal in run.proposals or []:
+        content = getattr(proposal, "content", "")
+        if isinstance(content, str) and content.strip():
+            parts.append(content.strip())
+    return "\n".join(parts)
 
 
 def _client_quality_observations(run: RunState) -> list[ClientQualityObservation]:

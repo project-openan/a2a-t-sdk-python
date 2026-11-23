@@ -376,6 +376,7 @@ def _observation(
         "stages": _stages(item.get("stages")),
         "intent": _mapping_or_none(item.get("intent")),
         "serverIntent": _mapping_or_none(item.get("serverIntent")),
+        "intentVerdict": _mapping_or_none(item.get("intentVerdict")),
         "intentMeta": _mapping(item.get("intentMeta")),
         "refs": _mapping(item.get("refs")),
         "interception": _interception(item.get("interception")),

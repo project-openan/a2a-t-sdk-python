@@ -45,6 +45,7 @@ from eval.osp.expectations import (
     slot_error_evidence,
 )
 from eval.osp.followup import followup_case, has_followup, is_blocked_case
+from eval.osp.intent_judge import expected_intent_digest
 from eval.osp.tracecheck import (
     TRACE_REASONS,
     Fidelity,
@@ -355,6 +356,8 @@ def _judge_intent(
     server = _mapping_or_none(evidence.get("serverIntent"))
     stage = _stage(evidence, "intent")
     status = str(stage.get("status") or "")
+    raw_verdict = evidence.get("intentVerdict")
+    persisted = raw_verdict if isinstance(raw_verdict, Mapping) else None
     if not expected:
         return DimensionResult(DIMENSION_INTENT, VERDICT_NOT_APPLICABLE)
     if protocol == A2A_T_PROTOCOL:
@@ -365,6 +368,10 @@ def _judge_intent(
                 expected=expected,
                 reason="未采集到下游服务端的结构化意图",
             )
+        if persisted is not None:
+            # The batch already decided this comparison (structured or model); reuse that verdict
+            # instead of re-failing a residual the model accepted.
+            return _intent_verdict(expected, server, intent_verdict=persisted)
         if status == "recorded":
             return DimensionResult(
                 DIMENSION_INTENT,
@@ -374,6 +381,8 @@ def _judge_intent(
                 reason=str(stage.get("message") or "该运行不能判定意图（模拟/代理/无直连 payload）"),
             )
         return _intent_verdict(expected, server)
+    if persisted is not None and server is not None:
+        return _intent_verdict(expected, server, intent_verdict=persisted)
     if status == "recorded":
         return DimensionResult(
             DIMENSION_INTENT,
@@ -398,8 +407,82 @@ def _judge_intent(
 def _intent_verdict(
     expected: Mapping[str, object],
     server: Mapping[str, object],
+    intent_verdict: Mapping[str, object] | None = None,
 ) -> DimensionResult:
-    """Compare the corpus reading with the downstream's reading, leaf by leaf."""
+    """Use the persisted intent verdict when present, else compare leaf by leaf.
+
+    New batches persist the tester's own final-intent verdict (structured exact/normalized, or the
+    model judge's answer for a residual). Re-judging a residual leaf-by-leaf would re-fail what the
+    model already accepted, so the stored verdict wins. Old batches have no such field and keep the
+    deterministic comparison.
+    """
+    if isinstance(intent_verdict, Mapping):
+        stored_digest = str(intent_verdict.get("expectedSha256") or "")
+        if stored_digest and stored_digest != expected_intent_digest(expected):
+            # The case expectation was edited after this run; the stored verdict describes the
+            # old expectation and must not be applied to the current one.
+            intent_verdict = None
+    if isinstance(intent_verdict, Mapping):
+        status = str(intent_verdict.get("status") or "")
+        reason = str(intent_verdict.get("reason") or "")
+        if status == "pass":
+            return DimensionResult(
+                DIMENSION_INTENT,
+                VERDICT_PASS,
+                expected=expected,
+                actual=server,
+                reason=reason,
+            )
+        if status == "mismatch":
+            fields = intent_verdict.get("fields")
+            residual = intent_verdict.get("residual")
+            failed: tuple[dict[str, object], ...] = ()
+            if isinstance(fields, list) and isinstance(residual, list):
+                reasons = {
+                    str(field.get("path") or ""): str(field.get("reason") or "")
+                    for field in fields
+                    if isinstance(field, Mapping) and field.get("equal") is False
+                }
+                failed = tuple(
+                    {
+                        "path": str(row.get("path") or ""),
+                        "expected": row.get("expected"),
+                        "actual": row.get("observed"),
+                        "reason": reasons.get(str(row.get("path") or ""), ""),
+                    }
+                    for row in residual
+                    if isinstance(row, Mapping)
+                    and str(row.get("path") or "") in reasons
+                )
+            diffs = failed or tuple(
+                row.to_dict()
+                for row in flatten_intent(expected, server)
+                if row.verdict != INTENT_ROW_SAME
+            )
+            return DimensionResult(
+                DIMENSION_INTENT,
+                VERDICT_FAIL,
+                expected=expected,
+                actual=server,
+                diffs=diffs,
+                reason=reason or f"{len(diffs)} 个意图字段与预期不一致",
+            )
+        if status == "no_basis":
+            return DimensionResult(
+                DIMENSION_INTENT,
+                VERDICT_MISSING,
+                expected=expected,
+                actual=server,
+                reason=reason or "未采集到下游服务端的结构化意图",
+            )
+        # ``unjudged`` and any unknown status: record it, never fabricate a pass or a failure.
+        return DimensionResult(
+            DIMENSION_INTENT,
+            VERDICT_RECORDED,
+            expected=expected,
+            actual=server,
+            reason=reason or "未判定，转人工复核",
+        )
     rows = [row.to_dict() for row in flatten_intent(expected, server)]
     diffs = tuple(row for row in rows if row.get("verdict") != INTENT_ROW_SAME)
     return DimensionResult(
