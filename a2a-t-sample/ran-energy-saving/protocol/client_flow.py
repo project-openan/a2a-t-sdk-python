@@ -124,6 +124,7 @@ from protocol.decision_provider import (
     DecisionTimeoutError,
     NegotiationDecisionProvider,
     ScriptedDecisionProvider,
+    current_decision_basis,
 )
 from protocol.grounding import UngroundedValue, find_ungrounded, grounding_reask_text, normalize
 from protocol.messages import (
@@ -2135,12 +2136,25 @@ async def _ensure_grounded_decision(
         return None, [
             UngroundedValue("information", "", "accept does not answer the requested items")
         ]
+    # The case's frozen principles and conditions are a legitimate value source: an information
+    # reply may name a region the case conditions state even when the request does not.
+    basis = current_decision_basis()
+    basis_text = (
+        "\n".join(
+            part
+            for part in (basis.principles, basis.client_conditions)
+            if part and part.strip()
+        )
+        if basis is not None
+        else ""
+    )
     filled = _accept_filled_values(kind, decision, baseline, intent_fields)
     ungrounded = _ungrounded_values(
         filled,
         baseline=baseline,
         intent_fields=intent_fields,
         propose=propose,
+        basis=basis_text,
     )
     if not ungrounded:
         return decision, []
@@ -2181,6 +2195,7 @@ async def _ensure_grounded_decision(
         # Verify against the real server proposal, not our corrective instruction: the reask text
         # repeats the ungrounded value and must never become its own grounding source.
         propose=propose,
+        basis=basis_text,
     )
     if still_ungrounded:
         return None, still_ungrounded
@@ -2193,6 +2208,7 @@ def _ungrounded_values(
     baseline: Mapping[str, object],
     intent_fields: Mapping[str, object] | None,
     propose: NegotiationProposeView,
+    basis: str = "",
 ) -> list[UngroundedValue]:
     """Run the grounding verifier with the flow's value shapes."""
     return find_ungrounded(
@@ -2200,6 +2216,7 @@ def _ungrounded_values(
         baseline=baseline,
         intent=intent_fields or {},
         propose=propose,
+        basis=basis,
     )
 
 

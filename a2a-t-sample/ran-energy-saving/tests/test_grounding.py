@@ -46,6 +46,32 @@ def test_an_unknown_operator_region_is_not_replaced_by_a_model_value() -> None:
     assert ungrounded == ["region"]
 
 
+def test_a_case_condition_grounds_a_region() -> None:
+    """The case's own client conditions are a legitimate decision source."""
+    ungrounded = find_ungrounded(
+        {**_BASELINE, "region": "A2ATestRegion"},
+        baseline=_BASELINE,
+        intent=_BASELINE,
+        propose=_propose("Region 'Songshanhu Administration Committee' is not recognized."),
+        basis="The only valid test region is A2ATestRegion.",
+    )
+
+    assert ungrounded == []
+
+
+def test_a_case_condition_grounds_a_recommended_rate() -> None:
+    filled = {**_BASELINE, "guaranteedThroughputTarget": "{00:00~07:00,2Mbps}"}
+    ungrounded = find_ungrounded(
+        filled,
+        baseline=_BASELINE,
+        intent=_BASELINE,
+        propose=_propose("Reduce the target to 2Mbps for the outage."),
+        basis="During the outage 2Mbps is acceptable.",
+    )
+
+    assert ungrounded == []
+
+
 def test_an_unchanged_operator_value_is_grounded() -> None:
     assert _fields() == []
 

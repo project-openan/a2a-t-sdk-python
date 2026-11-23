@@ -258,6 +258,7 @@ def find_ungrounded(
     baseline: Mapping[str, object],
     intent: Mapping[str, object],
     propose: NegotiationProposeView,
+    basis: str = "",
 ) -> list[UngroundedValue]:
     """Return every changed value of ``filled`` that no allowed source grounds.
 
@@ -284,6 +285,8 @@ def find_ungrounded(
         if _unchanged(name, value, baseline.get(name, "")):
             continue
         if _unchanged(name, value, intent.get(name, "")):
+            continue
+        if basis and _basis_contains(basis, value):
             continue
         if name == "operationType":
             if normalize(value) in regions.get(name, set()):
@@ -318,6 +321,9 @@ def find_ungrounded(
             if value_rates and value_rates <= server_target_rates(propose):
                 # The proposal offered the same rate in prose; the segment notation differs.
                 continue
+            if value_rates and value_rates <= _basis_rates(basis):
+                # The case's own conditions state the rate; they are a legitimate source.
+                continue
             ungrounded.append(
                 UngroundedValue(name, str(value), "target segments are not offered by the server")
             )
@@ -326,6 +332,17 @@ def find_ungrounded(
             continue
         ungrounded.append(UngroundedValue(name, str(value), "value is not grounded"))
     return ungrounded
+
+
+def _basis_contains(basis: str, value: object) -> bool:
+    """Return whether the decision basis names the value verbatim."""
+    text = normalize(value)
+    return bool(text) and text in normalize(basis)
+
+
+def _basis_rates(basis: str) -> set[str]:
+    """Return the rate values named by the decision basis."""
+    return {normalize(match.group(0)) for match in _RATE_VALUE.finditer(basis)} if basis else set()
 
 
 def grounding_reask_text(propose: NegotiationProposeView, ungrounded: list[UngroundedValue]) -> str:

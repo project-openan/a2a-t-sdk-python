@@ -2655,6 +2655,46 @@ async def test_a_model_entity_change_is_dropped_and_the_information_accept_is_re
     assert "region" in result.error
 
 
+async def test_a_case_condition_grounds_an_entity_change() -> None:
+    """The case's frozen conditions are a legitimate source for an information reply."""
+    from demo.adk_fake_model import build_fake_model
+    from demo.agents.client_agent.agent import build_client_agent
+    from protocol.decision_provider import AdkDecisionProvider
+    from shared.models import DecisionBasis
+
+    anchor = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
+    anchor.set_decision_basis(
+        DecisionBasis(client_conditions="The only valid region is A2ATestRegion.")
+    )
+    provider = _RegionChangeProvider()
+    transport = ScriptedTransport(
+        [
+            [propose_event("information", 1, content="Please provide the correct region name.")],
+            [end_event()],
+        ]
+    )
+    try:
+        result = await run_client_flow(
+            prompt_client=FakePromptClient(),
+            transport=transport,
+            user_request="The area is the Songshanhu Administration Committee.",
+            provider=provider,
+            language="en-US",
+            intent_fields={
+                "operationType": "Create",
+                "region": "Songshanhu Administration Committee",
+            },
+            # The tester's agent mode relies on the decision basis, not the process policy.
+            apply_client_policy=False,
+        )
+    finally:
+        anchor.set_decision_basis(None)
+
+    assert result.final_state != "decision_ungrounded"
+    assert provider.calls == 1
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+
+
 class _RejectingProvider:
     """A live automatic decision that refuses a feasible server alternative."""
 
