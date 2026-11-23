@@ -137,8 +137,9 @@ class OpenAIClient(LLMClient):
         }
         if temperature is not None:
             payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        resolved_max_tokens = max_tokens if max_tokens is not None else self._config.max_tokens
+        if resolved_max_tokens is not None:
+            payload["max_tokens"] = resolved_max_tokens
         # Java parity: the reasoning effort is only forwarded when configured with a non-blank
         # value, so non-reasoning models never receive the parameter.
         if self._config.reasoning_effort:
