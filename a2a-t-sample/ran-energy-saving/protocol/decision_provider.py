@@ -55,6 +55,16 @@ _USER_REQUEST: ContextVar[object] = ContextVar("a2at_decision_user_request", def
 _CONVERSATION_CONTEXT: ContextVar[object] = ContextVar("a2at_decision_conversation_context", default=_UNSET)
 _DECISION_BASIS: ContextVar[object] = ContextVar("a2at_decision_basis", default=_UNSET)
 
+
+def current_decision_basis() -> DecisionBasis | None:
+    """Return the decision basis of the current task, or ``None`` when none was set.
+
+    A decision tool runs inside the provider's turn, so it sees the same context variable the
+    prompt builder reads. This keeps the tool's answer consistent with the prompt.
+    """
+    value = _DECISION_BASIS.get()
+    return value if isinstance(value, DecisionBasis) else None
+
 #: ADK application name of the client decision agent.
 CLIENT_APP_NAME = "ran_energy_client"
 

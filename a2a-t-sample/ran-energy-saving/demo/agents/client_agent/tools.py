@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from protocol.client_policy import ClientPolicy
+from protocol.decision_provider import current_decision_basis
 
 
 def make_get_client_policy(policy: ClientPolicy) -> Callable[[], dict[str, object]]:
@@ -34,9 +35,18 @@ def make_get_client_policy(policy: ClientPolicy) -> Callable[[], dict[str, objec
         the fields the server owns, and the rules that follow from them.
 
         Returns:
-            ``{"min_throughput_mbps", "mutable_fields", "entity_fields", "rules"}``.
+            ``{"min_throughput_mbps", "mutable_fields", "entity_fields", "rules"}``, plus the
+            current batch's decision basis when one is set.
         """
-        return policy.view()
+        view = policy.view()
+        basis = current_decision_basis()
+        if basis is not None:
+            view["decision_basis"] = {
+                "principles_version": basis.principles_version,
+                "principles": basis.principles,
+                "case_conditions": basis.client_conditions or None,
+            }
+        return view
 
     return get_client_policy
 

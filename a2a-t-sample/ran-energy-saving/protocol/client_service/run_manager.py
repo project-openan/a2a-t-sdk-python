@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import logging
 import os
@@ -1687,6 +1688,22 @@ class RunManager:
                 run_id=run.run_id,
                 **runtime_kwargs,
             )
+            if run.negotiation_source == "agent":
+                # The decision basis is test-side input, not a protocol fact. Record the exact
+                # text and hash once per run so the client-quality judge can explain a decision.
+                run.emit_trace(
+                    kind="decision_basis_recorded",
+                    phase=PHASE_DISPATCH,
+                    title="Client decision basis",
+                    detail={
+                        "principlesVersion": run.principles_version,
+                        "principlesSha256": hashlib.sha256(
+                            run.negotiation_principles.encode("utf-8")
+                        ).hexdigest(),
+                        "principles": run.negotiation_principles,
+                        "clientConditions": run.client_conditions,
+                    },
+                )
             run.emit_trace(
                 kind="runtime_ready",
                 phase=PHASE_DISPATCH,

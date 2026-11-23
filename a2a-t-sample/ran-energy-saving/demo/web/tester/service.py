@@ -37,6 +37,7 @@ from eval.osp.compare import (
     flatten_intent,
     flatten_task_t,
 )
+from eval.osp.conditions import case_client_conditions
 from eval.osp.expectations import (
     match_negotiation_messages,
     negotiation_message_expectation,
@@ -1439,8 +1440,7 @@ class EvalBatchManager:
                 target_server_task_id = str(baseline["taskId"])
                 target_server_context_id = str(baseline["contextId"])
 
-        conditions = case.get("client_conditions")
-        resolved_conditions = conditions.strip() if isinstance(conditions, str) else ""
+        resolved_conditions = case_client_conditions(case)
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         mode = self._mode_for(batch, item.protocol)
         if agent_negotiation:

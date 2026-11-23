@@ -172,6 +172,34 @@ async def test_set_decision_basis_is_task_local_on_a_shared_provider() -> None:
     assert seen == {"a": "conditions-a", "b": "conditions-b"}
 
 
+def test_the_policy_tool_reports_the_current_decision_basis() -> None:
+    """The agent's own tool answers from the same basis the prompt carries."""
+    from demo.agents.client_agent.tools import make_get_client_policy
+    from protocol.client_policy import ClientPolicy
+    from protocol.decision_provider import current_decision_basis
+    from shared.models import DecisionBasis
+
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
+    provider.set_decision_basis(
+        DecisionBasis(
+            principles="Shared principles.",
+            principles_version="2026-11-23.1",
+            client_conditions="2Mbps is acceptable during the outage.",
+        )
+    )
+    try:
+        view = make_get_client_policy(ClientPolicy())()
+    finally:
+        provider.set_decision_basis(None)
+
+    assert current_decision_basis() is None
+    assert view["decision_basis"] == {
+        "principles_version": "2026-11-23.1",
+        "principles": "Shared principles.",
+        "case_conditions": "2Mbps is acceptable during the outage.",
+    }
+
+
 async def test_scripted_provider_returns_decisions_in_order_and_then_raises() -> None:
     provider = ScriptedDecisionProvider(
         (

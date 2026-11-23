@@ -44,6 +44,7 @@ from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import trace_stage
 
 from eval.osp.compare import Diff, compare_intent, compare_task_t
+from eval.osp.conditions import case_client_conditions
 from eval.osp.detail import render_failures
 from eval.osp.expectations import slot_error_evidence
 from eval.osp.followup import (
@@ -188,6 +189,8 @@ def load_cases(cases_dir: Path = DEFAULT_CASES_DIR) -> list[dict[str, Any]]:
         case_id = document.get("id")
         if not isinstance(case_id, int):
             raise ValueError(f"{path}: missing integer id")
+        # Fail at load time on a malformed optional field instead of at decision time.
+        case_client_conditions(document)
         document["_path"] = path
         cases.append(document)
     cases.sort(key=lambda item: item["id"])

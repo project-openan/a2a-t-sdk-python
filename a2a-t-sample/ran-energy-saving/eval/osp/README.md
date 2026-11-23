@@ -40,6 +40,8 @@ operation: Create
 tags: [rate-guarantee, negotiation-a2a]
 user_input: |
   ...
+client_conditions: |                 # 可选：本用例的客户端决策条件（不进 expect / assert）
+  停电期间可以接受到 2Mbps；低于 2Mbps 不能接受。
 expect:
   intent:
     "Operation type": Create
@@ -62,7 +64,7 @@ expect:
         expected: false
         expected_rounds: 0
         kinds: []
-        rounds: []                   # 客户端答复脚本（Q 列），不是服务端报文
+        rounds: []                   # 客户端答复的期望文本（Q 列）；agent 模式下不再驱动运行
         messages: []                 # 可选：服务端协商报文，按轮次给备选（见 5.4）
       final_state: task_completed    # 由 validate 派生
       final_state_derived: true
@@ -102,6 +104,11 @@ source:
   row: 2
 known_issue: null
 ```
+
+**`client_conditions`（可选）**：本用例特有的客户端接受边界或客户端已知事实，自然语言，与
+`user_input` 同级。它只作为 client agent 的决策输入和 client 决策质量评委的期望来源，不进入
+`expect`，不新增断言维度。不写时只用批次级通用协商原则（`negotiation-principles.yaml`）。
+必须是字符串；加载用例时校验，写错类型直接报错。
 
 ### 3.1 `expect.intent`
 
@@ -318,9 +325,10 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
   `Feasibility Negotiation Result` → `feasibility`，`Target Negotiation Result` → `target`。
   其中 9 条只有 `Feasibility Negotiation Result`，id 51 只有 `Information Negotiation Result`。
   解析器仍支持一条答复里同时出现多种协商，并按出现顺序生成决策。
-- **报文内容**：`negotiation.rounds` 是**客户端答复**（Q/P 列），用于驱动脚本；服务端报文用
-  `negotiation.messages` 另写，判定规则见 5.3 之后的 `negotiation.messages` 一节。没有该块时
-  只判轮数与类型。
+- **报文内容**：`negotiation.rounds` 是**客户端答复的期望文本**（Q/P 列）。批次
+  `negotiationSource=script` 时它仍作为脚本驱动运行；`negotiationSource=agent` 时不再进入运行，
+  只作为 client 决策质量评委的期望。服务端报文用 `negotiation.messages` 另写，判定规则见 5.3
+  之后的 `negotiation.messages` 一节。没有该块时只判轮数与类型。
 
 ### 5.5 最终状态
 
@@ -398,7 +406,9 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 一条用例 × 一个协议 = 一个运行项；协议可选 A2A-T / A2A。
 - 运行配置：`执行到`（intent / task_t / validate / send / negotiate / final）、审批、超时。
 - 前三阶段走 SDK-only runner；后三阶段走 `RunManager` 完整运行时。
-- 协商脚本化：A2A-T 用 Q 列答复生成 `NegotiationDecision`，A2A 用 P 列答复作为 `INPUT_REQUIRED` 答案。
+- 协商答复来源（批次级）：`script` 时 A2A-T 用 Q 列答复生成 `NegotiationDecision`，A2A 用 P 列
+  答复作为 `INPUT_REQUIRED` 答案；`agent` 时 A2A-T 由 client agent 现场决策，Q 列只作期望文本。
+  离线进程只能 `script`；`agent` 需要 live 决策模式。
 - 结果表按阶段显示 `passed / failed / recorded / error`，点“差异”看逐字段/逐段 expected/actual。
 - 带 `blocked_followup` 的拦截用例：全流程批次由 run 自己的 gate 拦截后在同一 run 内注入补充请求
   （`correction_applied`），run 的 `userRequest` 仍是原请求；SDK-only 批次由 runner 先跑拦截段、
