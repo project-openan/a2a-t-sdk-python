@@ -518,6 +518,7 @@ def create_app(
         pure_answers: Sequence[str] | None = None,
         prepared_task_t: str | None = None,
         prepared_filled: Mapping[str, object] | None = None,
+        pure_reply_source: str = "",
     ) -> ClientRuntimeLike:
         """Build the real client runtime with the app's source ``.env``."""
         from demo.composition import build_demo_runtime
@@ -535,6 +536,7 @@ def create_app(
             pure_answers=pure_answers,
             prepared_task_t=prepared_task_t,
             prepared_filled=prepared_filled,
+            pure_reply_source=pure_reply_source,
         )
 
     resolved_runs_dir = runs_dir or Path(config.runs_dir)
@@ -585,6 +587,7 @@ def create_app(
         env_path=env_path,
         judge=tester_judge,
         judge_model_label=config.judge_model if tester_judge is not None else "",
+        pure_hop=config.pure_hop,
     )
     run_console_routes = build_run_console_routes(
         runs=manager,

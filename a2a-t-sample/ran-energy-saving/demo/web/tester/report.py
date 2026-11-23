@@ -261,6 +261,11 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     if _has_client_quality(batch):
         _write_client_quality_sheet(workbook.create_sheet("client 决策质量"), batch)
 
+    # Under the agent source the recorded A2A reply is not replayed; export it next to the case
+    # so a reviewer can compare it with the agent's own decision without opening the YAML.
+    if _has_client_replies(batch):
+        _write_client_replies_sheet(workbook.create_sheet("客户端答复参考"), batch)
+
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
@@ -291,6 +296,43 @@ def _write_plan_sheet(sheet: Worksheet, plan: Mapping[str, Any]) -> None:
     for key, value in rows:
         sheet.append([key, value])
     _set_widths(sheet, (20, 64))
+
+
+def _has_client_replies(batch: Mapping[str, Any]) -> bool:
+    """Return whether an agent batch recorded A2A replies worth showing as reference text."""
+    if batch.get("negotiationSource") != "agent":
+        return False
+    items = batch.get("items")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        refs = item.get("refs")
+        replies = refs.get("clientReplies") if isinstance(refs, Mapping) else None
+        if isinstance(replies, list) and replies:
+            return True
+    return False
+
+
+def _write_client_replies_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> None:
+    """Write the recorded A2A (P-column) replies that the agent source did not replay."""
+    sheet.append(["用例编号", "协议", "轮次", "记录答复"])
+    _style_header(sheet)
+    items = batch.get("items")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        refs = item.get("refs")
+        replies = refs.get("clientReplies") if isinstance(refs, Mapping) else None
+        for index, reply in enumerate(replies if isinstance(replies, list) else [], start=1):
+            sheet.append(
+                [
+                    item.get("caseId", ""),
+                    item.get("protocol", ""),
+                    index,
+                    _cell(reply),
+                ]
+            )
+    _set_widths(sheet, (12, 10, 8, 96))
 
 
 def _has_client_quality(batch: Mapping[str, Any]) -> bool:

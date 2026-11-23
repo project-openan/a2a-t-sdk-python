@@ -12,7 +12,7 @@ from demo.pure_auto import (
     build_auto_pure_answer,
 )
 from protocol.client_policy import ClientPolicy
-from shared.models import NegotiationDecision, NegotiationProposeView
+from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 
 
 class _Provider:
@@ -22,6 +22,7 @@ class _Provider:
         self.decision = decision
         self.calls: list[str] = []
         self.request_text = ""
+        self.decision_basis: DecisionBasis | None = None
 
     async def respond(
         self,
@@ -34,6 +35,9 @@ class _Provider:
 
     def set_user_request(self, request_text: str | None) -> None:
         self.request_text = request_text or ""
+
+    def set_decision_basis(self, basis: DecisionBasis | None) -> None:
+        self.decision_basis = basis
 
     def grounding_text(self) -> str:
         return self.request_text
@@ -151,6 +155,84 @@ async def test_a_question_that_states_a_plan_keeps_the_plain_affirmative() -> No
     text = await answer(_event("Reduce the throughput target from 10Mbps to 2Mbps; confirm it."))
 
     assert text == "Accepted. Please proceed."
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_skips_the_deterministic_plan() -> None:
+    """The agent source must author the answer; the concession plan would decide instead."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(
+        provider, ClientPolicy(), apply_client_policy=False
+    )
+    answer.set_user_request(
+        "Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. "
+        "ensuring user experience for 720p video."
+    )
+
+    text = await answer(_event())
+
+    assert text == "The region is A2ATestRegion."
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_case_condition_grounds_a_pure_answer() -> None:
+    """The case's own conditions are a legitimate source for the free-text reply."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_decision_basis(
+        DecisionBasis(
+            principles_version="test",
+            client_conditions="The only valid test region is A2ATestRegion.",
+        )
+    )
+    answer.set_user_request("Create an energy saving task.")
+
+    text = await answer(
+        _event("The region name is missing. Please provide the correct region name.")
+    )
+
+    assert text == "The region is A2ATestRegion."
+    assert provider.decision_basis is not None
+    assert provider.decision_basis.client_conditions.startswith("The only valid")
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_does_not_apply_the_client_floor() -> None:
+    """A2A-T agent mode skips the process policy; the pure hop must match it."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="answer",
+        filled_params={"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+    )
+    question = "Reduce the target to {08:00~18:00,2Mbps}."
+    strict = build_auto_pure_answer(_Provider(decision), ClientPolicy(min_throughput_mbps=20))
+    strict.set_user_request("guarantee 10Mbps during the outage")
+    free = build_auto_pure_answer(
+        _Provider(decision),
+        ClientPolicy(min_throughput_mbps=20),
+        apply_client_policy=False,
+    )
+    free.set_user_request("guarantee 10Mbps during the outage")
+
+    assert await free(_event(question)) == (
+        "Set the guaranteed throughput targets: {08:00~18:00,2Mbps}."
+    )
+    assert await strict(_event(question)) != (
+        "Set the guaranteed throughput targets: {08:00~18:00,2Mbps}."
+    )
 
 
 def test_the_answer_object_exposes_the_runtime_hooks() -> None:

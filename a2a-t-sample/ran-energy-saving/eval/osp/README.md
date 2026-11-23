@@ -326,9 +326,11 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
   其中 9 条只有 `Feasibility Negotiation Result`，id 51 只有 `Information Negotiation Result`。
   解析器仍支持一条答复里同时出现多种协商，并按出现顺序生成决策。
 - **报文内容**：`negotiation.rounds` 是**客户端答复的期望文本**（Q/P 列）。批次
-  `negotiationSource=script` 时它仍作为脚本驱动运行；`negotiationSource=agent` 时不再进入运行，
-  只作为 client 决策质量评委的期望。服务端报文用 `negotiation.messages` 另写，判定规则见 5.3
-  之后的 `negotiation.messages` 一节。没有该块时只判轮数与类型。
+  `negotiationSource=script` 时它仍作为脚本驱动运行；`negotiationSource=agent` 时两个协议都
+  不再回放该列，由同一个 client agent（同一份冻结原则 + 用例 `client_conditions`）现场决策，
+  该列只作参考：A2A 的 P 列会导出到报告的「客户端答复参考」sheet，服务端报文
+  `negotiation.messages` 仍是协商过程的 oracle。判定规则见 5.3 之后的
+  `negotiation.messages` 一节。没有该块时只判轮数与类型。
 
 ### 5.5 最终状态
 
@@ -411,8 +413,13 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 运行配置：`执行到`（intent / task_t / validate / send / negotiate / final）、审批、超时。
 - 前三阶段走 SDK-only runner；后三阶段走 `RunManager` 完整运行时。
 - 协商答复来源（批次级）：`script` 时 A2A-T 用 Q 列答复生成 `NegotiationDecision`，A2A 用 P 列
-  答复作为 `INPUT_REQUIRED` 答案；`agent` 时 A2A-T 由 client agent 现场决策，Q 列只作期望文本。
+  答复作为 `INPUT_REQUIRED` 答案；`agent` 时两个协议都由同一个 client agent 现场决策（A2A-T
+  与 A2A 使用同一份冻结原则和 `client_conditions`，并同样跳过 client policy 的自动改写），
+  Q/P 列只作期望文本，P 列另导出到「客户端答复参考」sheet。
   离线进程只能 `script`；`agent` 需要 live 决策模式。
+- 纯 A2A 的 `agent` 答复覆盖**直连 RAN Agent** 和**直连 NMS**；已废弃的 OSS 代理 hop
+  （`A2AT_SAMPLE_PURE_HOP=oss`）暂不支持 `agent`，批次创建时明确报错（该 hop 待评估删除）。
+- A2A 的轮次/类型/最终状态期望读取用例自己的 `a2a` 块，不再套用 `a2a-t` 块。
 - 结果表按阶段显示 `passed / failed / recorded / error`，点“差异”看逐字段/逐段 expected/actual。
 - 带 `blocked_followup` 的拦截用例：全流程批次由 run 自己的 gate 拦截后在同一 run 内注入补充请求
   （`correction_applied`），run 的 `userRequest` 仍是原请求；SDK-only 批次由 runner 先跑拦截段、

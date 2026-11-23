@@ -461,6 +461,35 @@ def test_the_client_quality_appendix_is_exported_as_its_own_sheet() -> None:
     assert row["理由"] == "the accepted rate is 5Mbps instead of 2Mbps"
 
 
+def test_the_agent_pure_reply_reference_is_exported_as_its_own_sheet() -> None:
+    """The P column is not lost when the agent authors the A2A reply: it stays as reference."""
+    batch = _snapshot()
+    batch["negotiationSource"] = "agent"
+    batch["items"][0]["protocol"] = "a2a"
+    batch["items"][0]["refs"] = {
+        "clientReplies": ["The region is A2ATestRegion.", "The target is 10Mbps."]
+    }
+
+    workbook = load_workbook(BytesIO(write_report(batch)))
+
+    assert "客户端答复参考" in workbook.sheetnames
+    rows = list(workbook["客户端答复参考"].iter_rows(values_only=True))
+    assert rows[0] == ("用例编号", "协议", "轮次", "记录答复")
+    assert rows[1] == (1, "a2a", 1, "The region is A2ATestRegion.")
+    assert rows[2] == (1, "a2a", 2, "The target is 10Mbps.")
+
+
+def test_a_script_batch_does_not_export_the_reply_reference() -> None:
+    """The script source replays P; exporting it again would duplicate the case."""
+    batch = _snapshot()
+    batch["negotiationSource"] = "script"
+    batch["items"][0]["refs"] = {"clientReplies": ["The region is A2ATestRegion."]}
+
+    workbook = load_workbook(BytesIO(write_report(batch)))
+
+    assert "客户端答复参考" not in workbook.sheetnames
+
+
 def test_the_batch_plan_is_exported_as_its_own_sheet() -> None:
     """One batch's models, principles version and environment must travel with the report."""
     batch = _snapshot()

@@ -28,12 +28,16 @@ def _sanitize(
     question: str = "Please provide the correct region name.",
     kind: str = "information",
     policy: ClientPolicy | None = None,
+    basis: str = "",
+    apply_client_policy: bool = True,
 ) -> tuple[NegotiationDecision | None, list[str]]:
     return sanitize_pure_decision(
         decision,
         request_text=request_text,
         propose=_propose(question, kind=kind),
         policy=policy or ClientPolicy(),
+        basis=basis,
+        apply_client_policy=apply_client_policy,
     )
 
 
@@ -50,6 +54,70 @@ def test_a_region_the_operator_stated_is_kept() -> None:
     assert decision is not None
     assert decision.filled_params == {"region": "A2ATestRegion"}
     assert notes == []
+
+
+def test_a_case_condition_grounds_a_region() -> None:
+    """The case's own conditions are a legitimate source, as in the A2A-T grounding."""
+    decision, notes = _sanitize(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        ),
+        request_text="Create an energy saving task.",
+        basis="The only valid test region is A2ATestRegion.",
+    )
+
+    assert decision is not None
+    assert decision.filled_params == {"region": "A2ATestRegion"}
+    assert notes == []
+
+
+def test_a_case_condition_rate_grounds_the_target_segments() -> None:
+    decision, notes = _sanitize(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+        ),
+        request_text="guarantee 10Mbps during the outage",
+        basis="During the outage 2Mbps is acceptable.",
+    )
+
+    assert decision is not None
+    assert decision.filled_params == {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"}
+    assert notes == []
+
+
+def test_agent_mode_keeps_a_rate_below_the_client_floor() -> None:
+    """The A2A-T agent mode skips the process policy; the pure hop must match it."""
+    policy = ClientPolicy(min_throughput_mbps=20)
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="answer",
+        filled_params={"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+    )
+    question = "Reduce the target to {08:00~18:00,2Mbps}."
+
+    strict, _ = _sanitize(
+        decision,
+        request_text="guarantee 10Mbps during the outage",
+        question=question,
+        kind="feasibility",
+        policy=policy,
+    )
+    free, _ = _sanitize(
+        decision,
+        request_text="guarantee 10Mbps during the outage",
+        question=question,
+        kind="feasibility",
+        policy=policy,
+        apply_client_policy=False,
+    )
+
+    assert strict is None
+    assert free is not None
+    assert free.filled_params == {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"}
 
 
 def test_an_invented_region_leaves_nothing_to_answer() -> None:

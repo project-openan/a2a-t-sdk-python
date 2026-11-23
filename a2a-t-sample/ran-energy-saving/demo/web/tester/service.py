@@ -5,10 +5,12 @@ A batch is a list of ``(case, protocol)`` items. Each item runs the SDK-owned st
 (``send`` / ``negotiate`` / ``final``) through the shared :class:`RunManager`. The case YAML is the
 source of truth; the Excel workbook is no longer an input.
 
-Negotiation is scripted per case:
+The batch's reply source decides who authors a negotiation answer, identically on both protocols:
 
-* A2A-T replays the Q-column Task-T replies as ``NegotiationDecision`` objects.
-* A2A replays the P-column OSS answers as the pure ``INPUT_REQUIRED`` answers.
+* ``script`` — A2A-T replays the Q-column Task-T replies as ``NegotiationDecision`` objects and
+  A2A replays the P-column answers as the pure ``INPUT_REQUIRED`` answers.
+* ``agent`` — one live client agent, with the same frozen principles and case conditions, decides
+  both; Q and P become reference text (P is exported) and the server dialogue stays the oracle.
 
 A Modify A2A-T item first seeds a baseline Create task, then runs the Modify request against it.
 """
@@ -69,7 +71,12 @@ from eval.osp.runner import (
 from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
 from protocol.run_metrics import build_run_metrics
-from shared.config import DISCOVERY_NMS, MODEL_MODE_LIVE, MODEL_MODE_OFFLINE
+from shared.config import (
+    DISCOVERY_NMS,
+    MODEL_MODE_LIVE,
+    MODEL_MODE_OFFLINE,
+    PURE_HOP_OSS,
+)
 from shared.models import NegotiationDecision
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
@@ -430,8 +437,8 @@ class CaseItem:
     #: Set by an operator cancelling this item alone. Transient: never persisted, and reset by a
     #: rerun. The item's outcome is the persisted ``status`` once it unwinds.
     cancel_requested: bool = False
-    #: Decision-quality appendix of an agent-authored A2A-T negotiation (P2). It never changes
-    #: ``status``: the NMS acceptance verdict stays authoritative.
+    #: Decision-quality appendix of an agent-authored negotiation (either protocol; P2). It never
+    #: changes ``status``: the NMS acceptance verdict stays authoritative.
     client_quality: dict[str, object] | None = None
     #: Final-intent verdict (P3): structured exact/normalized, or the model judge's reading of a
     #: residual. Annotation only — the ``intent`` stage status stays the dimension verdict.
@@ -553,6 +560,7 @@ class EvalBatchManager:
         env_path: Path | None = None,
         judge: Any | None = None,
         judge_model_label: str = "",
+        pure_hop: str = "",
     ) -> None:
         self._runs = runs
         self._catalog = catalog
@@ -577,6 +585,9 @@ class EvalBatchManager:
         #: Independent judge of the decision-quality appendix (P2); ``None`` leaves it unjudged.
         self._judge = judge
         self._judge_model_label = judge_model_label
+        #: Deployment hop of a standard-A2A run. ``oss`` is the deprecated proxy: it cannot host
+        #: an agent-authored reply, because that answer would measure the proxy, not the client.
+        self._pure_hop = pure_hop
         #: One SDK client per model mode: a live batch must not reuse the offline scripted client.
         self._prompt_clients: dict[str, Any] = {}
         #: Idle clients per model mode, used only by the concurrent path. Each pool slot owns one
@@ -661,6 +672,7 @@ class EvalBatchManager:
             raise ValueError(
                 "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
             )
+        self._validate_pure_hop(resolved_negotiation_source, selected_protocols)
         items: list[CaseItem] = []
         # Round-major expansion: the first round keeps the exact order a single-pass batch has.
         for round_index in range(1, resolved_rounds + 1):
@@ -740,6 +752,7 @@ class EvalBatchManager:
         resolved_negotiation_source = self._validate_negotiation_source(
             negotiation_source or default_source, resolved_decision_mode
         )
+        self._validate_pure_hop(resolved_negotiation_source, [protocol])
         principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
         item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
@@ -784,6 +797,24 @@ class EvalBatchManager:
             if decision_mode is not None and decision_mode != DECISION_MODE_LIVE:
                 raise ValueError("agent 协商答复需要 live 决策模式。")
         return negotiation_source
+
+    def _validate_pure_hop(
+        self, negotiation_source: str, protocols: Sequence[str]
+    ) -> None:
+        """Refuse an agent-authored A2A reply behind the deprecated OSS proxy hop.
+
+        The agent reply must be the client's own decision. Behind the proxy the recorded answer is
+        relayed by the OSS Agent, so the run would measure the proxy rather than the client. The
+        proxy hop is kept only for the recorded dialogue and is slated for removal.
+        """
+        if (
+            negotiation_source == NEGOTIATION_SOURCE_AGENT
+            and PROTOCOL_A2A in protocols
+            and self._pure_hop == PURE_HOP_OSS
+        ):
+            raise ValueError(
+                "纯 A2A 的 OSS 代理 hop 不支持 agent 协商答复；请改用直连 RAN Agent 或直连 NMS。"
+            )
 
     def _load_principles(self, version: str | None) -> NegotiationPrinciples:
         """Load the shared principles frozen for one batch."""
@@ -1409,20 +1440,22 @@ class EvalBatchManager:
         defaults = self._protocol_defaults.get(runtime_protocol, {})
         transport = defaults.get("transport", "sse")
         discovery = defaults.get("discovery", "direct")
-        negotiation_expected = _negotiation_expected(case, PROTOCOL_A2A_T)
-        # An agent-authored tester reply is decided live: the Q column is only an expectation, so
-        # neither a decision script nor the "empty Q column" gate applies to it.
+        negotiation_expected = _negotiation_expected(case, item.protocol)
+        # An agent-authored tester reply is decided live on either protocol: the Q/P column is
+        # only an expectation, so neither a reply script nor the "empty reply column" gate applies.
         agent_negotiation = (
-            runtime_protocol == RUNTIME_A2A_T
-            and negotiation_expected
-            and batch.negotiation_source == NEGOTIATION_SOURCE_AGENT
+            negotiation_expected and batch.negotiation_source == NEGOTIATION_SOURCE_AGENT
         )
         decisions = (
             a2at_decisions(case)
             if runtime_protocol == RUNTIME_A2A_T and not agent_negotiation
             else []
         )
-        answers = pure_answers(case) if runtime_protocol == PROTOCOL_PURE else []
+        answers = (
+            pure_answers(case)
+            if runtime_protocol == PROTOCOL_PURE and not agent_negotiation
+            else []
+        )
         reply_error = (
             None
             if agent_negotiation
@@ -2337,7 +2370,11 @@ class EvalBatchManager:
             return
         expect = case.get("expect")
         protocols = expect.get("protocols") if isinstance(expect, Mapping) else None
-        protocol_block = protocols.get(PROTOCOL_A2A_T) if isinstance(protocols, Mapping) else None
+        # A pure item is judged against its own A2A block; reading the A2A-T block would export
+        # another protocol's round count and final state.
+        protocol_block = (
+            protocols.get(item.protocol) if isinstance(protocols, Mapping) else None
+        )
         block = protocol_block if isinstance(protocol_block, Mapping) else {}
         negotiation = block.get("negotiation")
         negotiation_block = negotiation if isinstance(negotiation, Mapping) else {}
@@ -2361,6 +2398,11 @@ class EvalBatchManager:
             "expectedRounds": int(negotiation_block.get("expected_rounds") or 0),
             "expectedKinds": list(negotiation_block.get("kinds") or []),
             "expectedFinalState": block.get("final_state"),
+            # The recorded A2A client reply (P column). Under the agent source it is not replayed;
+            # it stays in the export as the reference the agent's own answer is reviewed against.
+            "clientReplies": (
+                pure_answers(case) if item.protocol == PROTOCOL_A2A else []
+            ),
         }
         stage = item.stages.get("intent")
         # Only the A2A-T SDK stage is our own extraction. A pure-A2A intent stage holds the
@@ -3067,6 +3109,14 @@ class EvalBatchManager:
             else:
                 loaded_version = loaded_principles.version
                 loaded_text = loaded_principles.text
+        loaded_protocols = [str(value) for value in document.get("protocols", [])]
+        if (
+            loaded_source == NEGOTIATION_SOURCE_AGENT
+            and PROTOCOL_A2A in loaded_protocols
+            and self._pure_hop == PURE_HOP_OSS
+        ):
+            # A batch persisted for the deprecated proxy hop cannot author an agent reply here.
+            loaded_source = NEGOTIATION_SOURCE_SCRIPT
         batch = _Batch(
             batch_id=str(document.get("batchId") or batch_id),
             case_ids=[int(value) for value in document.get("caseIds", []) if isinstance(value, int)],

@@ -1675,6 +1675,10 @@ class RunManager:
             if run.prepared_task_t:
                 runtime_kwargs["prepared_task_t"] = run.prepared_task_t
                 runtime_kwargs["prepared_filled"] = run.prepared_filled
+            if run.protocol == PROTOCOL_PURE and run.negotiation_source == "agent":
+                # The runtime factory must build an agent-backed pure answer instead of the
+                # recorded/deterministic one; this is test-side input, not a protocol fact.
+                runtime_kwargs["pure_reply_source"] = "agent"
             run.runtime = await self._runtime_factory(
                 # This manager keeps an incomplete remote Task active in the background, so the
                 # NMS transport may hand the task over after a short silence instead of waiting

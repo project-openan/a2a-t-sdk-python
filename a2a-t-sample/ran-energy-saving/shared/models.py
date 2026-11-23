@@ -36,6 +36,14 @@ class DecisionBasis:
     principles_version: str = ""
     client_conditions: str = ""
 
+    def grounding_text(self) -> str:
+        """Return both layers as one text a deterministic grounding check can search."""
+        return "\n".join(
+            part
+            for part in (self.principles, self.client_conditions)
+            if part and part.strip()
+        )
+
 
 class NegotiationDecision(BaseModel):
     """One client negotiation decision produced by an ADK agent or a manual/scripted provider.

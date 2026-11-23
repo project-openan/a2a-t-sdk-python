@@ -96,6 +96,7 @@ async def build_demo_runtime(
     pure_answers: Sequence[str] | None = None,
     prepared_task_t: str | None = None,
     prepared_filled: Mapping[str, object] | None = None,
+    pure_reply_source: str = "",
 ) -> Any:
     """Build one client runtime with the demo catalog and offline assets."""
     from protocol.client_policy import ClientPolicy
@@ -135,10 +136,12 @@ async def build_demo_runtime(
                 mode=mode,
                 timeout_seconds=config.manual_decision_timeout_seconds,
             )
-        elif discovery == DISCOVERY_NMS:
+        elif pure_reply_source == "agent" or discovery == DISCOVERY_NMS:
             # The direct vendor hop has no OSS Agent to draft a recommendation, so automatic mode
             # negotiates itself: a deterministic plan when the request implies the value, otherwise
-            # the decision agent, with the confirmation card as the operator fallback.
+            # the decision agent, with the confirmation card as the operator fallback. A tester
+            # agent run asks for the same agency on every direct hop, so the A2A and A2A-T rows
+            # take their decisions from the same client without the process policy in between.
             from protocol.decision_provider import AdkDecisionProvider
             from shared.model_factory import build_traced_adk_model
 
@@ -164,6 +167,7 @@ async def build_demo_runtime(
                 provider,
                 policy,
                 request_text=run_spec.user_request,
+                apply_client_policy=pure_reply_source != "agent",
             )
         else:
             from demo.pure_policy import pure_answer_from_recommendation

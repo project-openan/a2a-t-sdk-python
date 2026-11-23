@@ -71,6 +71,7 @@ def build_tester_routes(
     default_language: str = "",
     judge: Any | None = None,
     judge_model_label: str = "",
+    pure_hop: str = "",
 ) -> tuple[list[Route], EvalBatchManager]:
     """Build the tester routes and the process-level batch manager."""
     del scenarios_by_protocol, default_language
@@ -93,6 +94,7 @@ def build_tester_routes(
         env_path=env_path,
         judge=judge,
         judge_model_label=judge_model_label,
+        pure_hop=pure_hop,
     )
 
     async def page(request: Request) -> Response:

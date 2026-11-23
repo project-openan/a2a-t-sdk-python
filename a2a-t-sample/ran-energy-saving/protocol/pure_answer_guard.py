@@ -53,12 +53,14 @@ def _counter_problem(
     counter: str,
     request_text: str,
     policy: ClientPolicy,
+    *,
+    apply_client_policy: bool = True,
 ) -> str | None:
     """Return why one free-text counter cannot be sent, or ``None`` when it is acceptable.
 
     A pure-A2A feasibility answer is prose, so the only machine-checkable constraint is the rate:
-    it must state a concrete value, it may only concede (never exceed the request's own maximum),
-    and it must respect the client floor.
+    it must state a concrete value, and it may only concede (never exceed the request's own
+    maximum). The client floor applies unless an agent-authored reply owns the decision.
     """
     rates = _rate_values(counter)
     if not rates:
@@ -66,7 +68,7 @@ def _counter_problem(
     request_rates = _rate_values(request_text)
     if request_rates and max(rates) > max(request_rates):
         return "it raises the rate above the original request"
-    floor = policy.min_throughput_mbps
+    floor = policy.min_throughput_mbps if apply_client_policy else None
     if floor is not None and min(rates) < floor:
         return f"it goes below the client minimum of {floor:g} Mbps"
     return None
@@ -78,6 +80,8 @@ def sanitize_pure_decision(
     request_text: str,
     propose: NegotiationProposeView,
     policy: ClientPolicy,
+    basis: str = "",
+    apply_client_policy: bool = True,
 ) -> tuple[NegotiationDecision | None, list[str]]:
     """Return the decision the pure hop may send, or ``None`` when it cannot answer.
 
@@ -86,6 +90,11 @@ def sanitize_pure_decision(
         request_text: The operator's original request of this run.
         propose: Proposal view built from the vendor's plain question.
         policy: Acceptance limits of this client.
+        basis: Shared principles plus case conditions. A tester agent run hands the agent its own
+            ground; a value those layers name is answerable even when the request omits it.
+        apply_client_policy: Apply the process policy's counter/floor limits. A tester agent run
+            passes ``False`` so the agent alone decides, matching the A2A-T agent mode; grounding
+            still applies.
 
     Returns:
         The sanitized decision (or ``None`` when the client must not answer) and the notes for the
@@ -102,7 +111,12 @@ def sanitize_pure_decision(
     if decision.action == "counter":
         counter = decision.counter_proposal
         if isinstance(counter, str) and counter.strip():
-            problem = _counter_problem(counter, request_text, policy)
+            problem = _counter_problem(
+                counter,
+                request_text,
+                policy,
+                apply_client_policy=apply_client_policy,
+            )
             if problem is None:
                 return decision, notes
             notes.append(f"dropped the counter proposal ({problem})")
@@ -131,16 +145,27 @@ def sanitize_pure_decision(
             ]
         return None, [*notes, "the decision carries no value to answer the question"]
 
-    unsupported = set(ungrounded_answer_fields(request_text, filled))
+    allow = (basis,) if basis and basis.strip() else ()
+    unsupported = set(ungrounded_answer_fields(request_text, filled, allow=allow))
     offered = server_entity_values(propose)
     for name in list(unsupported):
         value = filled[name]
         if normalize(value) in offered.get(name, set()) or server_contains(propose, value):
             unsupported.discard(name)
+    if basis and "guaranteedThroughputTarget" in unsupported:
+        # A case condition states the acceptable rate, not the whole segment notation; the same
+        # rule the A2A-T grounding uses lets its rates ground the target.
+        basis_rates = {normalize(match.group(0)) for match in _RATE.finditer(basis)}
+        target_rates = {
+            normalize(match.group(0))
+            for match in _RATE.finditer(str(filled.get("guaranteedThroughputTarget") or ""))
+        }
+        if target_rates and target_rates <= basis_rates:
+            unsupported.discard("guaranteedThroughputTarget")
     for name in sorted(unsupported):
         notes.append(f"dropped {name}={filled.pop(name)!r}: neither the request nor the question states it")
 
-    floor = policy.min_throughput_mbps
+    floor = policy.min_throughput_mbps if apply_client_policy else None
     target = filled.get("guaranteedThroughputTarget")
     if floor is not None and isinstance(target, str):
         rates = [float(match.group(1)) for match in _RATE.finditer(target)]

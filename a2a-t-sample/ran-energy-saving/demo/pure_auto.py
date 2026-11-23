@@ -26,7 +26,7 @@ from protocol.grounding import server_target_rates
 from protocol.manual_answer import missing_item_labels
 from protocol.pure_answer_guard import sanitize_pure_decision
 from protocol.pure_client_flow import pure_proposal_view
-from shared.models import NegotiationDecision
+from shared.models import DecisionBasis, NegotiationDecision
 
 from demo.pure_concession import plan_pure_answer
 from demo.pure_policy import render_pure_answer
@@ -62,6 +62,7 @@ class AutoPureAnswer:
         *,
         request_text: str = "",
         max_server_asks: int = MAX_SERVER_ASKS,
+        apply_client_policy: bool = True,
     ) -> None:
         """Create one automatic answer.
 
@@ -70,11 +71,16 @@ class AutoPureAnswer:
             policy: Client acceptance limits.
             request_text: Operator request used for grounding; the runtime keeps it current.
             max_server_asks: Questions answered with "please provide" before the client rejects.
+            apply_client_policy: Apply the deterministic concession plan and the client floor.
+                A tester agent run passes ``False`` so the agent alone decides, as the A2A-T
+                flow does; grounding and rendering still apply.
         """
         self._provider = provider
         self._policy = policy
         self._request_text = request_text
         self._max_server_asks = max(1, max_server_asks)
+        self._apply_client_policy = apply_client_policy
+        self._basis_text = ""
         self._server_asks = 0
         self._proposal_sink: Callable[..., None] | None = None
         self._decision_sink: Callable[..., None] | None = None
@@ -85,6 +91,17 @@ class AutoPureAnswer:
         setter = getattr(self._provider, "set_user_request", None)
         if callable(setter):
             setter(request_text)
+
+    def set_decision_basis(self, basis: DecisionBasis | None) -> None:
+        """Keep the shared principles and case conditions this reply may ground on."""
+        self._basis_text = basis.grounding_text() if basis is not None else ""
+        setter = getattr(self._provider, "set_decision_basis", None)
+        if callable(setter):
+            setter(basis)
+
+    def set_apply_client_policy(self, apply_client_policy: bool) -> None:
+        """Switch the deterministic plan and client floor of this answer."""
+        self._apply_client_policy = apply_client_policy
 
     def set_conversation_context(self, context: str | None) -> None:
         """Forward the recent-turn context to the decision provider."""
@@ -106,7 +123,11 @@ class AutoPureAnswer:
         if self._proposal_sink is not None:
             self._proposal_sink(propose, session)
         request_text = self._request_text or _provider_text(self._provider)
-        if propose.kind in ("feasibility", "target") and not server_target_rates(propose):
+        if (
+            self._apply_client_policy
+            and propose.kind in ("feasibility", "target")
+            and not server_target_rates(propose)
+        ):
             plan = plan_pure_answer(request_text, propose, self._policy)
             if plan is not None:
                 self._server_asks = 0
@@ -126,6 +147,8 @@ class AutoPureAnswer:
             request_text=request_text,
             propose=propose,
             policy=self._policy,
+            basis=self._basis_text,
+            apply_client_policy=self._apply_client_policy,
         )
         if grounded is not None:
             self._server_asks = 0
@@ -179,6 +202,7 @@ def build_auto_pure_answer(
     *,
     request_text: str = "",
     max_server_asks: int = MAX_SERVER_ASKS,
+    apply_client_policy: bool = True,
 ) -> AutoPureAnswer:
     """Build the automatic pure-A2A answer callback."""
     return AutoPureAnswer(
@@ -186,6 +210,7 @@ def build_auto_pure_answer(
         policy,
         request_text=request_text,
         max_server_asks=max_server_asks,
+        apply_client_policy=apply_client_policy,
     )
 
 

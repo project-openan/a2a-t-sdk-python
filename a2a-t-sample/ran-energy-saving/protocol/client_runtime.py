@@ -369,6 +369,33 @@ def _build_adk_decision_provider(
     )
 
 
+def _configure_pure_answer(
+    answer: object,
+    *,
+    request_text: str,
+    decision_basis: DecisionBasis | None,
+    apply_client_policy: bool,
+    conversation_context: str | None,
+) -> None:
+    """Hand one run's decision context to its pure-A2A answer.
+
+    A pure answer is the protocol's decision surface, so it needs the same operator request,
+    shared principles, case conditions and policy switch the A2A-T decision provider receives.
+    Without them an agent-authored A2A reply would be decided with a different ground than the
+    A2A-T row of the same batch. An answer object that does not expose a hook is left untouched,
+    which keeps the scripted and confirmation answers unchanged.
+    """
+    for setter_name, value in (
+        ("set_user_request", request_text),
+        ("set_decision_basis", decision_basis),
+        ("set_apply_client_policy", apply_client_policy),
+        ("set_conversation_context", conversation_context),
+    ):
+        setter = getattr(answer, setter_name, None)
+        if callable(setter):
+            setter(value)
+
+
 def _announce_pure_proposals(
     answer: Callable[[dict[str, object]], str | Awaitable[str]],
     on_decision_requested: Callable[[NegotiationProposeView, NegotiationContext], None],
@@ -706,12 +733,17 @@ class ClientRuntime:
                         )
                     answer = self.pure_answer
                     # An automatic pure answer keeps its decision provider; hand it the operator
-                    # request the run actually executes (the scenario default is only a fallback).
-                    set_answer_request = getattr(answer, "set_user_request", None)
-                    if callable(set_answer_request):
-                        set_answer_request(
+                    # request the run actually executes (the scenario default is only a fallback)
+                    # and the same basis/policy switch the A2A-T provider receives.
+                    _configure_pure_answer(
+                        answer,
+                        request_text=(
                             raw_text if processed else self._raw_mode_request(custom_request)
-                        )
+                        ),
+                        decision_basis=decision_basis,
+                        apply_client_policy=apply_client_policy,
+                        conversation_context=conversation_context,
+                    )
                     for setter_name, hook in (
                         ("set_proposal_sink", on_decision_requested),
                         ("set_decision_sink", on_decision_made),

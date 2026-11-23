@@ -291,6 +291,7 @@ def _manager(
     judge: Any | None = None,
     model_label: str = "",
     judge_model_label: str = "",
+    pure_hop: str = "",
 ) -> EvalBatchManager:
     # Only pass ``judge`` when a test supplies one: every historical test keeps constructing the
     # manager without the P2 keyword so an unimplemented judge cannot make them fail too.
@@ -309,6 +310,7 @@ def _manager(
         model_label=model_label,
         judge_model_label=judge_model_label,
         prompt_client=_PromptClient(),
+        pure_hop=pure_hop,
         **judge_kwarg,
     )
 
@@ -1034,6 +1036,119 @@ async def test_a_non_negotiation_agent_case_keeps_its_normal_mode(tmp_path: Path
     assert isinstance(runs, _FakeRuns)
     assert runs.calls[0]["mode"] == MODE_AUTO
     assert runs.calls[0]["scripted_decisions"] is None
+
+
+async def test_an_agent_pure_case_does_not_replay_the_p_column(tmp_path: Path) -> None:
+    """The agent source is protocol-neutral: the A2A reply is decided, not replayed."""
+    manager = _manager(tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live")
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    assert runs.calls[0]["mode"] == MODE_AUTO
+    assert runs.calls[0].get("pure_answers") is None
+    source = runs.calls[0]["source"]
+    assert isinstance(source, Mapping)
+    assert source["negotiationExpected"] is True
+    item = manager._batches[str(created["batchId"])].items[0]
+    # The P column is not lost: it stays in the export as the recorded client reply.
+    assert item.refs["clientReplies"] == ["The region is A2ATestRegion."]
+
+
+async def test_a_script_pure_case_still_replays_the_p_column(tmp_path: Path) -> None:
+    """The script source keeps the deterministic P-column replay unchanged."""
+    manager = _manager(tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live")
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A],
+        stop_after="final",
+        negotiation_source="script",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    assert runs.calls[0]["pure_answers"] == ["The region is A2ATestRegion."]
+
+
+async def test_a_pure_item_reads_its_own_expectation_block(tmp_path: Path) -> None:
+    """Case 3 negotiates on A2A only; a pure item must not read the A2A-T block."""
+    manager = _manager(tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live")
+    created = manager.create(
+        case_ids=[3],
+        protocols=[PROTOCOL_A2A],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    source = runs.calls[0]["source"]
+    assert isinstance(source, Mapping)
+    assert source["negotiationExpected"] is True
+    item = manager._batches[str(created["batchId"])].items[0]
+    assert item.refs["negotiationExpected"] is True
+    assert item.refs["expectedRounds"] == 1
+
+
+async def test_an_agent_pure_item_gets_its_client_quality(tmp_path: Path) -> None:
+    """The quality appendix follows the decision, not the protocol."""
+    judge = _StubJudge(
+        {"verdict": "equal", "covered": True, "reason": "the accepted region matches"}
+    )
+    manager = _manager(
+        tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live", judge=judge
+    )
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    item = manager._batches[str(created["batchId"])].items[0]
+    assert isinstance(item.client_quality, Mapping)
+    assert item.client_quality["quality"] == "pass"
+    assert judge.calls == 1
+
+
+def test_an_agent_pure_batch_rejects_the_oss_proxy_hop(tmp_path: Path) -> None:
+    """The OSS proxy is a deprecated hop; it cannot host an agent-authored reply."""
+    manager = _manager(
+        tmp_path, _FakeRuns(_finish), model_mode="live", pure_hop="oss"
+    )
+
+    with pytest.raises(ValueError, match="OSS"):
+        manager.create(
+            case_ids=[51],
+            protocols=[PROTOCOL_A2A],
+            stop_after="final",
+            negotiation_source="agent",
+        )
+    # The script source still runs the recorded dialogue through the proxy.
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A],
+        stop_after="final",
+        negotiation_source="script",
+    )
+    assert created["batchId"]
 
 
 async def test_an_agent_negotiation_item_gets_its_client_quality(tmp_path: Path) -> None:
