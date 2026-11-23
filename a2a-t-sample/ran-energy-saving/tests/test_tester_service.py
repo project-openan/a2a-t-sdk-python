@@ -837,6 +837,225 @@ async def test_live_decision_mode_uses_auto_for_a2a_t(tmp_path: Path) -> None:
     assert manager.get(str(created["batchId"]))["decisionMode"] == DECISION_MODE_LIVE
 
 
+def test_an_offline_batch_rejects_the_agent_negotiation_source(tmp_path: Path) -> None:
+    """An offline process has no model, so it cannot author a live negotiation reply."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="offline")
+
+    with pytest.raises(ValueError):
+        manager.create(
+            case_ids=[1],
+            protocols=[PROTOCOL_A2A_T],
+            stop_after="validate",
+            negotiation_source="agent",
+        )
+
+
+def test_the_default_negotiation_source_follows_the_model_mode(tmp_path: Path) -> None:
+    """Offline defaults to the recorded script; an online model defaults to the client agent."""
+    offline = _manager(tmp_path / "offline", _FakeRuns(_finish), model_mode="offline").create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+    )
+    live = _manager(tmp_path / "live", _FakeRuns(_finish), model_mode="live").create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+    )
+
+    assert offline["negotiationSource"] == "script"
+    assert live["negotiationSource"] == "agent"
+
+
+def test_an_unknown_negotiation_source_is_rejected(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+
+    with pytest.raises(ValueError):
+        manager.create(
+            case_ids=[1],
+            protocols=[PROTOCOL_A2A_T],
+            stop_after="validate",
+            negotiation_source="human",
+        )
+
+
+async def test_an_agent_negotiation_case_runs_in_auto_mode(tmp_path: Path) -> None:
+    """The agent source must not force MODE_SCRIPTED and must not carry a decision script."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    assert runs.calls[0]["mode"] == MODE_AUTO
+    assert runs.calls[0]["scripted_decisions"] is None
+
+
+async def test_a_script_negotiation_case_runs_scripted_with_its_decisions(tmp_path: Path) -> None:
+    """The script source keeps replaying the case Q column."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+    created = manager.create(
+        case_ids=[51],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        negotiation_source="script",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    assert runs.calls[0]["mode"] == MODE_SCRIPTED
+    assert runs.calls[0]["scripted_decisions"]
+
+
+async def test_a_non_negotiation_agent_case_keeps_its_normal_mode(tmp_path: Path) -> None:
+    """Only an expected A2A-T negotiation is diverted; an ordinary case keeps ``_mode_for``."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        negotiation_source="agent",
+    )
+
+    await manager.start(str(created["batchId"]))
+    await _wait_status(manager, str(created["batchId"]), "finished")
+
+    runs = manager._runs
+    assert isinstance(runs, _FakeRuns)
+    assert runs.calls[0]["mode"] == MODE_AUTO
+    assert runs.calls[0]["scripted_decisions"] is None
+
+
+def test_a_batch_round_trips_the_negotiation_source(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        negotiation_source="agent",
+    )
+
+    assert created["schema"] == "osp-tester/v5"
+    assert created["negotiationSource"] == "agent"
+    reloaded = _manager(tmp_path, _FakeRuns(_finish), model_mode="live").get(
+        str(created["batchId"])
+    )
+    assert reloaded is not None
+    assert reloaded["negotiationSource"] == "agent"
+
+
+@pytest.mark.parametrize(
+    "schema",
+    ["osp-tester/v1", "osp-tester/v2", "osp-tester/v3", "osp-tester/v4"],
+)
+def test_an_old_batch_loads_with_the_script_negotiation_source(
+    tmp_path: Path, schema: str
+) -> None:
+    """A batch persisted before the source switch replayed the case script."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    history = tmp_path / "tester"
+    history.mkdir(parents=True)
+    document = {
+        "schema": schema,
+        "batchId": "old-batch",
+        "caseIds": [1],
+        "protocols": [PROTOCOL_A2A_T],
+        "stopAfter": "validate",
+        "items": [
+            {
+                "caseId": 1,
+                "name": "old",
+                "protocol": PROTOCOL_A2A_T,
+                "status": "passed",
+            }
+        ],
+    }
+    (history / "old-batch.json").write_text(json.dumps(document), encoding="utf-8")
+
+    snapshot = manager.get("old-batch")
+
+    assert snapshot is not None
+    assert snapshot["negotiationSource"] == "script"
+
+
+def test_an_agent_source_needs_the_live_decision_mode(tmp_path: Path) -> None:
+    """A live process still cannot pair the agent source with the scripted decision mode."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+
+    with pytest.raises(ValueError):
+        manager.create(
+            case_ids=[1],
+            protocols=[PROTOCOL_A2A_T],
+            stop_after="validate",
+            decision_mode="scripted",
+            negotiation_source="agent",
+        )
+
+
+def test_create_freezes_the_shared_principles(tmp_path: Path) -> None:
+    """A batch records the principles version and body its agent will be told."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        negotiation_source="agent",
+    )
+
+    assert created["principlesVersion"]
+    assert created["principlesText"].strip()
+    reloaded = _manager(tmp_path, _FakeRuns(_finish), model_mode="live").get(
+        str(created["batchId"])
+    )
+    assert reloaded is not None
+    assert reloaded["principlesVersion"] == created["principlesVersion"]
+    assert reloaded["principlesText"] == created["principlesText"]
+
+
+def test_a_loaded_agent_batch_falls_back_to_script_on_a_scripted_decision_mode(
+    tmp_path: Path,
+) -> None:
+    """A batch persisted for another process must not inject agent replies here."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
+    history = tmp_path / "tester"
+    history.mkdir(parents=True)
+    document = {
+        "schema": "osp-tester/v5",
+        "batchId": "scripted-batch",
+        "caseIds": [1],
+        "protocols": [PROTOCOL_A2A_T],
+        "stopAfter": "validate",
+        "decisionMode": "scripted",
+        "negotiationSource": "agent",
+        "principlesVersion": "2026-11-23.1",
+        "principlesText": "frozen principles",
+        "items": [
+            {
+                "caseId": 1,
+                "name": "old",
+                "protocol": PROTOCOL_A2A_T,
+                "status": "passed",
+            }
+        ],
+    }
+    (history / "scripted-batch.json").write_text(json.dumps(document), encoding="utf-8")
+
+    snapshot = manager.get("scripted-batch")
+
+    assert snapshot is not None
+    assert snapshot["negotiationSource"] == "script"
+
+
 async def test_cancel_marks_the_item_cancelled_not_passed(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_hang))
     created = manager.create(

@@ -118,6 +118,60 @@ def test_build_decision_prompt_carries_the_original_request() -> None:
     assert "no reasoning" in prompt
 
 
+def test_build_decision_prompt_carries_the_decision_basis() -> None:
+    """Shared principles and case conditions are the agent's own acceptance ground."""
+    from shared.models import DecisionBasis
+
+    basis = DecisionBasis(
+        principles="Never agree to a rate below the client floor.",
+        principles_version="2026-11-23.1",
+        client_conditions="During an outage 2Mbps is acceptable; below 2Mbps is not.",
+    )
+
+    prompt = build_decision_prompt(_view(), _session(1), decision_basis=basis)
+
+    assert "Client decision basis" in prompt
+    assert "Never agree to a rate below the client floor." in prompt
+    assert "2026-11-23.1" in prompt
+    assert "During an outage 2Mbps is acceptable; below 2Mbps is not." in prompt
+    # Precedence: case conditions over shared principles, shared principles over defaults.
+    assert "take precedence" in prompt
+    # It belongs with the request, before the proposal the agent must answer.
+    assert prompt.index("Client decision basis") < prompt.index("Proposal content:")
+
+
+def test_build_decision_prompt_without_a_basis_has_no_basis_section() -> None:
+    """A run without tester conditions sees exactly the historical prompt."""
+    prompt = build_decision_prompt(_view(), _session(1))
+
+    assert "Client decision basis" not in prompt
+    assert "Answer the following A2A-T negotiation proposal." in prompt
+    assert "Proposal content:" in prompt
+
+
+async def test_set_decision_basis_is_task_local_on_a_shared_provider() -> None:
+    """The OSS Agent shares one provider across concurrent inbound requests."""
+    from shared.models import DecisionBasis
+
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
+    seen: dict[str, str | None] = {}
+
+    async def run_a() -> None:
+        provider.set_decision_basis(DecisionBasis(client_conditions="conditions-a"))
+        await asyncio.sleep(0)
+        basis = provider._current_decision_basis()
+        seen["a"] = basis.client_conditions if basis is not None else None
+
+    async def run_b() -> None:
+        provider.set_decision_basis(DecisionBasis(client_conditions="conditions-b"))
+        basis = provider._current_decision_basis()
+        seen["b"] = basis.client_conditions if basis is not None else None
+
+    await asyncio.gather(run_a(), run_b())
+
+    assert seen == {"a": "conditions-a", "b": "conditions-b"}
+
+
 async def test_scripted_provider_returns_decisions_in_order_and_then_raises() -> None:
     provider = ScriptedDecisionProvider(
         (

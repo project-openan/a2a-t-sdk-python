@@ -24,7 +24,7 @@ from typing import Any, Final, Literal, Protocol
 
 from a2a_t.core.metadata import NegotiationContext
 from shared.config import DISCOVERY_REGISTRY
-from shared.models import NegotiationDecision, NegotiationProposeView
+from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     PROTOCOL_A2A_T,
     RUN_MODE_CREATE,
@@ -44,7 +44,7 @@ from shared.trace import (
     infer_event_phase,
 )
 
-from protocol.client_flow import ClientFlowResult, DecisionMadeCallback
+from protocol.client_flow import ClientFlowResult, CorrectionProvider, DecisionMadeCallback
 from protocol.client_runtime import MODE_AUTO, MODE_CONFIRM, MODE_MANUAL
 from protocol.client_store import (
     NEGOTIATION_DIRECTION_INBOUND,
@@ -87,6 +87,10 @@ class ClientRuntimeLike(Protocol):
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
+        reply_only_accept: bool = False,
+        apply_client_policy: bool = True,
+        decision_basis: DecisionBasis | None = None,
+        correction_provider: CorrectionProvider | None = None,
     ) -> ClientFlowResult: ...
 
     async def aclose(self) -> None: ...
@@ -155,6 +159,12 @@ class RunState:
         processed_intent: structured intent document, once the layer has run.
         scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``.
         pure_answers: per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds.
+        negotiation_source: who authors a tester negotiation reply (``agent`` / ``script``).
+        client_conditions: optional case-level acceptance conditions shown to the agent.
+        negotiation_principles: shared client negotiation principles frozen for the batch.
+        principles_version: version identifier of the shared principles.
+        decision_basis: basis handed to the decision agent; ``None`` keeps the old prompt.
+        apply_client_policy: whether the deterministic policy may rewrite an automatic decision.
         proposals: inbound proposals in order.
         discovery: discovery mode of the run.
         traces: every trace span produced/ingested for the run.
@@ -264,6 +274,19 @@ class RunState:
     #: ``blocked_followup.input``). It is a run-phase input, not a replacement run request.
     correction_request: str | None = None
     prepared_filled: dict[str, object] | None = None
+    #: Who authors a tester negotiation reply: ``agent`` (live decision agent) or ``script``
+    #: (replayed case reply). Every non-tester run keeps the historical script default.
+    negotiation_source: str = "script"
+    #: Optional case-level acceptance conditions handed to the decision agent.
+    client_conditions: str = ""
+    #: Body of the shared client negotiation principles (frozen per tester batch).
+    negotiation_principles: str = ""
+    #: Version identifier of :attr:`negotiation_principles`.
+    principles_version: str = ""
+    #: Client decision basis handed to the agent; ``None`` keeps the historical prompt.
+    decision_basis: DecisionBasis | None = None
+    #: Whether the deterministic client policy may rewrite an automatic decision.
+    apply_client_policy: bool = True
     proposals: list[NegotiationProposeView] = field(default_factory=list)
     traces: list[dict[str, object]] = field(default_factory=list)
     spans: dict[str, dict[str, object]] = field(default_factory=dict)

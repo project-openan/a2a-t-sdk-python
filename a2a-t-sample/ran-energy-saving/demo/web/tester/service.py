@@ -50,6 +50,7 @@ from eval.osp.followup import (
     is_blocked_case,
     original_dispatch_case,
 )
+from eval.osp.principles import NegotiationPrinciples, load_principles
 from eval.osp.runner import (
     STAGE_ERROR,
     STAGE_FAILED,
@@ -149,12 +150,35 @@ def default_decision_mode(model_mode: str) -> str:
     """Return the default decision mode of a tester process in one model mode."""
     return DECISION_MODE_SCRIPTED if model_mode == MODEL_MODE_OFFLINE else DEFAULT_DECISION_MODE
 
-#: Persisted batch schema; v1-v3 batches are still readable and load as a single round.
-SCHEMA: Final[str] = "osp-tester/v4"
+
+#: Who authors a case's negotiation reply: the live client agent or the recorded case script.
+NEGOTIATION_SOURCE_AGENT: Final[str] = "agent"
+NEGOTIATION_SOURCE_SCRIPT: Final[str] = "script"
+NEGOTIATION_SOURCES: Final[tuple[str, ...]] = (
+    NEGOTIATION_SOURCE_AGENT,
+    NEGOTIATION_SOURCE_SCRIPT,
+)
+
+
+def default_negotiation_source(model_mode: str) -> str:
+    """Return the default reply source of a tester process in one model mode.
+
+    An offline process has no model, so it can only replay the case script; an online process
+    exercises the client agent by default.
+    """
+    return (
+        NEGOTIATION_SOURCE_SCRIPT
+        if model_mode == MODEL_MODE_OFFLINE
+        else NEGOTIATION_SOURCE_AGENT
+    )
+
+#: Persisted batch schema; v1-v4 batches are still readable and load as the script source.
+SCHEMA: Final[str] = "osp-tester/v5"
 SCHEMA_V1: Final[str] = "osp-tester/v1"
 SCHEMA_V2: Final[str] = "osp-tester/v2"
 SCHEMA_V3: Final[str] = "osp-tester/v3"
-_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V3, SCHEMA_V2, SCHEMA_V1})
+SCHEMA_V4: Final[str] = "osp-tester/v4"
+_SCHEMAS: Final[frozenset[str]] = frozenset({SCHEMA, SCHEMA_V4, SCHEMA_V3, SCHEMA_V2, SCHEMA_V1})
 
 #: Task states that end the item in red.
 _FAILED_TASK_STATES: Final[frozenset[str]] = frozenset(
@@ -455,6 +479,11 @@ class _Batch:
     excluded_case_ids: list[int] = field(default_factory=list)
     working_timeout_seconds: float | None = None
     decision_mode: str = DECISION_MODE_SCRIPTED
+    #: Who authors a case's negotiation reply: ``agent`` (live decision agent) or ``script``.
+    negotiation_source: str = NEGOTIATION_SOURCE_SCRIPT
+    #: Shared negotiation principles frozen when the batch is created (P1 fills these).
+    principles_version: str = ""
+    principles_text: str = ""
     #: Keep every Task this batch created alive after its item ends. Off by default: a finished
     #: tester item releases its remote Task so a long acceptance run does not exhaust the NMS quota.
     keep_tasks: bool = False
@@ -564,6 +593,8 @@ class EvalBatchManager:
         timeout_seconds: float | None = None,
         working_timeout_seconds: float | None = None,
         decision_mode: str | None = None,
+        negotiation_source: str | None = None,
+        principles_version: str | None = None,
         keep_tasks: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         rounds: int = DEFAULT_ROUNDS,
@@ -592,6 +623,13 @@ class EvalBatchManager:
         resolved_decision_mode = self._validate_decision_mode(
             decision_mode or default_decision_mode(self._model_mode)
         )
+        resolved_negotiation_source = self._validate_negotiation_source(
+            negotiation_source or default_negotiation_source(self._model_mode),
+            resolved_decision_mode,
+        )
+        # The shared principles are frozen with the batch: a later edit of the asset must not
+        # change what this batch's agent was told when it decided.
+        principles = self._load_principles(principles_version)
         selected_protocols = [protocol for protocol in protocols if protocol in {PROTOCOL_A2A_T, PROTOCOL_A2A}]
         if not selected_protocols:
             raise ValueError("至少选择一个协议。")
@@ -631,6 +669,9 @@ class EvalBatchManager:
             timeout_seconds=_positive_or_none(timeout_seconds),
             working_timeout_seconds=_positive_or_none(working_timeout_seconds),
             decision_mode=resolved_decision_mode,
+            negotiation_source=resolved_negotiation_source,
+            principles_version=principles.version,
+            principles_text=principles.text,
             keep_tasks=keep_tasks,
             concurrency=resolved_concurrency,
             rounds=resolved_rounds,
@@ -653,6 +694,7 @@ class EvalBatchManager:
         approval: str = "approve",
         timeout_seconds: float | None = 300.0,
         decision_mode: str | None = None,
+        negotiation_source: str | None = None,
         keep_tasks: bool = False,
         owner: str = "",
     ) -> dict[str, object]:
@@ -666,6 +708,14 @@ class EvalBatchManager:
         resolved_decision_mode = self._validate_decision_mode(
             decision_mode or default_decision_mode(self._model_mode)
         )
+        default_source = default_negotiation_source(self._model_mode)
+        if resolved_decision_mode != DECISION_MODE_LIVE:
+            # A scratch run has no case script; a non-live mode cannot author an agent reply.
+            default_source = NEGOTIATION_SOURCE_SCRIPT
+        resolved_negotiation_source = self._validate_negotiation_source(
+            negotiation_source or default_source, resolved_decision_mode
+        )
+        principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
         item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
         batch = _Batch(
@@ -676,6 +726,9 @@ class EvalBatchManager:
             approval=resolved_approval,
             timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
             decision_mode=resolved_decision_mode,
+            negotiation_source=resolved_negotiation_source,
+            principles_version=principles.version,
+            principles_text=principles.text,
             keep_tasks=keep_tasks,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
@@ -693,6 +746,26 @@ class EvalBatchManager:
         if decision_mode == DECISION_MODE_LIVE and self._model_mode == "offline":
             raise ValueError("live 决策需要在线模型。")
         return decision_mode
+
+    def _validate_negotiation_source(
+        self, negotiation_source: str, decision_mode: str | None = None
+    ) -> str:
+        """Validate one batch reply source; an offline or scripted run cannot author a live reply."""
+        if negotiation_source not in NEGOTIATION_SOURCES:
+            raise ValueError(f"unknown negotiation_source {negotiation_source!r}")
+        if negotiation_source == NEGOTIATION_SOURCE_AGENT:
+            if self._model_mode == MODEL_MODE_OFFLINE:
+                raise ValueError("agent 协商答复需要在线模型。")
+            if decision_mode is not None and decision_mode != DECISION_MODE_LIVE:
+                raise ValueError("agent 协商答复需要 live 决策模式。")
+        return negotiation_source
+
+    def _load_principles(self, version: str | None) -> NegotiationPrinciples:
+        """Load the shared principles frozen for one batch."""
+        try:
+            return load_principles(version)
+        except (FileNotFoundError, ValueError) as error:
+            raise ValueError(f"无法加载通用协商原则：{error}") from error
 
     def get(self, batch_id: str, *, owner: str = "") -> dict[str, object] | None:
         """Return one batch snapshot, or ``None`` when unknown or owned by someone else."""
@@ -1309,9 +1382,24 @@ class EvalBatchManager:
         transport = defaults.get("transport", "sse")
         discovery = defaults.get("discovery", "direct")
         negotiation_expected = _negotiation_expected(case, PROTOCOL_A2A_T)
-        decisions = a2at_decisions(case) if runtime_protocol == RUNTIME_A2A_T else []
+        # An agent-authored tester reply is decided live: the Q column is only an expectation, so
+        # neither a decision script nor the "empty Q column" gate applies to it.
+        agent_negotiation = (
+            runtime_protocol == RUNTIME_A2A_T
+            and negotiation_expected
+            and batch.negotiation_source == NEGOTIATION_SOURCE_AGENT
+        )
+        decisions = (
+            a2at_decisions(case)
+            if runtime_protocol == RUNTIME_A2A_T and not agent_negotiation
+            else []
+        )
         answers = pure_answers(case) if runtime_protocol == PROTOCOL_PURE else []
-        reply_error = _scripted_reply_error(case, runtime_protocol, decisions, answers)
+        reply_error = (
+            None
+            if agent_negotiation
+            else _scripted_reply_error(case, runtime_protocol, decisions, answers)
+        )
         if reply_error is not None:
             # The reply is case data. Failing before the run keeps the failure attributable and,
             # for a Modify, avoids creating a baseline Task the run can never continue.
@@ -1351,9 +1439,14 @@ class EvalBatchManager:
                 target_server_task_id = str(baseline["taskId"])
                 target_server_context_id = str(baseline["contextId"])
 
+        conditions = case.get("client_conditions")
+        resolved_conditions = conditions.strip() if isinstance(conditions, str) else ""
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         mode = self._mode_for(batch, item.protocol)
-        if runtime_protocol == RUNTIME_A2A_T and negotiation_expected:
+        if agent_negotiation:
+            # The agent is the only decision-maker; a scripted provider would run an empty script.
+            mode = MODE_AUTO
+        elif runtime_protocol == RUNTIME_A2A_T and negotiation_expected:
             # The OSP Q column is the expected negotiation dialogue. Replaying it verifies the
             # protocol path deterministically; the SDK intent/Task-T stages still run in live mode.
             mode = MODE_SCRIPTED
@@ -1389,6 +1482,10 @@ class EvalBatchManager:
             validate_before_send=_pre_send_validation(runner),
             language=resolved_language,
             correction=correction,
+            negotiation_source=batch.negotiation_source,
+            client_conditions=resolved_conditions,
+            negotiation_principles=batch.principles_text,
+            principles_version=batch.principles_version,
         )
         item.run_id = run.run_id
         self._persist(batch)
@@ -1459,6 +1556,9 @@ class EvalBatchManager:
             source={"kind": "tester", "channel": "tester-scratch", "batchId": batch.batch_id},
             scripted_decisions=(),
             validate_before_send=True,
+            negotiation_source=batch.negotiation_source,
+            negotiation_principles=batch.principles_text,
+            principles_version=batch.principles_version,
         )
         item.run_id = run.run_id
         self._persist(batch)
@@ -1592,6 +1692,10 @@ class EvalBatchManager:
             ),
             # Only the A2A-T flow has a Task-T pre-send gate; the pure hop sends raw text.
             validate_before_send=protocol == RUNTIME_A2A_T,
+            # The paired Create follows the same reply source and frozen principles as the batch.
+            negotiation_source=batch.negotiation_source,
+            negotiation_principles=batch.principles_text,
+            principles_version=batch.principles_version,
         )
         # Publish the baseline as soon as it starts: the tester UI polls the batch snapshot, and
         # without this the Modify item showed no run and no progress until the Create finished.
@@ -2817,6 +2921,25 @@ class EvalBatchManager:
             if isinstance(item, Mapping)
         ]
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
+        loaded_decision_mode = str(document.get("decisionMode") or DECISION_MODE_SCRIPTED)
+        loaded_version = _optional_text(document.get("principlesVersion"))
+        loaded_text = _optional_text(document.get("principlesText"))
+        try:
+            loaded_source = self._validate_negotiation_source(
+                _loaded_negotiation_source(document), loaded_decision_mode
+            )
+        except ValueError:
+            # A batch persisted for another process (offline, or a scripted decision mode) cannot
+            # author agent replies here; replay its case scripts instead of failing to load it.
+            loaded_source = NEGOTIATION_SOURCE_SCRIPT
+        if loaded_source == NEGOTIATION_SOURCE_AGENT and not loaded_text:
+            try:
+                loaded_principles = load_principles(loaded_version or None)
+            except (FileNotFoundError, ValueError):
+                loaded_source = NEGOTIATION_SOURCE_SCRIPT
+            else:
+                loaded_version = loaded_principles.version
+                loaded_text = loaded_principles.text
         batch = _Batch(
             batch_id=str(document.get("batchId") or batch_id),
             case_ids=[int(value) for value in document.get("caseIds", []) if isinstance(value, int)],
@@ -2825,7 +2948,10 @@ class EvalBatchManager:
             approval=document.get("approval") if isinstance(document.get("approval"), str) else None,
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
-            decision_mode=str(document.get("decisionMode") or DECISION_MODE_SCRIPTED),
+            decision_mode=loaded_decision_mode,
+            negotiation_source=loaded_source,
+            principles_version=loaded_version,
+            principles_text=loaded_text,
             # A multi-round batch never keeps Tasks; an edited document cannot re-enable it.
             keep_tasks=bool(document.get("keepTasks"))
             and _clamp_rounds(document.get("rounds")) == DEFAULT_ROUNDS,
@@ -2894,6 +3020,11 @@ class EvalBatchManager:
             "timeoutSeconds": batch.timeout_seconds,
             "workingTimeoutSeconds": batch.working_timeout_seconds,
             "decisionMode": batch.decision_mode,
+            # Who authors a case's negotiation reply (``agent`` / ``script``). A batch created
+            # before the switch replayed the case script.
+            "negotiationSource": batch.negotiation_source,
+            "principlesVersion": batch.principles_version,
+            "principlesText": batch.principles_text,
             # The annotation console groups evidence by model and by downstream, so the batch
             # records the process identity it ran against. Older files lack these keys.
             "modelLabel": self._model_label,
@@ -3658,6 +3789,21 @@ def _optional_float(value: object) -> float | None:
     return float(value)
 
 
+def _optional_text(value: object) -> str:
+    """Return a text field persisted in a batch document, or an empty string."""
+    return value if isinstance(value, str) else ""
+
+
+def _loaded_negotiation_source(document: Mapping[str, object]) -> str:
+    """Return the reply source of a persisted batch; every old schema replayed the script."""
+    value = document.get("negotiationSource")
+    return (
+        value
+        if isinstance(value, str) and value in NEGOTIATION_SOURCES
+        else NEGOTIATION_SOURCE_SCRIPT
+    )
+
+
 def _runtime_protocol(protocol: str) -> str:
     """Map the catalog protocol label to the value the run manager expects."""
     return PROTOCOL_PURE if protocol == PROTOCOL_A2A else protocol
@@ -3685,6 +3831,10 @@ __all__ = [
     "EvalBatchManager",
     "MAX_CONCURRENCY",
     "MAX_ROUNDS",
+    "NEGOTIATION_SOURCES",
+    "NEGOTIATION_SOURCE_AGENT",
+    "NEGOTIATION_SOURCE_SCRIPT",
+    "default_negotiation_source",
     "validate_concurrency",
     "validate_rounds",
     "SCHEMA",

@@ -49,7 +49,7 @@ from shared.config import (
     merge_sample_process_env,
 )
 from shared.model_factory import build_traced_adk_model
-from shared.models import NegotiationDecision, NegotiationProposeView
+from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     MAX_ROUNDS,
@@ -584,6 +584,8 @@ class ClientRuntime:
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
         reply_only_accept: bool = False,
+        apply_client_policy: bool = True,
+        decision_basis: DecisionBasis | None = None,
         correction_provider: CorrectionProvider | None = None,
     ) -> ClientFlowResult:
         """Run the full client flow of the configured scenario.
@@ -619,6 +621,10 @@ class ClientRuntime:
             target_server_context_id: Context paired with ``target_server_task_id``.
             reply_only_accept: Build the accept from the decision's authored reply alone (the
                 tester replays a case): no derived target and no refilled Task-T.
+            apply_client_policy: Apply the process client policy to an automatic decision. A
+                tester agent run passes ``False`` so its own conditions are not rewritten.
+            decision_basis: Shared principles plus optional case conditions handed to the ADK
+                decision provider for this task.
             correction_provider: Optional in-run correction of a blocked pre-send gate. A block
                 asks it once for a repaired operator request; the same run continues. ``None``
                 uses the runtime-wide provider, else the historical blocked-without-retry path.
@@ -786,6 +792,11 @@ class ClientRuntime:
                 set_request = getattr(self.provider, "set_user_request", None)
                 if callable(set_request):
                     set_request(request_text)
+                # The client decision basis belongs to the task, not the shared provider: the OSS
+                # Agent reuses one provider across concurrent inbound requests.
+                set_basis = getattr(self.provider, "set_decision_basis", None)
+                if callable(set_basis):
+                    set_basis(decision_basis)
                 flow_on_intent_ready = on_intent_ready
                 # A raw run keeps the historical empty mapping; the parallel path replaces it with
                 # the awaitable before the flow starts.
@@ -859,6 +870,7 @@ class ClientRuntime:
                     reply_only_accept=reply_only_accept,
                     correction=correction_provider or self.correction_provider,
                     client_policy=ClientPolicy.from_config(self.config),
+                    apply_client_policy=apply_client_policy,
                     validate_before_send=validate_before_send,
                     enforce_required_fields=enforce_required_fields,
                     site_level_rate_optional=site_level_rate_optional,

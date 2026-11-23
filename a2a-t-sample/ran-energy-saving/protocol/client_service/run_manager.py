@@ -40,7 +40,7 @@ from shared.metrics import (
     CLIENT_RUNS_TOTAL,
     NEGOTIATION_ROUNDS_TOTAL,
 )
-from shared.models import NegotiationDecision, NegotiationProposeView
+from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INCOMPLETE,
@@ -855,6 +855,10 @@ class RunManager:
         prepared_task_t: str | None = None,
         prepared_filled: Mapping[str, object] | None = None,
         correction: str | None = None,
+        negotiation_source: str | None = None,
+        client_conditions: str | None = None,
+        negotiation_principles: str | None = None,
+        principles_version: str | None = None,
     ) -> RunState:
         """Start one background run and broadcast ``run_started`` before the task is scheduled.
 
@@ -899,12 +903,22 @@ class RunManager:
             correction: a repaired operator request applied when the run's own pre-send gate
                 blocks. The run keeps the original text as its request and continues after the
                 correction; a second block is terminal. ``None`` ends a blocked run as before.
+            negotiation_source: who authors a tester negotiation reply: ``agent`` (the live
+                decision agent) or ``script`` (the replayed case reply). Every other run and
+                every unset value keeps the historical script semantics.
+            client_conditions: optional case-level acceptance conditions shown to the agent.
+            negotiation_principles: body of the shared client negotiation principles.
+            principles_version: version identifier of those principles.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
-            ValueError: when ``intent_mode`` is unsupported.
+            ValueError: when ``intent_mode`` or ``negotiation_source`` is unsupported.
         """
         resolved_source = normalize_run_source(source)
+        resolved_negotiation_source = _resolve_negotiation_source(negotiation_source)
+        resolved_client_conditions = (client_conditions or "").strip()
+        resolved_negotiation_principles = (negotiation_principles or "").strip()
+        resolved_principles_version = (principles_version or "").strip()
         # A direct pure-A2A run keeps ``auto``: the client now answers the vendor's terse
         # confirmation with a deterministic free-text plan or the decision agent, and falls back to
         # the confirmation card when neither can produce a grounded value. The old normalization to
@@ -1042,7 +1056,20 @@ class RunManager:
             prepared_task_t=prepared_task_t,
             prepared_filled=dict(prepared_filled) if prepared_filled else None,
             correction_request=correction.strip() if isinstance(correction, str) and correction.strip() else None,
+            negotiation_source=resolved_negotiation_source,
+            client_conditions=resolved_client_conditions,
+            negotiation_principles=resolved_negotiation_principles,
+            principles_version=resolved_principles_version,
         )
+        # An agent-authored tester reply is the client's own decision: it must see the basis and
+        # must not be rewritten by the process policy. Every other run keeps both defaults.
+        if _is_tester_source(run.source) and run.negotiation_source == "agent":
+            run.decision_basis = DecisionBasis(
+                principles=run.negotiation_principles,
+                principles_version=run.principles_version,
+                client_conditions=run.client_conditions,
+            )
+            run.apply_client_policy = False
         run.transcript = NegotiationTranscript(
             scenario=scenario,
             language=self._config.language,
@@ -1706,15 +1733,18 @@ class RunManager:
                     "agentName": getattr(card, "name", None),
                 },
             )
-            # Only a run that can be corrected carries the extra hook: a runtime double or an
-            # older runtime keeps its historical call shape.
-            correction: dict[str, object] = (
-                {"correction_provider": scripted_correction(run.correction_request)}
-                if run.correction_request
-                else {}
-            )
+            # Only a run that carries an extra hook passes it: a runtime double or an older
+            # runtime keeps its historical call shape. The decision basis and the policy switch
+            # follow the same rule, so a default run is byte-identical to the old call.
+            decision_kwargs: dict[str, Any] = {}
+            if run.correction_request:
+                decision_kwargs["correction_provider"] = scripted_correction(run.correction_request)
+            if run.decision_basis is not None:
+                decision_kwargs["decision_basis"] = run.decision_basis
+            if not run.apply_client_policy:
+                decision_kwargs["apply_client_policy"] = False
             result = await run.runtime.run(
-                **correction,
+                **decision_kwargs,
                 event_sink=event_sink,
                 on_decision_requested=on_decision_requested,
                 on_decision_made=on_decision_made,
@@ -1732,7 +1762,9 @@ class RunManager:
                 target_context_id=run.target_context_id,
                 target_server_task_id=run.target_server_task_id,
                 target_server_context_id=run.target_server_context_id,
-                reply_only_accept=_is_tester_source(run.source),
+                reply_only_accept=(
+                    _is_tester_source(run.source) and run.negotiation_source == "script"
+                ),
             )
             if run.pending_decision and not run.cancel_requested:
                 # A provider that returns while the operator is still being waited for would let
@@ -2261,6 +2293,20 @@ def _should_validate_before_send(
 def _should_enforce_required_fields(source: Mapping[str, object]) -> bool:
     """Return whether this run must satisfy the caller schema's required fields."""
     return str(source.get("kind") or "") in _REQUIRED_FIELD_SOURCE_KINDS
+
+
+def _resolve_negotiation_source(negotiation_source: str | None) -> str:
+    """Return the negotiation reply author of a run, defaulting to the historical script.
+
+    ``script`` keeps every existing caller byte-identical; ``agent`` lets the live decision agent
+    author the reply. An unknown value is a caller bug, not something to guess at.
+    """
+    value = negotiation_source.strip() if isinstance(negotiation_source, str) else ""
+    if not value:
+        return "script"
+    if value not in {"agent", "script"}:
+        raise ValueError(f"unknown negotiation_source {negotiation_source!r}")
+    return value
 
 
 def _is_tester_source(source: Mapping[str, object]) -> bool:

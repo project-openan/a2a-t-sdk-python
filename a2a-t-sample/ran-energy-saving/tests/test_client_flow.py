@@ -2739,6 +2739,44 @@ async def test_a_server_alternative_below_the_configured_floor_is_not_forced_to_
     assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
 
 
+async def test_apply_client_policy_false_keeps_a_reject_of_a_feasible_alternative() -> None:
+    """An agent source owns its conditions; the process floor must not rewrite its reject."""
+    provider = _RejectingProvider()
+    transport = _feasibility_transport()
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request="Reduce the guaranteed rate to 10Mbps during the outage.",
+        provider=provider,
+        language="en-US",
+        intent_fields=_SITE_INTENT,
+        apply_client_policy=False,
+    )
+
+    assert _client_negotiation_steps(transport.requests) == [("REJECT", 1)]
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+
+
+async def test_apply_client_policy_true_still_forces_a_feasible_alternative_to_accept() -> None:
+    """The default (and the script/presentation paths) keep the historical policy."""
+    provider = _RejectingProvider()
+    transport = _feasibility_transport()
+
+    result = await run_client_flow(
+        prompt_client=FakePromptClient(),
+        transport=transport,
+        user_request="Reduce the guaranteed rate to 10Mbps during the outage.",
+        provider=provider,
+        language="en-US",
+        intent_fields=_SITE_INTENT,
+        apply_client_policy=True,
+    )
+
+    assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
+    assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
+
+
 def _propose_without_template_uri(kind: str, *, content: str) -> dict[str, object]:
     """Build the vendor's continuation propose: negotiation metadata without ``templateUri``."""
     event = propose_event(kind, 1, content=content)

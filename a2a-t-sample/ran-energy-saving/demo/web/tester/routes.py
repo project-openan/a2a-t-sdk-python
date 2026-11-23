@@ -28,8 +28,10 @@ from demo.web.tester.service import (
     DEFAULT_WORKING_TIMEOUT_SECONDS,
     MAX_CONCURRENCY,
     MAX_ROUNDS,
+    NEGOTIATION_SOURCES,
     EvalBatchManager,
     default_decision_mode,
+    default_negotiation_source,
     validate_concurrency,
     validate_rounds,
 )
@@ -124,6 +126,7 @@ def build_tester_routes(
                 "stageOrder": list(ALL_STAGES),
                 "approvals": ["approve", "reject", "auto"],
                 "decisionModes": list(DECISION_MODES),
+                "negotiationSources": list(NEGOTIATION_SOURCES),
                 "transport": defaults.get("transport", "sse"),
                 "discovery": defaults.get("discovery", "direct"),
                 "defaults": {
@@ -132,6 +135,7 @@ def build_tester_routes(
                     "timeoutSeconds": None,
                     "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,
                     "decisionMode": default_decision_mode(model_mode),
+                    "negotiationSource": default_negotiation_source(model_mode),
                     "concurrency": DEFAULT_CONCURRENCY,
                     "rounds": DEFAULT_ROUNDS,
                 },
@@ -194,6 +198,8 @@ def build_tester_routes(
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
+                negotiation_source=_optional_str(body.get("negotiationSource")),
+                principles_version=_optional_str(body.get("principlesVersion")),
                 keep_tasks=bool(body.get("keepTasks")),
                 concurrency=_concurrency(body.get("concurrency")),
                 rounds=_rounds(body.get("rounds")),
@@ -213,6 +219,7 @@ def build_tester_routes(
                 approval=_optional_str(body.get("approval")) or "approve",
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
+                negotiation_source=_optional_str(body.get("negotiationSource")),
                 keep_tasks=bool(body.get("keepTasks")),
                 owner=_client_id(request),
             )

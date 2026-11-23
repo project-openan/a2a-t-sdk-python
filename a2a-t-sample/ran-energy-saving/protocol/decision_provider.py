@@ -37,7 +37,7 @@ from google.genai import types
 from shared.adk_tracing import TracePlugin
 from shared.json_text import iter_json_objects
 from shared.model_factory import build_traced_adk_model
-from shared.models import NegotiationDecision, NegotiationProposeView
+from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.trace import trace_scope
 
 from protocol.manual_answer import asks_for_confirmation, missing_item_labels
@@ -53,6 +53,7 @@ _UNSET: Final[object] = object()
 #: own value; the instance attributes remain the fallback for callers that set them once.
 _USER_REQUEST: ContextVar[object] = ContextVar("a2at_decision_user_request", default=_UNSET)
 _CONVERSATION_CONTEXT: ContextVar[object] = ContextVar("a2at_decision_conversation_context", default=_UNSET)
+_DECISION_BASIS: ContextVar[object] = ContextVar("a2at_decision_basis", default=_UNSET)
 
 #: ADK application name of the client decision agent.
 CLIENT_APP_NAME = "ran_energy_client"
@@ -231,13 +232,16 @@ def build_decision_prompt(
     *,
     user_request: str | None = None,
     conversation_context: str | None = None,
+    decision_basis: DecisionBasis | None = None,
 ) -> str:
     """Build the user message handed to the ADK decision agent for one proposal.
 
     The original user request matters for target/feasibility proposals: their rendered content
     states the conflict but not the concrete throughput target, so a model without the request
     cannot propose a corrected, non-overlapping target and tends to loop through the tools. The
-    conversation context carries earlier turns so a follow-up keeps the same intent.
+    conversation context carries earlier turns so a follow-up keeps the same intent. The decision
+    basis (shared principles plus optional case conditions) is the client's own acceptance ground;
+    it is inserted with the request so the proposal the agent answers comes after it.
     """
     original = f"Original user request:\n{user_request}\n\n" if user_request else ""
     history = (
@@ -245,6 +249,7 @@ def build_decision_prompt(
         if conversation_context and conversation_context.strip()
         else ""
     )
+    basis = _decision_basis_block(decision_basis)
     options = ""
     if propose.options is not None and propose.options.options:
         values = "; ".join(option.value for option in propose.options.options if option.value)
@@ -266,6 +271,7 @@ def build_decision_prompt(
         f"Proposal template: {propose.template_uri or 'unknown'}\n"
         f"{original}"
         f"{history}"
+        f"{basis}"
         "Proposal content:\n"
         f"{propose.content}\n\n"
         f"{options}"
@@ -289,6 +295,36 @@ def build_decision_prompt(
         "- Omit fields that do not apply; never pass the string \"None\".\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
+    )
+
+
+def _decision_basis_block(basis: DecisionBasis | None) -> str:
+    """Render the optional client decision basis of one tester run, or nothing.
+
+    A run without a basis must keep the historical prompt byte for byte, so the whole section is
+    omitted rather than rendered empty.
+    """
+    if basis is None:
+        return ""
+    principles = basis.principles.strip() or "(none)"
+    conditions = basis.client_conditions.strip() or "(none)"
+    version = basis.principles_version.strip()
+    heading = "Client decision basis (shared negotiation principles"
+    heading += f", version {version})" if version else ")"
+    return (
+        f"{heading}:\n"
+        f"{principles}\n\n"
+        "Case-specific client conditions:\n"
+        f"{conditions}\n\n"
+        "Decision basis rules:\n"
+        "- The Client decision basis is your authoritative ground for accepting or rejecting "
+        "this proposal; it overrides your own default behaviour.\n"
+        "- Case-specific client conditions take precedence over the shared negotiation principles, "
+        "and the shared negotiation principles take precedence over the default behaviour.\n"
+        "- Answer only what this negotiation request covers; do not proactively handle a question "
+        "the request does not raise.\n"
+        "- An entity value may only come from the original request, this proposal or the "
+        "case-specific client conditions; never invent one.\n\n"
     )
 
 
@@ -442,6 +478,7 @@ class AdkDecisionProvider:
         self._offline = offline
         self._user_request = user_request
         self._conversation_context = conversation_context
+        self._decision_basis: DecisionBasis | None = None
         self._durable_sessions = durable
 
     def set_conversation_context(self, conversation_context: str | None) -> None:
@@ -467,6 +504,18 @@ class AdkDecisionProvider:
         if value is _UNSET:
             return self._conversation_context
         return value if isinstance(value, str) else None
+
+    def set_decision_basis(self, basis: DecisionBasis | None) -> None:
+        """Set the client decision basis used by the next prompts in this task."""
+        self._decision_basis = basis
+        _DECISION_BASIS.set(basis)
+
+    def _current_decision_basis(self) -> DecisionBasis | None:
+        """Return this task's decision basis, falling back to the instance value."""
+        value = _DECISION_BASIS.get()
+        if value is _UNSET:
+            return self._decision_basis
+        return value if isinstance(value, DecisionBasis) else None
 
     def grounding_text(self) -> str:
         """Return the operator text a pure A2A answer may use as a grounding source.
@@ -527,6 +576,7 @@ class AdkDecisionProvider:
                 session,
                 user_request=self._current_user_request(),
                 conversation_context=self._current_conversation_context(),
+                decision_basis=self._current_decision_basis(),
             ),
         )
         if final_event is None:
@@ -842,6 +892,12 @@ class ConfirmingDecisionProvider:
         setter = getattr(self._inner, "set_user_request", None)
         if callable(setter):
             setter(user_request)
+
+    def set_decision_basis(self, basis: DecisionBasis | None) -> None:
+        """Forward the client decision basis to the inner decision provider."""
+        setter = getattr(self._inner, "set_decision_basis", None)
+        if callable(setter):
+            setter(basis)
 
     def submit(self, decision: NegotiationDecision) -> None:
         """Hand the engineer's decision to the waiting flow."""

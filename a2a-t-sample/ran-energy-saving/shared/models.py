@@ -8,12 +8,33 @@ decision provider, so providers never parse raw A2A-T metadata themselves.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 #: Decision intents the client agent may return.
 NegotiationAction = Literal["accept", "reject", "abort", "counter"]
+
+
+@dataclass(frozen=True)
+class DecisionBasis:
+    """The client's own ground for accepting or rejecting a negotiation proposal.
+
+    Two layers: the shared negotiation principles (frozen per tester batch, with the version they
+    came from) and the optional case-specific client conditions. The decision agent sees both; the
+    conditions take precedence over the shared principles. A run without either layer keeps the
+    historical decision prompt: this value stays ``None``.
+
+    Attributes:
+        principles: Body of the shared negotiation principles.
+        principles_version: Version identifier of those principles.
+        client_conditions: Optional case-level conditions of this request.
+    """
+
+    principles: str = ""
+    principles_version: str = ""
+    client_conditions: str = ""
 
 
 class NegotiationDecision(BaseModel):

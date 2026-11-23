@@ -67,6 +67,8 @@ class FakeRuntime:
         self.downstream_trace_id = ""
         self.reply_only_accept = False
         self.correction_provider: CorrectionProvider | None = None
+        self.decision_basis: object | None = None
+        self.apply_client_policy = True
 
     def set_decision_wait_sink(self, sink: Callable[[DecisionTimeoutError], None] | None) -> bool:
         """Accept the manager's expired-window observer."""
@@ -97,9 +99,13 @@ class FakeRuntime:
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
         correction_provider: CorrectionProvider | None = None,
+        decision_basis: object | None = None,
+        apply_client_policy: bool = True,
     ) -> ClientFlowResult:
         self.reply_only_accept = reply_only_accept
         self.correction_provider = correction_provider
+        self.decision_basis = decision_basis
+        self.apply_client_policy = apply_client_policy
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
         del require_rate_target, site_level_rate_optional, run_mode, target_task_id, target_context_id
         del target_server_task_id, target_server_context_id
@@ -960,6 +966,93 @@ async def test_a_presentation_run_keeps_the_refilled_task_t(
     await _finish(manager, run.run_id)
 
     assert runtimes[0].reply_only_accept is False
+
+
+async def test_a_tester_agent_run_keeps_the_derived_accept(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """An agent-authored tester reply is not a replayed case script: the accept is derived."""
+    manager, _, runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "tester", "channel": "tester-console"},
+        negotiation_source="agent",
+    )
+    await _finish(manager, run.run_id)
+
+    assert runtimes[0].reply_only_accept is False
+
+
+async def test_the_run_records_the_negotiation_basis(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    manager, _, _ = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "tester", "channel": "tester-console"},
+        negotiation_source="agent",
+        client_conditions="低于 2Mbps 不能接受。",
+        negotiation_principles="全局协商原则正文",
+        principles_version="2026-11-23.1",
+    )
+    await _finish(manager, run.run_id)
+
+    assert run.negotiation_source == "agent"
+    assert run.client_conditions == "低于 2Mbps 不能接受。"
+    assert run.negotiation_principles == "全局协商原则正文"
+    assert run.principles_version == "2026-11-23.1"
+
+
+async def test_an_agent_run_hands_the_basis_and_no_client_policy_to_the_runtime(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The agent's decision must not be silently rewritten by the deterministic policy."""
+    from shared.models import DecisionBasis
+
+    manager, _, runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "tester", "channel": "tester-console"},
+        negotiation_source="agent",
+        client_conditions="条件",
+        negotiation_principles="原则",
+        principles_version="v1",
+    )
+    await _finish(manager, run.run_id)
+
+    runtime = runtimes[0]
+    assert isinstance(runtime.decision_basis, DecisionBasis)
+    assert runtime.decision_basis.client_conditions == "条件"
+    assert runtime.decision_basis.principles == "原则"
+    assert runtime.decision_basis.principles_version == "v1"
+    assert runtime.apply_client_policy is False
+
+
+async def test_a_script_run_keeps_the_client_policy_and_sends_no_basis(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    manager, _, runtimes = _manager(tmp_path, offline_config)
+    run = await manager.start(
+        "information",
+        "auto",
+        "sse",
+        source={"kind": "tester", "channel": "tester-console"},
+        negotiation_source="script",
+    )
+    await _finish(manager, run.run_id)
+
+    assert runtimes[0].decision_basis is None
+    assert runtimes[0].apply_client_policy is True
 
 
 async def test_a_caller_cannot_move_a_chain_to_another_trace(

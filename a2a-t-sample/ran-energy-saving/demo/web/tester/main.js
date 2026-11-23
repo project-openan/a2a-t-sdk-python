@@ -140,6 +140,38 @@ async function loadMeta() {
   decision.querySelector('option[value="live"]').disabled = !liveEnabled;
   if (!liveEnabled) decision.title = "离线模式只能使用 scripted";
   $("scratch-decision").querySelector('option[value="live"]').disabled = !liveEnabled;
+  const sources = meta?.negotiationSources || ["script"];
+  for (const id of ["config-negotiation-source", "scratch-negotiation-source"]) {
+    const select = $(id);
+    clear(select);
+    for (const source of sources) {
+      const option = el(
+        "option",
+        "",
+        source === "agent" ? "agent（客户端 agent 决策）" : "script（用例脚本回放）",
+      );
+      option.value = source;
+      select.append(option);
+    }
+    select.value = meta?.defaults?.negotiationSource || "script";
+  }
+  syncNegotiationSources();
+}
+
+function syncNegotiationSources() {
+  const liveEnabled = (state.meta?.modelMode || "") !== "offline";
+  for (const [decisionId, sourceId] of [
+    ["config-decision", "config-negotiation-source"],
+    ["scratch-decision", "scratch-negotiation-source"],
+  ]) {
+    const decision = $(decisionId);
+    const select = $(sourceId);
+    const agent = select.querySelector('option[value="agent"]');
+    if (!agent) continue;
+    const allowed = liveEnabled && decision.value === "live";
+    agent.disabled = !allowed;
+    if (!allowed && select.value === "agent") select.value = "script";
+  }
 }
 
 function syncRoundsKeepTasks() {
@@ -276,6 +308,7 @@ async function startBatch() {
       stopAfter: $("config-stop-after").value,
       approval: $("config-approval").value || null,
       decisionMode: $("config-decision").value,
+      negotiationSource: $("config-negotiation-source").value,
       timeoutSeconds: $("config-timeout").value === "" ? null : Number($("config-timeout").value),
       workingTimeoutSeconds:
         $("config-working-timeout").value === "" ? null : Number($("config-working-timeout").value),
@@ -309,6 +342,7 @@ async function startScratch() {
       protocol: $("scratch-protocol").value,
       approval: $("scratch-approval").value,
       decisionMode: $("scratch-decision").value,
+      negotiationSource: $("scratch-negotiation-source").value,
       timeoutSeconds: Number($("scratch-timeout").value) || 300,
       keepTasks: $("config-keep-tasks").checked,
     });
@@ -1600,6 +1634,8 @@ function wireEvents() {
     renderResults();
   });
   $("config-rounds").addEventListener("input", syncRoundsKeepTasks);
+  $("config-decision").addEventListener("change", syncNegotiationSources);
+  $("scratch-decision").addEventListener("change", syncNegotiationSources);
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-backdrop").addEventListener("click", closeDrawer);
   $("drawer-tab-result").addEventListener("click", () => switchDrawerTab("result"));

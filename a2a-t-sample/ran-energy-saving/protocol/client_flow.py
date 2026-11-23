@@ -999,6 +999,7 @@ async def run_client_flow(
     reply_only_accept: bool = False,
     verbatim_decision_text: bool = False,
     client_policy: ClientPolicy | None = None,
+    apply_client_policy: bool = True,
     validate_before_send: bool = False,
     enforce_required_fields: bool = False,
     site_level_rate_optional: bool = False,
@@ -1068,6 +1069,10 @@ async def run_client_flow(
             invents an entity value and never accepts a plan below the configured throughput floor;
             in automatic mode it also accepts a feasible server alternative the model rejected.
             ``None`` means no floor.
+        apply_client_policy: Apply ``client_policy`` to an automatic decision. A tester agent run
+            passes ``False``: the agent's own conditions are its acceptance ground, so the process
+            floor must not rewrite a reject of a feasible alternative. Grounding still runs. The
+            default keeps the historical behaviour for every scripted and presentation path.
         validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
             sending it. Negotiable errors still go to the server for negotiation; unmapped errors
             end the flow with ``input_invalid`` and no message is sent.
@@ -1637,7 +1642,7 @@ async def run_client_flow(
                 )
                 return finish(FINAL_STATE_INCOMPLETE)
             policy_outcome = None
-            if _requires_auto_verification(provider):
+            if _requires_auto_verification(provider) and apply_client_policy:
                 decision, policy_outcome = apply_automated_decision(
                     decision,
                     kind=kind.value,
