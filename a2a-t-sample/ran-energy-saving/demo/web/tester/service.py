@@ -1625,6 +1625,7 @@ class EvalBatchManager:
                 gate_reason=gate_reason,
                 client_conditions=conditions,
                 judge_label=self._judge_model_label,
+                protocol=item.protocol,
             )
         except Exception as exc:  # noqa: BLE001 - the appendix must never fail the item
             _LOGGER.warning(

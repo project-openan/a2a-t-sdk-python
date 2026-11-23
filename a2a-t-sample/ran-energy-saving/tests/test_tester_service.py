@@ -1126,6 +1126,12 @@ async def test_an_agent_pure_item_gets_its_client_quality(tmp_path: Path) -> Non
     assert isinstance(item.client_quality, Mapping)
     assert item.client_quality["quality"] == "pass"
     assert judge.calls == 1
+    # The appendix must read the A2A P column, not the A2A-T Q column.
+    expected_section = judge.prompts[0].split("Expected negotiation reply:", 1)[1].split(
+        "Server proposal:", 1
+    )[0]
+    assert "The region is A2ATestRegion." in expected_section
+    assert "Region: A2ATestRegion." not in expected_section
 
 
 def test_an_agent_pure_batch_rejects_the_oss_proxy_hop(tmp_path: Path) -> None:

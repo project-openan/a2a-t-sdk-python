@@ -191,15 +191,20 @@ class ClientQualityResult:
         }
 
 
-def _expected_rounds(case: Mapping[str, Any]) -> list[str]:
-    """Return the Q-column expected replies of one case's A2A-T negotiation."""
+def _expected_rounds(case: Mapping[str, Any], protocol: str) -> list[str]:
+    """Return the recorded replies of one case's negotiation on ``protocol``.
+
+    A2A-T keeps its expectations in the Q column (``a2a-t``); A2A keeps them in the P column
+    (``a2a``). Judging a pure item against the Q column would compare the agent with another
+    protocol's expected dialogue.
+    """
     expect = case.get("expect")
     if not isinstance(expect, Mapping):
         return []
     protocols = expect.get("protocols")
     if not isinstance(protocols, Mapping):
         return []
-    protocol_block = protocols.get("a2a-t")
+    protocol_block = protocols.get(protocol)
     if not isinstance(protocol_block, Mapping):
         return []
     negotiation = protocol_block.get("negotiation")
@@ -298,11 +303,14 @@ async def judge_client_quality(
     client_conditions: str | None = None,
     judge_label: str = "",
     checker_queries: Sequence[object] = (),
+    protocol: str = "a2a-t",
 ) -> ClientQualityResult:
     """Judge the client's negotiation decisions of one case.
 
     Args:
-        case: the OSP case document (the Q column lives in ``expect.protocols.a2a-t``).
+        case: the OSP case document (the recorded replies live in ``expect.protocols.a2a-t``
+            for A2A-T and ``expect.protocols.a2a`` for pure A2A).
+        protocol: catalog protocol of the item; selects the recorded reply column.
         observations: observed decisions, one per recorded decision.
         judge: independent judge client (``complete_json``) or ``None``.
         final_state: terminal state of the run; a pre-send interception fails every round.
@@ -324,7 +332,7 @@ async def judge_client_quality(
         if client_conditions is not None
         else case_client_conditions(case)
     )
-    expected_rounds = _expected_rounds(case)
+    expected_rounds = _expected_rounds(case, protocol)
     by_round: dict[int, ClientQualityObservation] = {}
     for observation in observations:
         by_round.setdefault(observation.round, observation)

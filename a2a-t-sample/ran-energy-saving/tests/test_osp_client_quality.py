@@ -89,6 +89,47 @@ def _observation(
     )
 
 
+async def test_a_pure_item_is_judged_against_its_own_p_column() -> None:
+    """A2A's expected reply is the P column; reading the Q column would judge another protocol."""
+    case = {
+        "id": 51,
+        "expect": {
+            "protocols": {
+                "a2a-t": {
+                    "negotiation": {
+                        "expected": True,
+                        "rounds": ["## Information Negotiation Result\n\nRegion: A2ATestRegion."],
+                    }
+                },
+                "a2a": {
+                    "negotiation": {
+                        "expected": True,
+                        "rounds": ["The region is A2ATestRegion."],
+                    }
+                },
+            }
+        },
+    }
+    judge = _Judge({"verdict": "equal", "covered": True, "reason": "the region matches"})
+
+    result = await judge_client_quality(
+        case=case,
+        observations=[
+            _observation(
+                kind="information",
+                proposal="The region name is missing. Please provide the correct region name.",
+                accepted_text="The region is A2ATestRegion.",
+            )
+        ],
+        judge=judge,
+        protocol="a2a",
+    )
+
+    assert result.quality == "pass"
+    assert "The region is A2ATestRegion." in judge.prompts[0]
+    assert "Region: A2ATestRegion." not in judge.prompts[0]
+
+
 async def test_an_accept_that_matches_the_expected_reply_passes() -> None:
     result = await judge_client_quality(
         case=_case([_ACCEPT_REPLY]),
