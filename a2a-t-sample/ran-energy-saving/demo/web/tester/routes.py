@@ -204,6 +204,7 @@ def build_tester_routes(
                 decision_mode=_optional_str(body.get("decisionMode")),
                 negotiation_source=_optional_str(body.get("negotiationSource")),
                 principles_version=_optional_str(body.get("principlesVersion")),
+                nms_version=_optional_str(body.get("nmsVersion")),
                 keep_tasks=bool(body.get("keepTasks")),
                 concurrency=_concurrency(body.get("concurrency")),
                 rounds=_rounds(body.get("rounds")),

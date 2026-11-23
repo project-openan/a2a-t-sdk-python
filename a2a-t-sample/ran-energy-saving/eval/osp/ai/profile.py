@@ -298,6 +298,9 @@ def manifest(
         "model": profile.env.get("A2AT_LLM_MODEL") or profile.env.get("ADK_MODEL_NAME") or "",
         "modelEndpoint": profile.env.get("A2AT_LLM_API_BASE") or profile.env.get("ADK_MODEL_API_BASE") or "",
         "modelMode": profile.model_mode,
+        "judgeModel": profile.env.get("A2AT_OSP_JUDGE_MODEL", ""),
+        "judgeEndpoint": profile.env.get("A2AT_OSP_JUDGE_API_BASE", ""),
+        "principlesVersion": _principles_version(),
         "decisionMode": profile.decision_mode,
         "approval": profile.approval,
         "language": profile.language,
@@ -310,6 +313,16 @@ def manifest(
     if extra:
         document.update(extra)
     return document
+
+
+def _principles_version() -> str:
+    """Return the shared negotiation principles version this checkout ships."""
+    from eval.osp.principles import load_principles
+
+    try:
+        return load_principles().version
+    except (FileNotFoundError, ValueError):
+        return ""
 
 
 def _resolve_path(value: str | Path | None) -> Path | None:

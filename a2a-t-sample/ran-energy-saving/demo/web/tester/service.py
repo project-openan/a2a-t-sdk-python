@@ -500,6 +500,8 @@ class _Batch:
     #: Shared negotiation principles frozen when the batch is created (P1 fills these).
     principles_version: str = ""
     principles_text: str = ""
+    #: Operator-entered NMS version label; report-only, never used for judging.
+    nms_version: str = ""
     #: Keep every Task this batch created alive after its item ends. Off by default: a finished
     #: tester item releases its remote Task so a long acceptance run does not exhaust the NMS quota.
     keep_tasks: bool = False
@@ -616,6 +618,7 @@ class EvalBatchManager:
         decision_mode: str | None = None,
         negotiation_source: str | None = None,
         principles_version: str | None = None,
+        nms_version: str | None = None,
         keep_tasks: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         rounds: int = DEFAULT_ROUNDS,
@@ -693,6 +696,7 @@ class EvalBatchManager:
             negotiation_source=resolved_negotiation_source,
             principles_version=principles.version,
             principles_text=principles.text,
+            nms_version=(nms_version or "").strip(),
             keep_tasks=keep_tasks,
             concurrency=resolved_concurrency,
             rounds=resolved_rounds,
@@ -3075,6 +3079,7 @@ class EvalBatchManager:
             negotiation_source=loaded_source,
             principles_version=loaded_version,
             principles_text=loaded_text,
+            nms_version=_optional_text(document.get("nmsVersion")),
             # A multi-round batch never keeps Tasks; an edited document cannot re-enable it.
             keep_tasks=bool(document.get("keepTasks"))
             and _clamp_rounds(document.get("rounds")) == DEFAULT_ROUNDS,
@@ -3148,6 +3153,25 @@ class EvalBatchManager:
             "negotiationSource": batch.negotiation_source,
             "principlesVersion": batch.principles_version,
             "principlesText": batch.principles_text,
+            "nmsVersion": batch.nms_version,
+            # One batch must be reproducible: which models, environment, principles version and
+            # NMS the operator intended. The report exports this block as its own sheet.
+            "plan": {
+                "protocols": list(batch.protocols),
+                "environment": {
+                    "transport": batch.transport,
+                    "discovery": batch.discovery,
+                    "nms": self._nms,
+                    "nmsSim": self._nms_sim,
+                },
+                "negotiationModel": self._model_label,
+                "judgeModel": self._judge_model_label,
+                "principlesVersion": batch.principles_version,
+                "nmsVersion": batch.nms_version,
+                "decisionSource": batch.negotiation_source,
+                "stopAfter": batch.stop_after,
+                "rounds": batch.rounds,
+            },
             # The annotation console groups evidence by model and by downstream, so the batch
             # records the process identity it ran against. Older files lack these keys.
             "modelLabel": self._model_label,

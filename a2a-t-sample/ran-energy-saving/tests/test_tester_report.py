@@ -461,6 +461,33 @@ def test_the_client_quality_appendix_is_exported_as_its_own_sheet() -> None:
     assert row["理由"] == "the accepted rate is 5Mbps instead of 2Mbps"
 
 
+def test_the_batch_plan_is_exported_as_its_own_sheet() -> None:
+    """One batch's models, principles version and environment must travel with the report."""
+    batch = _snapshot()
+    batch["plan"] = {
+        "protocols": ["a2a-t"],
+        "environment": {"transport": "sse", "discovery": "nms", "nms": True, "nmsSim": False},
+        "negotiationModel": "negotiation-model",
+        "judgeModel": "judge-model",
+        "principlesVersion": "2026-11-23.1",
+        "nmsVersion": "NMS-1.2",
+        "decisionSource": "agent",
+        "stopAfter": "accepted",
+        "rounds": 1,
+    }
+
+    workbook = load_workbook(BytesIO(write_report(batch)))
+
+    assert "批次计划" in workbook.sheetnames
+    rows = list(workbook["批次计划"].iter_rows(values_only=True))
+    plan = {str(key): value for key, value in rows[1:]}
+    assert plan["协商模型"] == "negotiation-model"
+    assert plan["判定模型"] == "judge-model"
+    assert plan["协商原则版本"] == "2026-11-23.1"
+    assert plan["NMS 版本"] == "NMS-1.2"
+    assert plan["协商答复来源"] == "agent"
+
+
 def test_a_batch_without_client_quality_keeps_the_four_existing_sheets() -> None:
     workbook = load_workbook(BytesIO(write_report(_snapshot())))
 

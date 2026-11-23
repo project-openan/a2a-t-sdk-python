@@ -200,3 +200,5 @@ def test_manifest_records_the_build_and_the_isolation(monkeypatch, tmp_path: Pat
     assert document["runsDir"] == str(profile.runs_dir)
     assert document["caseIds"] == [1, 34]
     assert document["nmsEndpoint"] == "https://nms:31127/a2a/json"
+    assert document["judgeModel"] == ""
+    assert document["principlesVersion"]

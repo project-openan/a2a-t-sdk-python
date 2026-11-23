@@ -252,6 +252,10 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     if multi:
         _write_round_sheet(workbook.create_sheet("轮次汇总"), batch, rounds)
 
+    plan = batch.get("plan")
+    if isinstance(plan, Mapping):
+        _write_plan_sheet(workbook.create_sheet("批次计划"), plan)
+
     # The decision-quality appendix is only meaningful when at least one agent-authored negotiation
     # produced it; a batch without it keeps exactly the four historical sheets.
     if _has_client_quality(batch):
@@ -260,6 +264,33 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _write_plan_sheet(sheet: Worksheet, plan: Mapping[str, Any]) -> None:
+    """Write the batch plan as key/value rows so a report names its own reproducibility context."""
+    sheet.append(["项目", "值"])
+    _style_header(sheet)
+    environment = plan.get("environment")
+    environment_text = ""
+    if isinstance(environment, Mapping):
+        environment_text = " · ".join(
+            f"{key}={value}" for key, value in environment.items()
+        )
+    protocols = plan.get("protocols")
+    rows = (
+        ("协议", " / ".join(str(value) for value in protocols) if isinstance(protocols, list) else protocols),
+        ("环境", environment_text),
+        ("协商模型", plan.get("negotiationModel", "")),
+        ("判定模型", plan.get("judgeModel", "")),
+        ("协商原则版本", plan.get("principlesVersion", "")),
+        ("NMS 版本", plan.get("nmsVersion", "")),
+        ("协商答复来源", plan.get("decisionSource", "")),
+        ("执行到", plan.get("stopAfter", "")),
+        ("轮次", plan.get("rounds", "")),
+    )
+    for key, value in rows:
+        sheet.append([key, value])
+    _set_widths(sheet, (20, 64))
 
 
 def _has_client_quality(batch: Mapping[str, Any]) -> bool:

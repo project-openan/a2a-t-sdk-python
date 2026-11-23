@@ -289,6 +289,8 @@ def _manager(
     nms_sim_pure_question: str = "issue",
     protocol_defaults: dict[str, dict[str, str]] | None = None,
     judge: Any | None = None,
+    model_label: str = "",
+    judge_model_label: str = "",
 ) -> EvalBatchManager:
     # Only pass ``judge`` when a test supplies one: every historical test keeps constructing the
     # manager without the P2 keyword so an unimplemented judge cannot make them fail too.
@@ -304,6 +306,8 @@ def _manager(
         nms_sim_pure_question=nms_sim_pure_question,
         language="en-US",
         model_mode=model_mode,
+        model_label=model_label,
+        judge_model_label=judge_model_label,
         prompt_client=_PromptClient(),
         **judge_kwarg,
     )
@@ -1108,6 +1112,44 @@ async def test_an_unavailable_judge_leaves_the_item_green(tmp_path: Path) -> Non
     assert isinstance(item.client_quality, Mapping)
     assert item.client_quality["quality"] == "unjudged"
     assert finished["items"][0]["clientQuality"]["quality"] == "unjudged"
+
+
+def test_the_snapshot_records_the_batch_plan(tmp_path: Path) -> None:
+    """One batch must say who ran what, with which models, principles version and NMS."""
+    manager = _manager(
+        tmp_path,
+        _FakeRuns(_finish),
+        model_mode="live",
+        model_label="negotiation-model",
+        judge_model_label="judge-model",
+    )
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="accepted",
+        negotiation_source="agent",
+        nms_version="NMS-1.2",
+    )
+
+    assert created["nmsVersion"] == "NMS-1.2"
+    plan = created["plan"]
+    assert plan["protocols"] == [PROTOCOL_A2A_T]
+    assert plan["decisionSource"] == "agent"
+    assert plan["negotiationModel"] == "negotiation-model"
+    assert plan["judgeModel"] == "judge-model"
+    assert plan["principlesVersion"] == created["principlesVersion"]
+    assert plan["stopAfter"] == "accepted"
+    assert plan["environment"]["transport"] == "sse"
+    reloaded = _manager(
+        tmp_path,
+        _FakeRuns(_finish),
+        model_mode="live",
+        model_label="negotiation-model",
+        judge_model_label="judge-model",
+    ).get(str(created["batchId"]))
+    assert reloaded is not None
+    assert reloaded["nmsVersion"] == "NMS-1.2"
+    assert reloaded["plan"]["judgeModel"] == "judge-model"
 
 
 def test_a_batch_round_trips_the_negotiation_source(tmp_path: Path) -> None:
