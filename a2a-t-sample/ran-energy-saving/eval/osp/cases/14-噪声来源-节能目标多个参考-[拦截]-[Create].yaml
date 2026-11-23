@@ -2,7 +2,7 @@
 # Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 14
-name: 噪声来源 节能目标多个参考 过去下发的任务A和B大部分下发内容一样，但速率保障目标不一样，下发任务C时要求参考此前的任务，指代不清晰 the previous task 指代不清 A2A：预期识别出错 A2A-T：预期触发拦截
+name: 噪声来源 节能目标多个参考
 dimension: D5 意图存在噪声
 operation: Create
 tags:

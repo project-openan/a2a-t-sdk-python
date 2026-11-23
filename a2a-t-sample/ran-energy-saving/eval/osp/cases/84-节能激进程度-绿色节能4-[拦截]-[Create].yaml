@@ -119,7 +119,7 @@ assert:
     final_state: false
 blocked_followup:
   input: |-
-    Create an energy-saving task with the  conservative energy-saving mode in the A2ATestRegion3 area. The guaranteed rate objectives for each time period are set as follows: 00:00-07:00 → 2 Mbps, 07:00-18:00 → 10 Mbps, 18:00-24:00 → 2 Mbps.
+    Create an energy-saving task with the  conservative energy-saving mode in the A2ATestRegion3 area. The guaranteed rate objectives for each time period are set as follows: 00:00-07:00 → 2 Mbps, 07:00-18:00 → 20 Mbps, 18:00-24:00 → 2 Mbps.
 runner:
   scenario: night
   language: en-US

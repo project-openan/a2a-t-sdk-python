@@ -233,23 +233,24 @@ def test_assert_switches(cases: dict[int, dict[str, Any]]) -> None:
 def test_index_matches_cases(cases: dict[int, dict[str, Any]]) -> None:
     index = _load(INDEX_PATH)
     assert index["schema"] == "osp-eval-index/v1"
-    assert index["source"] == SOURCE_FILE
+    assert index["source"]["file"] == SOURCE_FILE
     assert index["count"] == 100
     entries = index["cases"]
     assert len(entries) == 100
     assert sorted(entry["id"] for entry in entries) == list(range(1, 101))
     for entry in entries:
         document = cases[entry["id"]]
-        assert entry["file"] == document["_path"].name
+        protocols = document["expect"]["protocols"]
+        assert entry["file"] == f"cases/{document['_path'].name}"
         assert entry["operation"] == document["operation"]
-        assert entry["validate"] == document["expect"]["protocols"]["a2a-t"]["validate"]
+        assert entry["validate"] == protocols["a2a-t"]["validate"]
         assert entry["tags"] == document["tags"]
-        assert entry["a2a_negotiation_rounds"] == (
-            document["expect"]["protocols"]["a2a"]["negotiation"]["expected_rounds"]
-        )
-        assert entry["a2a_t_negotiation_rounds"] == (
-            document["expect"]["protocols"]["a2a-t"]["negotiation"]["expected_rounds"]
-        )
+        assert entry["source_row"] == document["source"]["row"]
+        assert entry["negotiation"] == {
+            "a2a-t": protocols["a2a-t"]["negotiation"]["expected_rounds"] > 0,
+            "a2a": protocols["a2a"]["negotiation"]["expected_rounds"] > 0,
+        }
+        assert entry["blocked_followup"] == ("blocked_followup" in document)
 
 
 def test_top_level_contract(cases: dict[int, dict[str, Any]]) -> None:

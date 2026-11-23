@@ -12,7 +12,7 @@ tags:
   - negotiation-a2a
   - negotiation-a2at
 user_input: |-
-  Due to a power outage at LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion area from 08:00 to 18:00 on the second day, the guaranteed bandwidth of LNR_KPI_7745 needs to be changed to 10 Mbit/s from 08:00 to 18:00, and the guaranteed bandwidth of NES_27A_321071 needs to be changed to 2 Mbit/s from 08:00 to 18:00.
+  Due to a power outage at LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion area from 08:00 to 18:00 on the second day, the guaranteed bandwidth of LNR_KPI_7745 needs to be changed to 15 Mbit/s from 08:00 to 18:00, and the guaranteed bandwidth of NES_27A_321071 needs to be changed to 2 Mbit/s from 08:00 to 18:00.
 expect:
   intent:
     Operation type: Modify
@@ -61,7 +61,7 @@ expect:
         ## Task Target
 
         ## Task Context
-        Site list 1: ["LNR_KPI_7745"], Time-segmented rate guarantee target: {08:00-13:00, 10Mbps},Background event: power outage from 08:00 to 18:00.
+        Site list 1: ["LNR_KPI_7745"], Time-segmented rate guarantee target: {08:00-13:00, 15Mbps},Background event: power outage from 08:00 to 18:00.
 
         Site list 2: ["NES_27A_321071"], Time-segmented rate guarantee target: {13:00-18:00, 2Mbps}, Background event: power outage from 08:00 to 18:00.
 
@@ -125,9 +125,9 @@ expect:
         expected_rounds: 3
         kinds: null
         rounds:
-          - LNR_KPI_7745 needs 10Mbps.
-          - LNR_KPI_7745 needs 5Mbps.
-          - LNR_KPI_7745 needs 2Mbps.
+          - LNR_KPI_7745 reduces its throughput target to 10 Mbps during the power outage.
+          - LNR_KPI_7745 reduces its throughput target to 5 Mbps during the power outage.
+          - LNR_KPI_7745 reduces its throughput target to 2 Mbps during the power outage.
       final_state: null
 assert:
   intent: true
