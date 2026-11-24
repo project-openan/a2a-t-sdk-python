@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 """Tests for the closed error catalog (port of Java ``ErrorCatalog``)."""
 
 from __future__ import annotations
@@ -8,7 +25,7 @@ import pytest
 
 from a2a_t.core.errors.catalog import Category, ErrorCatalog, by_code
 
-# The full 42-entry table ported verbatim from the Java source
+# The full 43-entry table ported verbatim from the Java source
 # (a2a-t-core/.../core/exception/ErrorCatalog.java): (member name, code, category, fact parameters).
 # This literal table is the factParameters parity oracle; the assertions below pin the Python
 # catalog member-for-member against it.
@@ -25,6 +42,7 @@ JAVA_ERROR_CATALOG: tuple[tuple[str, str, Category, tuple[str, ...]], ...] = (
     ("SLOT_FABRICATED_VALUE", "slot.fabricated_value", Category.BUSINESS, ("slot_label", "actual")),
     ("SLOT_CROSS_SCENARIO_POLLUTION", "slot.cross_scenario_pollution", Category.BUSINESS, ("slot_label",)),
     ("SLOT_INSUFFICIENT_GROUNDING", "slot.insufficient_grounding", Category.BUSINESS, ("slot_label",)),
+    ("SLOT_INTENT_UNCLEAR", "slot.intent_unclear", Category.BUSINESS, ("slot_label", "actual")),
     ("SLOT_RULE_VIOLATION", "slot.rule_violation", Category.BUSINESS, ("slot_label",)),
     # domain: input
     ("INPUT_TEXT_TOO_LONG", "input.text_too_long", Category.BUSINESS, ("actual_length", "max_chars")),
@@ -126,10 +144,10 @@ def test_entry_matches_the_java_error_catalog(
     assert by_code(code) is member
 
 
-def test_catalog_size_is_42() -> None:
-    assert len(ErrorCatalog) == 42
-    assert len(JAVA_ERROR_CATALOG) == 42
-    assert len({entry[1] for entry in JAVA_ERROR_CATALOG}) == 42
+def test_catalog_size_is_43() -> None:
+    assert len(ErrorCatalog) == 43
+    assert len(JAVA_ERROR_CATALOG) == 43
+    assert len({entry[1] for entry in JAVA_ERROR_CATALOG}) == 43
     assert {member.name for member in ErrorCatalog} == {entry[0] for entry in JAVA_ERROR_CATALOG}
 
 

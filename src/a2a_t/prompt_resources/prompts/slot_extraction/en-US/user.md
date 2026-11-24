@@ -11,6 +11,7 @@ If explicit information for the same slot is scattered across multiple places, m
 - If a required slot cannot be extracted: set value=null, report code="slot.not_provided" with facts {"slot_label": ...}
 - If an optional slot cannot be extracted: set value=null, no error entry
 - If the input word is outside a slot's closed value range: set value=null, report code="slot.constraint_violated" with facts {"slot_label": ..., "actual": ...}
+- If the input provides content for a slot but its intent is unclear and the concrete value cannot be determined: set value=null, report code="slot.intent_unclear" with facts {"slot_label": ..., "actual": ...}
 - Format-anomalous content (invalid dates, meaningless characters, and the like) is extracted as-is with no error entry; the validation stage decides
 
 ## Example Output

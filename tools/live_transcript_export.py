@@ -1,18 +1,34 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 """Exports a live-corpus transcript into a review-friendly report with inline replayable requests.
 
 Python port of the Java repository's ``tools/live_transcript_export.py`` (1.1.0, 201 lines). Reads
 ``.live-corpus/<run>/transcript.json`` (+ ``summary.json`` when present) and writes a single
 ``export/report.md``: one section per case -- input, parsed params, every LLM call's full request
 messages / schema / raw response -- and, per call, the exact OpenAI-compatible
-``/v1/chat/completions`` request body OpenAIClient sent (one merged system message carrying the
-JSON-mode instruction, the schema instruction and the recorded system prompt, ``response_format``
-json_object, and the recorded messages), pretty-printed inline so it can be copied straight into
-Postman for prompt tuning outside the test suite.
+``/v1/chat/completions`` request body OpenAIClient sent (the recorded messages and the standard
+``response_format`` json_schema), pretty-printed inline so it can be copied straight into Postman
+for prompt tuning outside the test suite.
 
-The replay body is rebuilt with the production
-:func:`a2a_t.llm.providers.openai.build_structured_messages`, so the replay section cannot drift
-from what the client actually sends (the Java copy keeps them in sync by hand).
+The structured-output schema name is imported from the production
+:class:`a2a_t.llm.providers.openai.OpenAIClient`, so the replay section cannot drift from what the
+client actually sends (the Java copy keeps it in sync by hand).
 
 Usage:
   uv run python tools/live_transcript_export.py <run-dir-or-transcript.json> [--out DIR]
@@ -26,7 +42,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from a2a_t.llm.providers.openai import build_structured_messages
+from a2a_t.llm.providers.openai import STRUCTURED_OUTPUT_SCHEMA_NAME
 
 # Temperature the live .env pins (LiveLlmEnvWriter, A2AT_LLM_TEMPERATURE=0); used when the
 # per-call record carries none, which is the production default path.
@@ -53,18 +69,16 @@ def load_run(source: Path) -> tuple[Path, list[dict[str, Any]], dict[str, Any] |
 
 def build_replay_request(call: dict[str, Any]) -> dict[str, Any]:
     """Rebuild the ``/v1/chat/completions`` body OpenAIClient sent for one recorded call."""
-    recorded = [
-        {
-            "role": "system" if message.get("role", "user") == "system" else "user",
-            "content": message.get("content", ""),
-        }
-        for message in call.get("messages") or []
-    ]
-    messages = build_structured_messages(recorded, call.get("jsonSchema") or {})
     request: dict[str, Any] = {
         "model": call.get("model"),
-        "messages": messages,
-        "response_format": {"type": "json_object"},
+        "messages": call.get("messages") or [],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": STRUCTURED_OUTPUT_SCHEMA_NAME,
+                "schema": call.get("jsonSchema") or {},
+            },
+        },
     }
     temperature = call.get("temperature")
     request["temperature"] = temperature if temperature is not None else DEFAULT_TEMPERATURE

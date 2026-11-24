@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 from __future__ import annotations
 
 import logging
@@ -94,6 +111,20 @@ class PromptGenerationOrchestrator:
         self._input_limit = input_limit if input_limit is not None else InputLimitConfig()
         self._logger = logger if logger is not None else _LOGGER
         self._provider = provider
+
+    def _provider_fact(self, source: Any) -> str:
+        """Return the provider label rendered into ``llm.invocation_failed`` messages.
+
+        The builder wires the LLM client's provider explicitly; when that is absent (a hand-built
+        orchestrator, the fake extractors in the tests) fall back to the extractor's own provider,
+        then to its type name so the catalog placeholder is never empty.
+        """
+        if self._provider.strip():
+            return self._provider
+        provider = getattr(source, "provider", None)
+        if isinstance(provider, str) and provider.strip():
+            return provider
+        return type(source).__name__
 
     def generate(self, user_input: str | dict[str, object]) -> PromptGenerationResult:
         """Run prompt generation from input normalization through prompt rendering."""
@@ -539,7 +570,7 @@ class PromptGenerationOrchestrator:
         except A2ATError as error:
             raise self._generation_exception(
                 ErrorCatalog.LLM_INVOCATION_FAILED,
-                {"reason": str(error)},
+                {"provider": self._provider_fact(self._slot_extractor), "reason": str(error)},
             ) from error
 
     def _map_slot_errors(
@@ -571,6 +602,8 @@ class PromptGenerationOrchestrator:
             entry = ErrorCatalog.SLOT_NOT_PROVIDED
         elif code in {ErrorCatalog.SLOT_CONSTRAINT_VIOLATED.value, _LEGACY_CODE_INVALID_VALUE}:
             entry = ErrorCatalog.SLOT_CONSTRAINT_VIOLATED
+        elif code == ErrorCatalog.SLOT_INTENT_UNCLEAR.value:
+            entry = ErrorCatalog.SLOT_INTENT_UNCLEAR
         else:
             _LOGGER.warning(
                 "Unknown slot-extraction error code '%s' mapped to '%s'.",
@@ -725,7 +758,7 @@ class PromptGenerationOrchestrator:
             )
         return self._generation_exception(
             ErrorCatalog.LLM_INVOCATION_FAILED,
-            {"provider": self._provider or "unknown", "reason": str(error)},
+            {"provider": self._provider_fact(self._slot_extractor), "reason": str(error)},
             cause=error,
         )
 
@@ -824,7 +857,7 @@ class PromptGenerationOrchestrator:
             )
         return self._catalog_failure(
             entry=ErrorCatalog.LLM_INVOCATION_FAILED,
-            facts={"reason": str(error)},
+            facts={"provider": self._provider_fact(self._slot_extractor), "reason": str(error)},
             stage=GENERATION_STAGE,
         )
 

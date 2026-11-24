@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 """Load LLM client configuration from .env files."""
 
 from __future__ import annotations
@@ -14,8 +31,6 @@ from a2a_t.llm.models import LLMClientConfig
 _MAX_HISTORY_WINDOW = 100
 _MAX_SESSION_MAX_TOTAL = 3000
 _MAX_SESSION_MAX_PER_PROVIDER = 1000
-#: Upper bound of ``A2AT_LLM_TIMEOUT_RETRIES``; a larger retry budget only multiplies one
-#: caller's timeout budget and hides a broken endpoint.
 _MAX_TIMEOUT_RETRIES = 5
 
 #: Accepted reasoning-effort values (Java ``LLMClientConfig.VALID_REASONING_EFFORTS``).
@@ -69,14 +84,7 @@ def coerce_optional_int(value: str | None, key: str) -> int | None:
 
 
 def coerce_max_tokens(value: str | None) -> int | None:
-    """Parse ``A2AT_LLM_MAX_TOKENS`` into a completion cap.
-
-    An unset or blank value falls back to :data:`DEFAULT_MAX_TOKENS`, so a reasoning model is
-    bounded by default instead of being allowed to generate for minutes. The explicit words
-    ``none``/``null`` (case insensitive) mean "no cap" and omit the provider parameter; a positive
-    integer is used verbatim. Zero, negative values and non-integers are configuration errors,
-    because the provider would either reject them or silently ignore the caller's intent.
-    """
+    """Parse ``A2AT_LLM_MAX_TOKENS`` into a completion cap."""
     if value is None or not value.strip():
         return DEFAULT_MAX_TOKENS
     normalized = value.strip().lower()
@@ -117,12 +125,28 @@ def coerce_boolean(value: str | None, key: str, *, default: bool) -> bool:
     raise LLMConfigError(f"{key} must be a boolean value (true/false)")
 
 
-def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
-    """Parse the optional provider-specific ``extra_body`` JSON object.
+def coerce_timeout_retries(value: str | None, key: str) -> int:
+    """Parse and bound the optional number of retries after a transport timeout."""
+    parsed = coerce_optional_int(value, key)
+    if parsed is None:
+        return 0
+    if parsed < 0 or parsed > _MAX_TIMEOUT_RETRIES:
+        raise LLMConfigError(f"{key} must be between 0 and {_MAX_TIMEOUT_RETRIES}")
+    return parsed
 
-    A blank value stays unset. Any non-blank value must decode to a JSON object; arrays, scalars
-    and malformed JSON are configuration errors, never silently dropped.
-    """
+
+def coerce_response_format(value: str | None, key: str) -> str:
+    """Parse the structured-call response format; a blank value keeps ``json_schema``."""
+    if value is None or not value.strip():
+        return "json_schema"
+    normalized = value.strip().lower()
+    if normalized not in _VALID_RESPONSE_FORMATS:
+        raise LLMConfigError(f"{key} must be one of {_VALID_RESPONSE_FORMATS}")
+    return normalized
+
+
+def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
+    """Parse the optional provider-specific ``extra_body`` JSON object."""
     if value is None or not value.strip():
         return None
     try:
@@ -131,30 +155,6 @@ def coerce_extra_body(value: str | None, key: str) -> dict[str, Any] | None:
         raise LLMConfigError(f"{key} must be a JSON object") from exc
     if not isinstance(parsed, dict):
         raise LLMConfigError(f"{key} must be a JSON object")
-    return parsed
-
-
-def coerce_response_format(value: str | None, key: str) -> str:
-    """Parse the structured-call response format; a blank value keeps the portable JSON mode."""
-    if value is None or not value.strip():
-        return "json_object"
-    normalized = value.strip().lower()
-    if normalized not in _VALID_RESPONSE_FORMATS:
-        raise LLMConfigError(f"{key} must be one of {_VALID_RESPONSE_FORMATS}")
-    return normalized
-
-
-def coerce_timeout_retries(value: str | None, key: str) -> int:
-    """Parse the optional timeout-retry budget and bound it.
-
-    A blank value means no retry (the historical single-attempt behavior). Negative values and
-    values above :data:`_MAX_TIMEOUT_RETRIES` are configuration errors.
-    """
-    parsed = coerce_optional_int(value, key)
-    if parsed is None:
-        return 0
-    if parsed < 0 or parsed > _MAX_TIMEOUT_RETRIES:
-        raise LLMConfigError(f"{key} must be between 0 and {_MAX_TIMEOUT_RETRIES}")
     return parsed
 
 
@@ -226,11 +226,11 @@ class LLMConfigLoader:
             session_max_per_provider=session_max_per_provider,
             reasoning_effort=coerce_reasoning_effort(values.get("A2AT_LLM_REASONING_EFFORT")),
             extra_body=coerce_extra_body(values.get("A2AT_LLM_EXTRA_BODY"), "A2AT_LLM_EXTRA_BODY"),
-            timeout_retries=coerce_timeout_retries(
-                values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
-            ),
             response_format=coerce_response_format(
                 values.get("A2AT_LLM_RESPONSE_FORMAT"), "A2AT_LLM_RESPONSE_FORMAT"
+            ),
+            timeout_retries=coerce_timeout_retries(
+                values.get("A2AT_LLM_TIMEOUT_RETRIES"), "A2AT_LLM_TIMEOUT_RETRIES"
             ),
             ssl_verify=coerce_boolean(values.get("A2AT_LLM_SSL_VERIFY"), "A2AT_LLM_SSL_VERIFY", default=True),
             detail_log_enabled=coerce_boolean(

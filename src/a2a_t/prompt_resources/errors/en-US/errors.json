@@ -9,6 +9,7 @@
   "slot.fabricated_value": "The value of '{slot_label}' ({actual}) is placeholder content, not a valid value",
   "slot.cross_scenario_pollution": "The value of '{slot_label}' contains content from a different scenario",
   "slot.insufficient_grounding": "The value of '{slot_label}' lacks sufficient grounding",
+  "slot.intent_unclear": "The value of '{slot_label}' ({actual}) expresses an unclear intent",
   "slot.rule_violation": "The value of '{slot_label}' violates the validation rules.",
   "input.text_too_long": "Input text length {actual_length} exceeds the maximum of {max_chars} (A2AT_INPUT_TEXT_MAX_CHARS)",
   "content.param_missing": "'{section_label}' is empty; please provide a value",

@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 from __future__ import annotations
 
 import sys
@@ -398,7 +415,7 @@ def test_generate_returns_generation_failure_when_slot_extraction_runtime_fails(
     assert result.failure is not None
     assert result.failure.code == ErrorCatalog.LLM_INVOCATION_FAILED.value
     assert result.failure.stage == GENERATION_STAGE
-    assert result.failure.message == "LLM invocation failed (provider {provider}): llm transport down"
+    assert result.failure.message == "LLM invocation failed (provider RaisingSlotExtractor): llm transport down"
 
 
 def test_generate_returns_render_failure_when_renderer_rejects_slots() -> None:
@@ -441,7 +458,7 @@ def test_generate_returns_render_failure_when_renderer_rejects_slots() -> None:
         (
             LLMRuntimeError("openai invocation failed: timeout"),
             ErrorCatalog.LLM_INVOCATION_FAILED,
-            "LLM invocation failed (provider {provider}): openai invocation failed: timeout",
+            "LLM invocation failed (provider RaisingSlotExtractor): openai invocation failed: timeout",
         ),
     ],
     ids=["config-error", "invalid-json", "empty-content", "transport-failure"],

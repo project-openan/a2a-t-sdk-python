@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 """Data models for LLM integration."""
 
 from __future__ import annotations
@@ -37,13 +54,12 @@ class LLMClientConfig:
             dedicated logger ``a2a_t.llm.call`` independently of this flag. Java
             ``LLMClientConfig.detailLogEnabled``.
         extra_body: optional provider-specific request fields forwarded verbatim as the OpenAI SDK
-            ``extra_body`` argument (for example ``{"chat_template_kwargs": {"enable_thinking":
-            false}}``). ``None`` sends nothing, so non-reasoning providers are unaffected.
-        timeout_retries: how many extra attempts one structured call makes after the transport
-            timeout (``0`` keeps the original single-attempt behavior).
-        response_format: ``json_object`` (default) sends the portable JSON-mode request format;
-            ``json_schema`` asks the gateway to enforce the caller's output schema. The latter is
-            opt-in because not every OpenAI-compatible gateway accepts it.
+            ``extra_body`` argument. ``None`` sends nothing.
+        response_format: ``json_schema`` (default) asks the gateway to enforce the caller's output
+            schema; ``json_object`` falls back to portable JSON mode for gateways that do not accept
+            schema enforcement.
+        timeout_retries: how many extra attempts one structured call makes after a transport timeout;
+            ``0`` keeps the original single-attempt behavior.
     """
 
     provider: str
@@ -60,5 +76,5 @@ class LLMClientConfig:
     ssl_verify: bool = True
     detail_log_enabled: bool = False
     extra_body: dict[str, Any] | None = None
+    response_format: str = "json_schema"
     timeout_retries: int = 0
-    response_format: str = "json_object"

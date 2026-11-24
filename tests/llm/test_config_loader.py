@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 from __future__ import annotations
 
 import sys
@@ -72,14 +89,16 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
         self.assertEqual(config.history_window, 10)
         self.assertEqual(config.session_max_total, 300)
         self.assertEqual(config.session_max_per_provider, 100)
+        self.assertIsNone(config.base_url)
         from a2a_t.llm.config_loader import DEFAULT_MAX_TOKENS
 
-        self.assertIsNone(config.base_url)
         self.assertEqual(config.max_tokens, DEFAULT_MAX_TOKENS)
         self.assertIsNone(config.temperature)
         self.assertIsNone(config.timeout_seconds)
         self.assertTrue(config.ssl_verify)
         self.assertFalse(config.detail_log_enabled)
+        self.assertIsNone(config.extra_body)
+        self.assertEqual(config.timeout_retries, 0)
 
     def test_load_max_tokens_none_disables_the_cap(self) -> None:
         from a2a_t.llm.config_loader import LLMConfigLoader
@@ -118,7 +137,7 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
                 with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_MAX_TOKENS"):
                     LLMConfigLoader.load(env_path)
 
-    def test_load_parses_extra_body_and_timeout_retries(self) -> None:
+    def test_load_parses_extra_body(self) -> None:
         env_path = self._write_env(
             "\n".join(
                 [
@@ -126,7 +145,6 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
                     "A2AT_LLM_MODEL=gpt-4o-mini",
                     "A2AT_LLM_API_KEY=sk-test",
                     'A2AT_LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}',
-                    "A2AT_LLM_TIMEOUT_RETRIES=2",
                 ]
             )
             + "\n"
@@ -140,26 +158,6 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
             config.extra_body,
             {"chat_template_kwargs": {"enable_thinking": False}},
         )
-        self.assertEqual(config.timeout_retries, 2)
-
-    def test_load_defaults_extra_body_and_timeout_retries(self) -> None:
-        env_path = self._write_env(
-            "\n".join(
-                [
-                    "A2AT_LLM_PROVIDER=openai",
-                    "A2AT_LLM_MODEL=gpt-4o-mini",
-                    "A2AT_LLM_API_KEY=sk-test",
-                ]
-            )
-            + "\n"
-        )
-
-        from a2a_t.llm.config_loader import LLMConfigLoader
-
-        config = LLMConfigLoader.load(env_path)
-
-        self.assertIsNone(config.extra_body)
-        self.assertEqual(config.timeout_retries, 0)
 
     def test_load_rejects_an_extra_body_that_is_not_a_json_object(self) -> None:
         from a2a_t.llm.config_loader import LLMConfigLoader
@@ -180,6 +178,25 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
 
                 with self.assertRaisesRegex(LLMConfigError, "A2AT_LLM_EXTRA_BODY"):
                     LLMConfigLoader.load(env_path)
+
+    def test_load_parses_timeout_retries(self) -> None:
+        env_path = self._write_env(
+            "\n".join(
+                [
+                    "A2AT_LLM_PROVIDER=openai",
+                    "A2AT_LLM_MODEL=gpt-4o-mini",
+                    "A2AT_LLM_API_KEY=sk-test",
+                    "A2AT_LLM_TIMEOUT_RETRIES=2",
+                ]
+            )
+            + "\n"
+        )
+
+        from a2a_t.llm.config_loader import LLMConfigLoader
+
+        config = LLMConfigLoader.load(env_path)
+
+        self.assertEqual(config.timeout_retries, 2)
 
     def test_load_rejects_an_invalid_timeout_retries_value(self) -> None:
         from a2a_t.llm.config_loader import LLMConfigLoader
@@ -220,7 +237,7 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
 
                 self.assertEqual(LLMConfigLoader.load(env_path).response_format, expected)
 
-    def test_load_defaults_the_response_format_to_json_object(self) -> None:
+    def test_load_defaults_the_response_format_to_json_schema(self) -> None:
         env_path = self._write_env(
             "\n".join(
                 [
@@ -234,7 +251,7 @@ class LLMConfigLoaderTest(ManagedTempDirTestCase):
 
         from a2a_t.llm.config_loader import LLMConfigLoader
 
-        self.assertEqual(LLMConfigLoader.load(env_path).response_format, "json_object")
+        self.assertEqual(LLMConfigLoader.load(env_path).response_format, "json_schema")
 
     def test_load_rejects_an_unknown_response_format(self) -> None:
         from a2a_t.llm.config_loader import LLMConfigLoader

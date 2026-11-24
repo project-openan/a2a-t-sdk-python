@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 """outputJsonToCsv - render corpus result JSON into one review-friendly CSV table (one row per case).
 
 Every step exposes its API request and response verbatim plus every underlying LLM
@@ -61,6 +78,10 @@ def jsonize(value, pretty=True):
     return json.dumps(value, ensure_ascii=False, indent=2 if pretty else None)
 
 
+def _collapse_single(values):
+    return values[0] if len(values) == 1 else values
+
+
 def records_to_rows(records):
     all_rows = []
     max_steps = 0
@@ -94,8 +115,10 @@ def records_to_rows(records):
             row[prefix + "api_errCode"] = (interaction.get("response") or {}).get("errorCode", "")
             row[prefix + "request"] = jsonize(interaction.get("request"))
             row[prefix + "response"] = jsonize(interaction.get("response"))
-            row[prefix + "llm_requests"] = jsonize([call.get("request") for call in step["llm_calls"]])
-            row[prefix + "llm_responses"] = jsonize([call.get("response") for call in step["llm_calls"]])
+            requests = [call.get("request") for call in step["llm_calls"]]
+            responses = [call.get("response") for call in step["llm_calls"]]
+            row[prefix + "llm_requests"] = jsonize(_collapse_single(requests))
+            row[prefix + "llm_responses"] = jsonize(_collapse_single(responses))
         row["fail_reason"] = record.get("failReason", "")
         row["__max_steps"] = len(steps)
         all_rows.append(row)

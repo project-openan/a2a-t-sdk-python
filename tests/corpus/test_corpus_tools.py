@@ -1,3 +1,20 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
 """Tool-level tests of the corpus CLI tools: the INDEX.md determinism of ``tools/corpus_index.py``
 (D25: regeneration is byte-identical to the committed index), the ``--check`` freshness gates of
 ``tools/corpus_index.py`` and ``tools/generate_golden.py`` (both must exit 0 against the committed
@@ -25,9 +42,9 @@ from tests.corpus.llm_stub import LiveLlmCall
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 
 
-def _load_tool(module_name: str) -> ModuleType:
-    """Load one tools script as a module (``tools/`` is not a package)."""
-    path = REPO_ROOT / "tools" / f"{module_name}.py"
+def _load_tool(module_name: str, *, tools_dir: Path | None = None) -> ModuleType:
+    """Load one tools script as a module (the tools directories are not packages)."""
+    path = (tools_dir or REPO_ROOT / "tools") / f"{module_name}.py"
     spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -38,6 +55,7 @@ def _load_tool(module_name: str) -> ModuleType:
 
 corpus_index = _load_tool("corpus_index")
 live_transcript_export = _load_tool("live_transcript_export")
+output_json_to_csv = _load_tool("outputJsonToCsv", tools_dir=REPO_ROOT / "a2a-t-corpus" / "tools")
 
 
 # --------------------------------------------------------------------- corpus_index
@@ -172,43 +190,20 @@ def test_live_transcript_export_renders_the_report(tmp_path: Path) -> None:
 
 
 def test_live_transcript_export_replay_request_mirrors_the_openai_client_payload(tmp_path: Path) -> None:
-    """The replay body carries exactly the JSON-mode instruction and schema message the
-    production ``OpenAIClient`` prepends (the sync guarantee the Java copy keeps by hand)."""
+    """The replay body passes messages through and uses the production JSON-schema contract."""
     run_dir = _sample_run(tmp_path)
     transcript = json.loads((run_dir / "transcript.json").read_text(encoding="utf-8"))
     call = transcript[0]["llmCalls"][0]
 
     replay = live_transcript_export.build_replay_request(call)
 
-    from a2a_t.llm.providers.openai import _JSON_MODE_INSTRUCTION_DEFAULT
-
-    assert [message["role"] for message in replay["messages"]] == ["system", "user"]
-    system_content = replay["messages"][0]["content"]
-    assert system_content.startswith(_JSON_MODE_INSTRUCTION_DEFAULT)
-    assert "Return JSON that conforms to this JSON schema: " in system_content
-    assert replay["messages"][1] == {"role": "user", "content": "投诉文本"}
-    assert replay["response_format"] == {"type": "json_object"}
+    assert replay["messages"] == [{"role": "user", "content": "投诉文本"}]
+    assert replay["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "structured_output", "schema": {"type": "object"}},
+    }
     assert replay["temperature"] == 0.0
     assert replay["model"] == "qwen3-27b"
-
-
-def test_live_transcript_export_merges_a_recorded_system_message_into_the_single_system_message() -> None:
-    """A recorded leading system prompt joins the same merged system message the client sends."""
-    replay = live_transcript_export.build_replay_request(
-        {
-            "model": "qwen3-27b",
-            "messages": [
-                {"role": "system", "content": "SYS"},
-                {"role": "user", "content": "USER"},
-            ],
-            "jsonSchema": {"type": "object"},
-        }
-    )
-
-    assert [message["role"] for message in replay["messages"]] == ["system", "user"]
-    assert "SYS" in replay["messages"][0]["content"]
-    assert "Return JSON that conforms to this JSON schema: " in replay["messages"][0]["content"]
-    assert replay["messages"][1] == {"role": "user", "content": "USER"}
 
 
 def test_live_transcript_export_accepts_a_transcript_file(tmp_path: Path) -> None:
@@ -225,3 +220,44 @@ def test_live_transcript_export_fails_on_a_missing_transcript(tmp_path: Path) ->
         live_transcript_export.main([str(tmp_path)])
 
     assert "transcript not found" in str(aborted.value)
+
+
+# --------------------------------------------------------------------- outputJsonToCsv
+
+
+def _output_record(llm_calls: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "id": "CSV-01",
+        "output": {
+            "interactions": [
+                {"type": "generate", "request": {}, "response": {}},
+                *llm_calls,
+            ]
+        },
+    }
+
+
+def test_output_json_to_csv_collapses_a_single_llm_call_to_bare_objects() -> None:
+    record = _output_record(
+        [{"type": "LLM", "request": {"model": "qwen"}, "response": {"content": "{}"}}]
+    )
+
+    rows, max_steps = output_json_to_csv.records_to_rows([record])
+
+    assert max_steps == 1
+    assert json.loads(rows[0]["step1_llm_requests"]) == {"model": "qwen"}
+    assert json.loads(rows[0]["step1_llm_responses"]) == {"content": "{}"}
+
+
+def test_output_json_to_csv_keeps_multiple_llm_calls_as_arrays() -> None:
+    record = _output_record(
+        [
+            {"type": "LLM", "request": {"model": "qwen-1"}, "response": {"content": "first"}},
+            {"type": "LLM", "request": {"model": "qwen-2"}, "response": {"content": "second"}},
+        ]
+    )
+
+    rows, _ = output_json_to_csv.records_to_rows([record])
+
+    assert json.loads(rows[0]["step1_llm_requests"]) == [{"model": "qwen-1"}, {"model": "qwen-2"}]
+    assert json.loads(rows[0]["step1_llm_responses"]) == [{"content": "first"}, {"content": "second"}]
