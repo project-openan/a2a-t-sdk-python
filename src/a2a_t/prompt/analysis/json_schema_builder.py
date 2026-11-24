@@ -62,6 +62,7 @@ class AnalysisJsonSchemaBuilder:
                             "code": {"type": "string", "enum": [
                                 "slot.not_provided",
                                 "slot.constraint_violated",
+                                "slot.intent_unclear",
                                 "missing_input",
                                 "invalid_value",
                             ]},
