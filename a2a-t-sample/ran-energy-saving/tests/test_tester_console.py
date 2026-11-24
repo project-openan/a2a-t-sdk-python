@@ -776,6 +776,33 @@ async def test_meta_exposes_the_acceptance_stage_model_and_transport(
     assert meta["discovery"]
 
 
+async def test_a_batch_that_names_no_stage_stops_at_accepted(
+    client: httpx.AsyncClient,
+) -> None:
+    """A vendor that pushes no final state must not turn a finished negotiation into a timeout."""
+    response = await client.post(
+        "/api/tester/batches",
+        json={"caseIds": [1], "protocols": ["a2a-t"]},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["stopAfter"] == "accepted"
+
+
+async def test_a_scratch_batch_stops_at_accepted(client: httpx.AsyncClient) -> None:
+    """An ad-hoc request faces the same vendor behaviour as a catalog batch."""
+    created = await client.post(
+        "/api/tester/scratch",
+        json={
+            "userInput": "Create an energy saving task for AATestRegion.",
+            "protocol": "a2a-t",
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["stopAfter"] == "accepted"
+
+
 def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
     """The detail drawer and per-row rerun are DOM contracts, not just service behavior."""
     tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"

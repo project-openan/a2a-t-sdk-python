@@ -21,6 +21,7 @@ const STATUS_LABELS = {
   failed: "失败",
   error: "错误",
   partial: "部分确认",
+  warning: "告警",
   waiting: "待 WORKING",
   recorded: "仅记录",
   skipped: "跳过",
@@ -72,6 +73,7 @@ function badge(status, text) {
     pass_with_terminology: "passed",
     unfilled: "skipped",
     recorded: "skipped",
+    warning: "waiting",
   }[status] || status;
   return el("span", `badge ${mapped || "pending"}`, text || statusLabel(status));
 }
@@ -123,7 +125,7 @@ async function loadMeta() {
     option.value = stage;
     stopAfter.append(option);
   }
-  stopAfter.value = meta?.defaults?.stopAfter || "working";
+  stopAfter.value = meta?.defaults?.stopAfter || "accepted";
   $("config-approval").value = meta?.defaults?.approval || "";
   $("config-timeout").value = meta?.defaults?.timeoutSeconds ?? "";
   $("config-working-timeout").value = meta?.defaults?.workingTimeoutSeconds ?? "";

@@ -80,6 +80,7 @@ from shared.config import (
 from shared.models import NegotiationDecision
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
+    FINAL_STATE_INCOMPLETE,
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     FINAL_STATE_TASK_FAILED,
@@ -111,6 +112,9 @@ ALL_STAGES: Final[tuple[str, ...]] = (
 
 #: Stage status used by ``working`` when the Task never left ``SUBMITTED``: yellow, not red.
 STAGE_WAITING: Final[str] = "waiting"
+#: Stage status for a deviation the client did not cause: the case is not contradicted, but the
+#: observation is not the recorded one either, so a human must confirm it.
+STAGE_WARNING: Final[str] = "warning"
 #: Stage status used when the case expects no send, so the stage cannot be judged.
 STAGE_SKIPPED: Final[str] = "skipped"
 
@@ -238,6 +242,24 @@ _NEGOTIATED_TASK_T_MESSAGE: Final[str] = (
 _SIM_PURE_NEGOTIATION_MESSAGE: Final[str] = (
     "模拟器不重现厂商纯 A2A 对话轮次；真实轮次需在真机验证，因此只记录。"
 )
+
+#: Message of a negotiation stage whose kind or message contradicts the case.
+_NEGOTIATE_FAILED_MESSAGE: Final[str] = "协商类型或报文与预期不一致。"
+
+#: Message of a negotiation stage that reached the expected answer in another number of rounds.
+_NEGOTIATE_ROUNDS_WARNING_MESSAGE: Final[str] = (
+    "协商轮次与用例预期不同（用例记录的轮次仅作参考，类型与报文一致）；请人工确认结果。"
+)
+
+#: Message of a final-state stage where the vendor confirmed the Task but never pushed a state.
+_FINAL_STATE_UNPUSHED_WARNING_MESSAGE: Final[str] = (
+    "NMS 已确认任务成功，但未推送终态；无法观察最终结果，请人工确认。"
+)
+
+#: Prefix of the reason the client flow records when the vendor answered with an ``INPUT_REQUIRED``
+#: that carried no question. ``protocol.pure_client_flow`` owns the full sentence; the marker is
+#: kept narrow so no client-side reason can match it by accident.
+_VENDOR_DEFECT_MARKER: Final[str] = "NMS 侧 bug"
 
 #: Message of the intent stage when the downstream accepts a Task without returning its reading.
 _NO_SERVER_INTENT_MESSAGE: Final[str] = (
@@ -537,6 +559,21 @@ class _Batch:
     task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
+def _stops_on_a_vendor_defect(error: str | None) -> bool:
+    """Return whether one run error says the vendor broke the exchange."""
+    return isinstance(error, str) and error.lstrip().startswith(_VENDOR_DEFECT_MARKER)
+
+
+def _final_state_unpushed(run: RunState, actual_final: object) -> bool:
+    """Return whether the only deviation is a terminal state the vendor never pushed."""
+    if actual_final != FINAL_STATE_INCOMPLETE:
+        return False
+    if run.acceptance_copy is None or run.latest_task_state not in _WORKING_TASK_STATES:
+        return False
+    final_error = run.result.error if run.result is not None else None
+    return not final_error
+
+
 class EvalBatchManager:
     """Own the tester batches of one Web UI process."""
 
@@ -760,7 +797,7 @@ class EvalBatchManager:
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
             case_ids=[0],
             protocols=[protocol],
-            stop_after="final",
+            stop_after="accepted",
             approval=resolved_approval,
             timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
             decision_mode=resolved_decision_mode,
@@ -1999,9 +2036,12 @@ class EvalBatchManager:
                 else None
             )
             messages_ok = message_match is None or message_match.matched
-            status = (
-                STAGE_PASSED if rounds_ok and kinds_ok and messages_ok else STAGE_FAILED
-            )
+            # The round count is the workbook's record of how the original dialogue unfolded, not
+            # a requirement on ours: a shorter dialogue that reached the same answer is a deviation
+            # to review, while a wrong kind or a wrong message contradicts the case.
+            status = STAGE_PASSED if kinds_ok and messages_ok else STAGE_FAILED
+            if status == STAGE_PASSED and not rounds_ok:
+                status = STAGE_WARNING
             expected_payload: dict[str, object] = {
                 "rounds": expected_rounds,
                 "kinds": expected_kinds,
@@ -2015,10 +2055,16 @@ class EvalBatchManager:
                     list(alternatives) for alternatives in messages_expectation.rounds
                 ]
                 actual_payload["messages"] = observed_messages
+            if status == STAGE_PASSED:
+                negotiate_message = ""
+            elif status == STAGE_WARNING:
+                negotiate_message = _NEGOTIATE_ROUNDS_WARNING_MESSAGE
+            else:
+                negotiate_message = _NEGOTIATE_FAILED_MESSAGE
             negotiate_result = StageResult(
                 "negotiate",
                 status,
-                "" if status == STAGE_PASSED else "协商轮次、类型或报文与预期不一致。",
+                negotiate_message,
                 expected=expected_payload,
                 actual=actual_payload,
                 diffs=_message_diffs(message_match),
@@ -2070,9 +2116,18 @@ class EvalBatchManager:
                 # A flow that stopped unfinished carries its reason here; keep it on the stage so
                 # the chip tooltip explains the run even when the result column is truncated.
                 message = (run.result.error or "") if run.result is not None else ""
+            elif actual_final == expected_final:
+                status = STAGE_PASSED
+                message = ""
+            elif _final_state_unpushed(run, actual_final):
+                # The NMS acknowledged the Task and pushes no terminal state. Reporting that as a
+                # failure blames the client for a push the vendor never sends; the deviation is
+                # still shown so the row is not read as a complete Task.
+                status = STAGE_WARNING
+                message = _FINAL_STATE_UNPUSHED_WARNING_MESSAGE
             else:
-                status = STAGE_PASSED if actual_final == expected_final else STAGE_FAILED
-                message = "" if status == STAGE_PASSED else "最终状态与预期不一致。"
+                status = STAGE_FAILED
+                message = "最终状态与预期不一致。"
             final_result = StageResult(
                 "final",
                 status,
@@ -2951,6 +3006,10 @@ class EvalBatchManager:
             return CASE_FAILED
         if any(status == STAGE_WAITING for status in statuses):
             return CASE_PARTIAL
+        if _stops_on_a_vendor_defect(item.error):
+            # The vendor broke the exchange (an empty INPUT_REQUIRED): the client cannot prove its
+            # work, so the row is an error of the system under test, never an inconclusive partial.
+            return CASE_ERROR
         if item.needs_review:
             # A residual the judge could not decide is unproven, not green.
             return CASE_PARTIAL
@@ -3122,7 +3181,7 @@ class EvalBatchManager:
             batch_id=str(document.get("batchId") or batch_id),
             case_ids=[int(value) for value in document.get("caseIds", []) if isinstance(value, int)],
             protocols=[str(value) for value in document.get("protocols", [])],
-            stop_after=str(document.get("stopAfter") or "final"),
+            stop_after=str(document.get("stopAfter") or "accepted"),
             approval=document.get("approval") if isinstance(document.get("approval"), str) else None,
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
@@ -3513,6 +3572,7 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
         "stageRecorded": 0,
         "stageError": 0,
         "stageWaiting": 0,
+        "stageWarning": 0,
     }
     for item in items:
         if item.status in counts:
@@ -3530,6 +3590,8 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
                 counts["stageError"] += 1
             elif stage.status == STAGE_WAITING:
                 counts["stageWaiting"] += 1
+            elif stage.status == STAGE_WARNING:
+                counts["stageWarning"] += 1
     return counts
 
 
@@ -4187,4 +4249,5 @@ __all__ = [
     "SCHEMA",
     "STAGE_SKIPPED",
     "STAGE_WAITING",
+    "STAGE_WARNING",
 ]

@@ -589,7 +589,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .status-line.error { color: var(--red); }
 .badge.waiting,
 .badge.partial { border-color: var(--yellow); background: var(--yellow-soft); color: var(--g900); }
-.stage-chip.waiting { border-color: var(--yellow); background: var(--yellow-soft); color: var(--g900); }
+.stage-chip.waiting,
+.stage-chip.warning { border-color: var(--yellow); background: var(--yellow-soft); color: var(--g900); }
 
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }

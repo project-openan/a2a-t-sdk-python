@@ -37,6 +37,7 @@ from demo.web.tester.service import (
     STAGE_RECORDED,
     STAGE_SKIPPED,
     STAGE_WAITING,
+    STAGE_WARNING,
     CaseItem,
     EvalBatchManager,
     StageResult,
@@ -1325,6 +1326,33 @@ def test_an_old_batch_loads_with_the_script_negotiation_source(
     assert snapshot["negotiationSource"] == "script"
 
 
+def test_a_persisted_batch_without_a_stage_loads_as_accepted(tmp_path: Path) -> None:
+    """A document written before the default changed must not wait for a final state either."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    history = tmp_path / "tester"
+    history.mkdir(parents=True)
+    document = {
+        "schema": "osp-tester/v4",
+        "batchId": "no-stage-batch",
+        "caseIds": [1],
+        "protocols": [PROTOCOL_A2A_T],
+        "items": [
+            {
+                "caseId": 1,
+                "name": "no-stage",
+                "protocol": PROTOCOL_A2A_T,
+                "status": "passed",
+            }
+        ],
+    }
+    (history / "no-stage-batch.json").write_text(json.dumps(document), encoding="utf-8")
+
+    snapshot = manager.get("no-stage-batch")
+
+    assert snapshot is not None
+    assert snapshot["stopAfter"] == "accepted"
+
+
 def test_an_agent_source_needs_the_live_decision_mode(tmp_path: Path) -> None:
     """A live process still cannot pair the agent source with the scripted decision mode."""
     manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
@@ -1916,6 +1944,36 @@ def test_an_item_whose_failure_was_recorded_is_partial(tmp_path: Path) -> None:
         protocol=PROTOCOL_A2A,
         status="running",
         error="RuntimeError: script exhausted",
+        stages={"send": StageResult("send", STAGE_PASSED)},
+    )
+
+    assert manager._item_status(item) == CASE_PARTIAL
+
+
+def test_a_vendor_defect_that_stops_the_run_is_an_error(tmp_path: Path) -> None:
+    """The client cannot prove its work when the vendor breaks the exchange."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(
+        case_id=88,
+        name="x",
+        protocol=PROTOCOL_A2A,
+        status="running",
+        error="NMS 侧 bug：第 1 轮返回 INPUT_REQUIRED 但状态体中没有任何问题文本；客户端未再作答。",
+        stages={"send": StageResult("send", STAGE_PASSED)},
+    )
+
+    assert manager._item_status(item) == CASE_ERROR
+
+
+def test_an_ordinary_unfinished_run_stays_partial(tmp_path: Path) -> None:
+    """The client's own unfinished reason is unproven work, not a vendor defect."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(
+        case_id=88,
+        name="x",
+        protocol=PROTOCOL_A2A,
+        status="running",
+        error="协商轮数已用尽（8 轮），厂商仍在要求确认；未再作答，下游回执与意图已保留。",
         stages={"send": StageResult("send", STAGE_PASSED)},
     )
 
@@ -4189,6 +4247,98 @@ async def test_negotiate_stage_keeps_the_round_count_contract(tmp_path: Path) ->
 
     assert "messages" not in result.actual
     assert result.status == STAGE_PASSED
+
+
+def _round_case(*, expected_rounds: int, kinds: list[str]) -> dict[str, Any]:
+    """Return a negotiation case that judges the round count and kinds only."""
+    case = copy.deepcopy(CASES[26])
+    negotiation = case["expect"]["protocols"]["a2a-t"]["negotiation"]
+    negotiation["expected"] = True
+    negotiation["expected_rounds"] = expected_rounds
+    negotiation["kinds"] = kinds
+    return case
+
+
+async def test_a_round_count_below_the_expectation_is_a_warning_not_a_failure(
+    tmp_path: Path,
+) -> None:
+    """The recorded round count is history; a shorter dialogue that agrees is a deviation."""
+    result = await _run_negotiate(
+        tmp_path,
+        content="anything",
+        case=_round_case(expected_rounds=2, kinds=["feasibility"]),
+    )
+
+    assert result.status == STAGE_WARNING
+    assert "轮次" in result.message
+
+
+async def test_a_round_count_mismatch_with_a_missing_kind_still_fails(
+    tmp_path: Path,
+) -> None:
+    """A wrong negotiation kind contradicts the case, whatever the round count says."""
+    result = await _run_negotiate(
+        tmp_path,
+        content="anything",
+        case=_round_case(expected_rounds=2, kinds=["information"]),
+    )
+
+    assert result.status == STAGE_FAILED
+
+
+def _final_run(*, final_state: str, error: str | None = None) -> RunState:
+    run = RunState(run_id="run", scenario="night", mode=MODE_AUTO, transport="sse")
+    run.status = "finished"
+    run.result = ClientFlowResult(final_state=final_state, error=error)
+    run.acceptance_copy = {"Operation type": "Create"}
+    run.latest_task_state = service.TASK_STATE_WORKING
+    return run
+
+
+async def _run_final(tmp_path: Path, run: RunState) -> StageResult:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+    batch = _Batch(
+        batch_id="batch",
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=1.0,
+        items=[item],
+    )
+    await manager._wait_for_stage(
+        run,
+        item,
+        batch,
+        ("final",),
+        case=CASES[1],
+        timeout_seconds=1.0,
+        working_timeout_seconds=1.0,
+    )
+    return item.stages["final"]
+
+
+async def test_a_final_state_the_vendor_never_pushes_is_a_warning(tmp_path: Path) -> None:
+    """An accepted, working Task without a terminal push is not the client's failure."""
+    result = await _run_final(
+        tmp_path, _final_run(final_state=FINAL_STATE_INCOMPLETE)
+    )
+
+    assert result.status == STAGE_WARNING
+    assert "未推送终态" in result.message
+
+
+async def test_a_final_state_the_vendor_reported_as_failed_still_fails(
+    tmp_path: Path,
+) -> None:
+    """A real terminal failure is still red; only an unpushed state is downgraded."""
+    result = await _run_final(
+        tmp_path,
+        _final_run(final_state=FINAL_STATE_TASK_FAILED, error="the task failed"),
+    )
+
+    assert result.status == STAGE_FAILED
 
 
 def _blocked_validation_run(slot_code: str) -> RunState:

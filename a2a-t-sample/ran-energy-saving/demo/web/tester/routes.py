@@ -199,7 +199,10 @@ def build_tester_routes(
             snapshot = batches.create(
                 case_ids=_int_list(body.get("caseIds"), "caseIds"),
                 protocols=_str_list(body.get("protocols"), "protocols"),
-                stop_after=str(body.get("stopAfter") or "final"),
+                # A test stops once the Task is accepted: the vendor pushes no final state (or
+                # pushes it minutes later), so waiting for it only turns a completed negotiation
+                # into a timeout. A caller that wants the final state asks for it explicitly.
+                stop_after=str(body.get("stopAfter") or "accepted"),
                 approval=_optional_str(body.get("approval")),
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
