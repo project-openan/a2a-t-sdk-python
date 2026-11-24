@@ -1427,19 +1427,10 @@ def test_trace_span_level_rejects_an_unknown_value(tmp_path: Path) -> None:
         load_config(env_path=env_file)
 
 
-def test_prompt_overlay_is_off_by_default_and_can_be_enabled(tmp_path: Path) -> None:
-    assert load_config(env_path=tmp_path / "missing.env").prompt_overlay is False
-
-    env_file = tmp_path / ".env"
-    env_file.write_text("A2AT_SAMPLE_PROMPT_OVERLAY=1\n", encoding="utf-8")
-
-    assert load_config(env_path=env_file).prompt_overlay is True
-
-
 def test_the_sdk_env_defaults_to_the_packaged_prompt_resources(
     offline_config: SampleConfig, tmp_path: Path
 ) -> None:
-    """The packaged slot schema is the shared baseline; the sample overlay is opt-in."""
+    """The packaged slot schema is the single authoritative baseline."""
     import shutil
 
     from dotenv import dotenv_values
@@ -1457,7 +1448,7 @@ def test_the_sdk_env_defaults_to_the_packaged_prompt_resources(
 def test_the_sdk_env_drops_an_inherited_local_prompt_root(
     offline_config: SampleConfig, tmp_path: Path
 ) -> None:
-    """A stale ``local_file`` root must not re-mount the overlay when the switch is off."""
+    """A stale ``local_file`` root must not replace the packaged resources."""
     import shutil
 
     from dotenv import dotenv_values
@@ -1474,32 +1465,6 @@ def test_the_sdk_env_drops_an_inherited_local_prompt_root(
         values = dotenv_values(sdk_env.path)
         assert values["A2AT_PROMPT_SOURCE_TYPE"] == "packaged"
         assert "A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR" not in values
-    finally:
-        shutil.rmtree(sdk_env.directory)
-
-
-def test_the_prompt_overlay_switch_mounts_the_sample_slot_deltas(
-    offline_config: SampleConfig, tmp_path: Path
-) -> None:
-    """``A2AT_SAMPLE_PROMPT_OVERLAY=1`` restores the tuned sample slot schema."""
-    import shutil
-    from dataclasses import replace
-
-    from dotenv import dotenv_values
-    from shared.sdk_env import SAMPLE_PROMPT_RESOURCES, prepare_sdk_env
-
-    sdk_env = prepare_sdk_env(
-        replace(offline_config, prompt_overlay=True), tmp_path / "missing.env"
-    )
-    try:
-        values = dotenv_values(sdk_env.path)
-        assert values["A2AT_PROMPT_SOURCE_TYPE"] == "local_file"
-        assert Path(str(values["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"])) == SAMPLE_PROMPT_RESOURCES
-        slot = SAMPLE_PROMPT_RESOURCES / "slots/Task-T/network-layer/ran-energy-saving/v1/en-US/slot.json"
-        assert slot.is_file()
-        text = slot.read_text(encoding="utf-8")
-        assert "Only an explicit energy saving gain target belongs in this slot" in text
-        assert "preserve the operator's own wording; do not normalize it" in text
     finally:
         shutil.rmtree(sdk_env.directory)
 

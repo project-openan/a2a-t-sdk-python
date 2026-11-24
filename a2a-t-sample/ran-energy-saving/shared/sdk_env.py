@@ -32,15 +32,11 @@ from typing import Final
 
 from dotenv import dotenv_values
 
-from shared.config import MODEL_MODE_OFFLINE, SAMPLE_ROOT, SampleConfig, merge_sample_process_env
+from shared.config import MODEL_MODE_OFFLINE, SampleConfig, merge_sample_process_env
 from shared.traced_llm import register_traced_providers, sdk_provider_name
 
 #: Prefix of the temporary SDK ``.env`` directories.
 DEFAULT_ENV_PREFIX: Final[str] = "a2at-ran-sdk-env-"
-
-#: Sample-owned overlay of the SDK prompt resources. Only the slot schemas the sample must refine
-#: live here; every other resource falls back to the packaged copy (``local_file`` overlay).
-SAMPLE_PROMPT_RESOURCES: Final[Path] = SAMPLE_ROOT / "prompt_resources"
 
 
 @dataclass(frozen=True)
@@ -102,8 +98,8 @@ def prepare_sdk_env(
     scripted provider; live mode keeps the SDK endpoint values of the source file and fills any
     missing one from the ADK model configuration, so both SDK and ADK address the same endpoint.
 
-    The SDK prompt source is ``packaged`` unless ``config.prompt_overlay`` is set; an inherited
-    ``local_file`` root is dropped so the packaged slot schema stays the shared baseline.
+    The SDK prompt source is always ``packaged``; an inherited ``local_file`` root is dropped so
+    the packaged slot schema stays the single, authoritative baseline.
 
     Args:
         config: resolved sample configuration.
@@ -153,16 +149,10 @@ def prepare_sdk_env(
             "A2AT_LLM_MAX_ATTEMPTS": str(config.llm_max_attempts),
         }
     )
-    if config.prompt_overlay and SAMPLE_PROMPT_RESOURCES.is_dir():
-        # The overlay refines the sample's own slot schema (placement rules); the SDK's packaged
-        # prompts and every other resource still win, so the generic conversion contract is intact.
-        values["A2AT_PROMPT_SOURCE_TYPE"] = "local_file"
-        values["A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR"] = str(SAMPLE_PROMPT_RESOURCES)
-    else:
-        # Deterministic packaged baseline: do not inherit a stale local_file/root from the source
-        # .env or the shell. A2AT_SAMPLE_PROMPT_OVERLAY=1 is the explicit opt-in.
-        values["A2AT_PROMPT_SOURCE_TYPE"] = "packaged"
-        values.pop("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR", None)
+    # Deterministic packaged baseline: the SDK bundle is the only prompt source. Do not inherit a
+    # stale local_file/root from the source .env or the shell.
+    values["A2AT_PROMPT_SOURCE_TYPE"] = "packaged"
+    values.pop("A2AT_PROMPT_RESOURCE_LOCAL_ROOT_DIR", None)
     temp_dir = Path(tempfile.mkdtemp(prefix=prefix))
     target = temp_dir / ".env"
     target.write_text(
