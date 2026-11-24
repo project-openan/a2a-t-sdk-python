@@ -129,6 +129,7 @@ class SlotExtractorTest(unittest.TestCase):
             [
                 "slot.not_provided",
                 "slot.constraint_violated",
+                "slot.intent_unclear",
                 "missing_input",
                 "invalid_value",
             ],
