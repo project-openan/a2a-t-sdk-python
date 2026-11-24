@@ -348,4 +348,43 @@ async def test_an_unlisted_field_rationale_is_not_relayed_as_the_vendors_omissio
 
     text = await answer(_event())
 
-    assert text == ASK_TEMPLATE.format(item="the value the request does not state")
+    assert text == (
+        "Reject: The proposal does not list the specific required information items that are "
+        "missing."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reject_without_a_named_item_states_the_models_own_reason() -> None:
+    """A refusal with no missing field is a refusal; do not disguise it as a request for a value."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="reject",
+            rationale="The requested rate violates the client hard floor.",
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Guarantee 10Mbps from 08:00 to 18:00.")
+
+    text = await answer(_event("Reduce the target to {08:00~18:00,2Mbps}."))
+
+    assert text == "Reject: The requested rate violates the client hard floor."
+    assert "Please provide" not in text
+
+
+@pytest.mark.asyncio
+async def test_an_ungrounded_accept_without_a_named_item_sends_nothing() -> None:
+    """An answer that cannot be grounded and names no missing item must not become a question."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "InventedRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task.")
+
+    text = await answer(_event("Please confirm."))
+
+    assert text == ""

@@ -2,7 +2,7 @@
 # The text is inserted into the client agent's decision prompt as the default basis.
 # Case-level `client_conditions` may tighten or relax it; case conditions win.
 schema: osp-negotiation-principles/v1
-version: "2026-11-24.3"
+version: "2026-11-24.4"
 principles: |-
   You are the client-side decision basis for A2A-T and A2A negotiation replies.
 
@@ -20,15 +20,19 @@ principles: |-
      When the server says the request is not feasible and names no alternative, make one
      planned step of your own instead of asking the server for a value (see Concessions).
 
-  4. Compound scenario: answer only the part covered by this negotiation request.
-     Do not proactively fix a problem the request did not raise.
+  4. Compound scenario: answer every problem this negotiation request raises, in one decision.
+     Example: the request raises both overlapping windows and a feasibility objection ->
+     return non-overlapping windows and the feasible rate together. Do not proactively fix a
+     problem the request did not raise.
 
   Concessions:
 
   - A concession has two dimensions: the guaranteed rate and the outage time window.
-  - Reduce the rate in steps (for example 10Mbps -> 5Mbps -> 2Mbps). Never go below the floor
-    the case-level client conditions state; when they state none, 2Mbps is the floor. Jumping
-    straight to the floor in the first answer gives away more than the vendor asked for.
+  - Reduce the rate in steps (for example 10Mbps -> 5Mbps -> 2Mbps). Never go below the hard
+    floor stated by the client acceptance policy or the case-level client conditions. When
+    neither states a hard floor, the vendor's feasibility recommendation (for example 2Mbps) is
+    the lowest step to offer; it is a planning target, not a client acceptance limit. Jumping
+    straight to that step in the first answer gives away more than the vendor asked for.
   - The outage window may be shortened, never extended, and never dropped entirely.
   - The client chooses which dimension to move first from what the vendor says in this round and
     from what it has already said or accepted earlier in the negotiation.
@@ -52,8 +56,8 @@ principles: |-
   - Ask the server only when the request names a field the client has no value for (region, site,
     rate or outage period) and neither the original request nor the case-level client conditions
     supply it.
-  - When there is nothing the client can answer and the request names nothing to act on, do not
-    turn that into "please provide the value". Leave the question to the caller.
+  - When there is nothing the client can answer and the request names nothing to act on, return
+    reject with the reason. Do not turn that into "please provide the value".
 
   Rules shared by every case:
 

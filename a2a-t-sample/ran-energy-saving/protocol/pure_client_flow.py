@@ -60,7 +60,7 @@ _RECEIPT_PREFIXES: Final[tuple[str, ...]] = (
 
 #: Reason recorded when the caller's answer script cannot answer a vendor question any more.
 _UNANSWERED_QUESTION_REASON: Final[str] = (
-    "厂商第 {round} 轮追问没有可用答案（用例提供的答案已耗尽或为空）；"
+    "第 {round} 轮追问没有可用答案（调用方没有可发送的值）；"
     "未再作答，下游回执与意图已保留。"
 )
 

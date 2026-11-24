@@ -93,6 +93,19 @@ def test_build_decision_prompt_requires_answering_required_items() -> None:
     assert "Configured NMS region" not in prompt
 
 
+def test_build_decision_prompt_asks_for_every_problem_the_proposal_raises() -> None:
+    """A mixed proposal (overlap plus infeasibility) is answered in one decision, not split."""
+    prompt = build_decision_prompt(
+        _view(
+            "feasibility",
+            content="The windows overlap and the requested rate is not feasible.",
+        ),
+        _session(1),
+    )
+
+    assert "answer all of them in this one decision" in prompt
+
+
 def test_build_decision_prompt_carries_the_conversation_context() -> None:
     prompt = build_decision_prompt(
         _view(),
@@ -159,7 +172,7 @@ def test_build_decision_prompt_carries_the_client_policy() -> None:
     )
 
     assert "Client acceptance policy:" in prompt
-    assert "Lowest guaranteed throughput accepted without a human: 2 Mbps." in prompt
+    assert "Hard floor on guaranteed throughput: 2 Mbps." in prompt
     assert "guaranteedThroughputTarget" in prompt
     assert prompt.index("Client acceptance policy:") < prompt.index("Proposal content:")
 
@@ -167,7 +180,8 @@ def test_build_decision_prompt_carries_the_client_policy() -> None:
 def test_build_decision_prompt_without_a_policy_states_no_floor() -> None:
     prompt = build_decision_prompt(_view(), _session(1))
 
-    assert "Lowest guaranteed throughput accepted without a human: no throughput floor." in prompt
+    assert "Hard floor on guaranteed throughput: none configured." in prompt
+    assert "planning target, not a hard floor" in prompt
 
 
 async def test_set_decision_basis_is_task_local_on_a_shared_provider() -> None:
@@ -480,6 +494,52 @@ async def test_a_turn_stops_after_the_tool_call_budget() -> None:
 
     assert provider.tool_calls_this_turn == 2
     assert decision.action == "accept"
+
+
+async def test_an_inconsistent_decision_is_retried_once() -> None:
+    """A reject that carries accept-only fields is a field slip; one corrective turn may fix it."""
+    inconsistent = json.dumps(
+        {
+            "action": "reject",
+            "rationale": "Therefore, I must accept the server's feasible alternative.",
+            "filled_params": {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+            "feasibility_summary": "Accepted the recommendation.",
+        }
+    )
+    consistent = json.dumps(
+        {
+            "action": "accept",
+            "rationale": "Accepted the recommendation.",
+            "filled_params": {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+        }
+    )
+    provider = AdkDecisionProvider(
+        agent_factory=build_client_agent,
+        model=_scripted_model(inconsistent, consistent),
+    )
+
+    decision = await provider.respond(_view("feasibility"), _session())
+
+    assert decision.action == "accept"
+    assert decision.filled_params == {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"}
+
+
+async def test_an_inconsistent_decision_that_stays_inconsistent_fails() -> None:
+    """After one corrective turn the provider must not guess which field the model meant."""
+    inconsistent = json.dumps(
+        {
+            "action": "reject",
+            "rationale": "I must accept.",
+            "filled_params": {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+        }
+    )
+    provider = AdkDecisionProvider(
+        agent_factory=build_client_agent,
+        model=_scripted_model(inconsistent, inconsistent),
+    )
+
+    with pytest.raises(DecisionProviderError, match="self-contradictory"):
+        await provider.respond(_view("feasibility"), _session())
 
 
 def _scripted_model(*texts: str) -> FakeLlm:

@@ -9,7 +9,7 @@ decision provider, so providers never parse raw A2A-T metadata themselves.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +70,47 @@ class NegotiationDecision(BaseModel):
     counter_params: dict[str, object] | None = None
     confirmed_intent: str | None = None
     feasibility_summary: str | None = None
+
+
+#: Decision fields that only an ``accept`` or ``counter`` may carry. A terminal refusal that still
+#: states an agreed plan is a self-contradictory decision, not a valid one.
+_ACTION_ONLY_FIELDS: Final[tuple[str, ...]] = (
+    "filled_params",
+    "counter_proposal",
+    "counter_params",
+    "confirmed_intent",
+    "feasibility_summary",
+)
+
+
+def decision_consistency_problem(decision: NegotiationDecision) -> str | None:
+    """Return why one decision contradicts itself, or ``None`` when it is consistent.
+
+    The model can finish a turn with ``action=reject`` while its other fields state the accepted
+    plan (the reported live run). Downstream code must not guess which field the model meant: the
+    caller retries once and then fails instead of silently accepting or rejecting.
+    """
+    if decision.action not in ("reject", "abort"):
+        return None
+    carried = [
+        name
+        for name in _ACTION_ONLY_FIELDS
+        if _decision_field_has_value(getattr(decision, name, None))
+    ]
+    if not carried:
+        return None
+    return f"{decision.action} also carries {', '.join(carried)}"
+
+
+def _decision_field_has_value(value: object) -> bool:
+    """Return whether one optional decision field carries anything meaningful."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (dict, list, tuple, set)):
+        return bool(value)
+    return True
 
 
 class NegotiationAreaOption(BaseModel):

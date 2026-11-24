@@ -56,6 +56,20 @@ _NAMES_THE_QUESTION_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
+#: A rationale is only usable as the name of a missing value when it says something is absent.
+#: "The rate exceeds the floor" is a reason to refuse, not a field the server forgot to state.
+_MISSING_VALUE_CUE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:missing|absent|omitted|unspecified|unknown"
+    r"|not\s+(?:stated?|provided?|listed?|specified?|given?|included?)"
+    r"|no\s+\w+)",
+    re.IGNORECASE,
+)
+
+#: Prefixes of the free-text refusal built from the model's own reason. Pure A2A has no reject
+#: performative, so the refusal has to be a sentence; it must not be a canned request for a value.
+_REFUSAL_PREFIX: Final[str] = "Reject: "
+_ABORT_PREFIX: Final[str] = "Abort: "
+
 
 class AutoPureAnswer:
     """Answer pure-A2A questions automatically, asking the server for server-owned values.
@@ -201,6 +215,21 @@ class AutoPureAnswer:
         instead of looping until the run timeout.
         """
         item = _missing_item(propose, decision)
+        if item is None:
+            if decision.action in ("reject", "abort"):
+                # Nothing is missing from the request; the model refused for its own stated reason.
+                # Relaying that reason is honest. The old fallback turned every refusal into
+                # "please provide the value", which the vendor had just supplied.
+                text = _refusal_text(decision)
+                if text:
+                    self._announce(
+                        NegotiationDecision(action=decision.action, rationale=text),
+                        propose,
+                        session,
+                    )
+                return text
+            # An ungrounded accept/counter with no named missing item has nothing to ask for.
+            return ""
         self._server_asks += 1
         if self._server_asks < self._max_server_asks:
             text = ASK_TEMPLATE.format(item=item)
@@ -245,15 +274,33 @@ def build_auto_pure_answer(
     )
 
 
-def _missing_item(propose: Any, decision: NegotiationDecision) -> str:
-    """Return the item the client needs the server to provide, in human-readable form."""
+def _missing_item(propose: Any, decision: NegotiationDecision) -> str | None:
+    """Return the missing item the client may ask the server for, or ``None``.
+
+    Only a value the request leaves absent may become a question. A rationale that describes our
+    own reading of the question, or a refusal for another reason, must not be relayed as if the
+    vendor had omitted a field.
+    """
     labels = missing_item_labels(propose.content)
     if labels:
         return ", ".join(labels)
     rationale = (decision.rationale or "").strip()
-    if rationale and not _NAMES_THE_QUESTION_PATTERN.search(rationale):
+    if (
+        rationale
+        and not _NAMES_THE_QUESTION_PATTERN.search(rationale)
+        and _MISSING_VALUE_CUE.search(rationale)
+    ):
         return _excerpt(rationale)
-    return "the value the request does not state"
+    return None
+
+
+def _refusal_text(decision: NegotiationDecision) -> str:
+    """Return the free-text refusal built from the model's own reason."""
+    reason = _excerpt((decision.rationale or "").strip(), limit=240)
+    if not reason:
+        return ""
+    prefix = _ABORT_PREFIX if decision.action == "abort" else _REFUSAL_PREFIX
+    return f"{prefix}{reason}"
 
 
 def _excerpt(text: str, limit: int = 160) -> str:

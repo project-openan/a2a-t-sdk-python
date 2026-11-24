@@ -37,7 +37,12 @@ from google.genai import types
 from shared.adk_tracing import TracePlugin
 from shared.json_text import iter_json_objects
 from shared.model_factory import build_traced_adk_model
-from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
+from shared.models import (
+    DecisionBasis,
+    NegotiationDecision,
+    NegotiationProposeView,
+    decision_consistency_problem,
+)
 from shared.trace import trace_scope
 
 from protocol.client_policy import MUTABLE_FIELDS, ClientPolicy
@@ -116,6 +121,16 @@ DECISION_RETRY_PROMPT = (
     "Your previous message did not contain a valid NegotiationDecision JSON object. "
     "Return exactly one JSON object with the decision fields and nothing else: no reasoning, "
     "markdown fences, or prose outside the JSON."
+)
+
+#: Corrective user turn sent once when a decision contradicts itself (for example ``reject`` with
+#: a filled plan). The model must choose one action; the provider never guesses which field it meant.
+DECISION_CONSISTENCY_PROMPT: Final[str] = (
+    "Your previous decision is self-contradictory: it returned action reject or abort together "
+    "with fields that state an agreed plan (filled_params, counter_proposal, counter_params, "
+    "confirmed_intent or feasibility_summary). Return one consistent NegotiationDecision JSON "
+    "object and nothing else. Either use accept/counter and keep the fields that state the plan, "
+    "or use reject/abort and omit every field that states a plan."
 )
 
 #: How many tool responses one decision turn may consume before the model is asked for the answer.
@@ -315,6 +330,9 @@ def build_decision_prompt(
         "proposal, return accept with the accepted target in filled_params.guaranteedThroughputTarget "
         "and feasibility_summary. Reject only when the request cannot be clarified or accepted.\n"
         f"{pure_rule}"
+        "- If the proposal raises several problems (for example a target overlap and a feasibility "
+        "objection), answer all of them in this one decision; leave only problems the proposal "
+        "did not raise.\n"
         "- Omit fields that do not apply; never pass the string \"None\".\n"
         "Return exactly one NegotiationDecision JSON object and nothing else: no reasoning, "
         "markdown, or prose outside the JSON."
@@ -358,10 +376,12 @@ def _policy_block(policy: ClientPolicy | None) -> str:
     call it again and again, so the values live in the prompt instead.
     """
     floor = policy.min_throughput_mbps if policy is not None else None
-    floor_text = f"{floor:g} Mbps" if floor is not None else "no throughput floor"
+    floor_text = f"{floor:g} Mbps" if floor is not None else "none configured"
     return (
         "Client acceptance policy:\n"
-        f"- Lowest guaranteed throughput accepted without a human: {floor_text}.\n"
+        f"- Hard floor on guaranteed throughput: {floor_text}.\n"
+        "- The shared principles' concession ladder (including its 2Mbps example) is a planning "
+        "target, not a hard floor; it never overrides this policy or the case conditions.\n"
         "- Task-T fields a negotiation may change: "
         f"{', '.join(MUTABLE_FIELDS)}.\n"
         "- The floor only limits a value you send; it never obliges you to send one.\n\n"
@@ -637,20 +657,40 @@ class AdkDecisionProvider:
             return self._fallback_or_raise("The ADK agent produced no final response.")
 
         decision = _decision_from_event(final_event)
-        if decision is not None:
+        problem = (
+            decision_consistency_problem(decision) if decision is not None else None
+        )
+        if decision is not None and problem is None:
             return decision
-        _log_unparseable_decision("decision model", final_event)
+        if decision is None:
+            _log_unparseable_decision("decision model", final_event)
+            retry_prompt = DECISION_RETRY_PROMPT
+        else:
+            _LOGGER.warning("decision model returned a self-contradictory decision: %s", problem)
+            retry_prompt = DECISION_CONSISTENCY_PROMPT
 
-        # A live model can answer with prose even though the request carries a JSON schema (some
-        # OpenAI-compatible gateways drop ``response_format``). One corrective turn in the same ADK
-        # session is much cheaper than failing the run; the offline fallback still applies when the
-        # retry cannot produce a decision either.
-        retry_event = await self._run_turn(session_id, DECISION_RETRY_PROMPT)
+        # One corrective turn in the same ADK session is much cheaper than failing the run: a live
+        # gateway may drop ``response_format``, and a model can slip between action and fields after
+        # reasoning correctly. If the retry is still unusable, the caller gets the error.
+        retry_event = await self._run_turn(session_id, retry_prompt)
         if retry_event is not None:
-            decision = _decision_from_event(retry_event)
-            if decision is not None:
-                return decision
-            _log_unparseable_decision("decision retry", retry_event)
+            retried = _decision_from_event(retry_event)
+            retried_problem = (
+                decision_consistency_problem(retried) if retried is not None else None
+            )
+            if retried is not None and retried_problem is None:
+                return retried
+            if retried is None:
+                _log_unparseable_decision("decision retry", retry_event)
+            else:
+                _LOGGER.warning(
+                    "decision retry stayed self-contradictory: %s", retried_problem
+                )
+        if problem is not None:
+            return self._fallback_or_raise(
+                "The ADK agent produced a self-contradictory NegotiationDecision "
+                f"({problem})."
+            )
         return self._fallback_or_raise("The ADK agent produced no parseable NegotiationDecision.")
 
     async def structure_answer(
