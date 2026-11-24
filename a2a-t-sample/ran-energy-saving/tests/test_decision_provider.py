@@ -193,48 +193,11 @@ async def test_set_decision_basis_is_task_local_on_a_shared_provider() -> None:
     assert seen == {"a": "conditions-a", "b": "conditions-b"}
 
 
-async def test_the_condition_tool_answers_from_the_current_basis() -> None:
-    """The tool queries any candidate value, not only the current proposal (D5)."""
-    from demo.agents.client_agent.agent import build_client_agent
-    from demo.agents.client_agent.tools import make_check_client_condition
-    from shared.condition_checker import ConditionChecker
-    from shared.models import DecisionBasis
-
-    class _Judge:
-        configured = True
-
-        async def complete_json(self, prompt: str, **kwargs: object) -> dict[str, object]:
-            del prompt, kwargs
-            return {"allowed": "no", "reason": "below the stated floor"}
-
-    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
-    provider.set_decision_basis(
-        DecisionBasis(client_conditions="Below 2Mbps is not acceptable.")
-    )
-    try:
-        tool = make_check_client_condition(ConditionChecker(_Judge()))
-        answer = await tool("Is 1Mbps acceptable?", "1Mbps")
-    finally:
-        provider.set_decision_basis(None)
-
-    assert answer == {"allowed": "no", "reason": "below the stated floor"}
-    agent = build_client_agent(
-        model=build_fake_model(),
-        condition_checker=ConditionChecker(_Judge()),
-    )
-    assert any(
-        getattr(tool, "__name__", "") == "check_client_condition"
-        for tool in agent.tools
-    )
-
-
-def test_the_client_agent_has_no_static_policy_tool() -> None:
-    """A policy that never changes in a run must not cost a model turn each time it is asked."""
+def test_the_client_agent_has_no_tools() -> None:
+    """The basis and the policy are in the prompt; a tool call can only cost a model turn."""
     agent = build_client_agent(model=build_fake_model())
 
-    assert all(
-        getattr(tool, "__name__", "") != "get_client_policy" for tool in agent.tools
-    )
+    assert list(agent.tools) == []
 
 
 async def test_scripted_provider_returns_decisions_in_order_and_then_raises() -> None:
@@ -485,19 +448,15 @@ async def test_adk_provider_returns_the_fake_model_decision() -> None:
 
 async def test_a_turn_stops_after_the_tool_call_budget() -> None:
     """A looping model is cut off and asked once more for the decision itself."""
-    from shared.condition_checker import ConditionChecker
+    from demo.agents.client_agent.agent import REQUEST_INSTRUCTION
+    from google.adk.agents import LlmAgent
 
-    class _Judge:
-        configured = True
+    async def test_probe(value: str) -> dict[str, object]:
+        """Return a fixed answer; this test only exercises the tool-call budget."""
+        del value
+        return {"ok": True}
 
-        async def complete_json(self, prompt: str, **kwargs: object) -> dict[str, object]:
-            del prompt, kwargs
-            return {"allowed": "unknown", "reason": "not decided"}
-
-    call = FakeToolCall(
-        name="check_client_condition",
-        args={"question": "Is 1Mbps acceptable?", "candidate_value": "1Mbps"},
-    )
+    call = FakeToolCall(name="test_probe", args={"value": "1"})
     model = build_fake_model(
         (
             FakeScript(
@@ -508,13 +467,14 @@ async def test_a_turn_stops_after_the_tool_call_budget() -> None:
             ),
         )
     )
-    provider = AdkDecisionProvider(
-        agent_factory=lambda built: build_client_agent(
-            built, condition_checker=ConditionChecker(_Judge())
-        ),
+    agent = LlmAgent(
+        name=CLIENT_AGENT_NAME,
         model=model,
-        max_tool_calls=2,
+        instruction=REQUEST_INSTRUCTION,
+        tools=[test_probe],
+        output_schema=NegotiationDecision,
     )
+    provider = AdkDecisionProvider(agent=agent, max_tool_calls=2)
 
     decision = await provider.respond(_view(), _session())
 

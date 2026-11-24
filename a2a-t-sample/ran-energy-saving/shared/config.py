@@ -261,9 +261,6 @@ PLANNER_MAX_STEPS_ENV_KEY = "A2AT_SAMPLE_PLANNER_MAX_STEPS"
 #: decisions. Only model and endpoint are required; a local OpenAI-compatible endpoint accepts an
 #: empty API key.
 JUDGE_MODEL_ENV_KEY = "A2AT_OSP_JUDGE_MODEL"
-#: Operator switch of the client-agent condition checker (D5/D19). It is only usable when the
-#: independent judge is configured; unset enables it for such a process.
-CLIENT_CONDITION_CHECKER_ENV_KEY = "A2AT_SAMPLE_CLIENT_CONDITION_CHECKER"
 JUDGE_API_BASE_ENV_KEY = "A2AT_OSP_JUDGE_API_BASE"
 JUDGE_API_KEY_ENV_KEY = "A2AT_OSP_JUDGE_API_KEY"
 JUDGE_TIMEOUT_ENV_KEY = "A2AT_OSP_JUDGE_TIMEOUT_SECONDS"
@@ -894,7 +891,6 @@ class SampleConfig:
     judge_api_key: str = ""
     judge_timeout_seconds: float = DEFAULT_JUDGE_TIMEOUT_SECONDS
     judge_max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS
-    client_condition_checker: bool = True
 
     @property
     def judge_configured(self) -> bool:
@@ -1207,5 +1203,4 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
             values, JUDGE_TIMEOUT_ENV_KEY, DEFAULT_JUDGE_TIMEOUT_SECONDS
         ),
         judge_max_tokens=_positive_int(values, JUDGE_MAX_TOKENS_ENV_KEY, DEFAULT_JUDGE_MAX_TOKENS),
-        client_condition_checker=_env_bool(values, CLIENT_CONDITION_CHECKER_ENV_KEY, True),
     )
