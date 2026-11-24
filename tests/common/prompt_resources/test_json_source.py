@@ -208,7 +208,7 @@ class TestErrorCatalog:
         errors = packaged_access.load_errors(language)
         expected = json.loads(packaged_file_text(f"errors/{language}/errors.json"))
         assert errors == expected
-        assert len(errors) == 42
+        assert len(errors) == 43
         assert "{template_uri}" in errors["template.not_found"]
         assert "{resource_path}" in errors["infra.resource_read_failed"]
 

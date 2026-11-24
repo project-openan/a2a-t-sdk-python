@@ -583,6 +583,8 @@ class PromptGenerationOrchestrator:
             entry = ErrorCatalog.SLOT_NOT_PROVIDED
         elif code in {ErrorCatalog.SLOT_CONSTRAINT_VIOLATED.value, _LEGACY_CODE_INVALID_VALUE}:
             entry = ErrorCatalog.SLOT_CONSTRAINT_VIOLATED
+        elif code == ErrorCatalog.SLOT_INTENT_UNCLEAR.value:
+            entry = ErrorCatalog.SLOT_INTENT_UNCLEAR
         else:
             _LOGGER.warning(
                 "Unknown slot-extraction error code '%s' mapped to '%s'.",

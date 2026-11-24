@@ -105,6 +105,8 @@ class ErrorCatalog(str, Enum):
     SLOT_CROSS_SCENARIO_POLLUTION = ("slot.cross_scenario_pollution", Category.BUSINESS, ("slot_label",))
     #: A slot value lacks sufficient grounding in the input.
     SLOT_INSUFFICIENT_GROUNDING = ("slot.insufficient_grounding", Category.BUSINESS, ("slot_label",))
+    #: A slot value expresses an unclear intent that cannot be resolved into a concrete value.
+    SLOT_INTENT_UNCLEAR = ("slot.intent_unclear", Category.BUSINESS, ("slot_label", "actual"))
     #: Fallback for unknown slot-domain codes returned by an LLM step.
     SLOT_RULE_VIOLATION = ("slot.rule_violation", Category.BUSINESS, ("slot_label",))
 

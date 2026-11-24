@@ -9,6 +9,7 @@
   "slot.fabricated_value": "「{slot_label}」的取值「{actual}」是占位内容,不是有效值",
   "slot.cross_scenario_pollution": "「{slot_label}」的取值混入了其他场景的内容",
   "slot.insufficient_grounding": "「{slot_label}」的取值缺少充分依据",
+  "slot.intent_unclear": "「{slot_label}」的取值「{actual}」意图表达不明确",
   "slot.rule_violation": "「{slot_label}」的取值不符合校验规则。",
   "input.text_too_long": "输入文本长度 {actual_length} 超过上限 {max_chars}(A2AT_INPUT_TEXT_MAX_CHARS)",
   "content.param_missing": "「{section_label}」未填写,请补充该参数的取值",

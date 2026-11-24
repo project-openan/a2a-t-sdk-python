@@ -41,6 +41,7 @@ SUPPORTED_SLOT_ERROR_CODES: frozenset[str] = frozenset(
     {
         "slot.not_provided",
         "slot.constraint_violated",
+        "slot.intent_unclear",
         "missing_input",
         "invalid_value",
     }

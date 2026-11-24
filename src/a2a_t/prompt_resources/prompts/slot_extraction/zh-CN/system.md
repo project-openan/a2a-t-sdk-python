@@ -11,7 +11,7 @@
   "slot_errors": [
     {
       "slot_name": "字符串",
-      "code": "slot.not_provided" | "slot.constraint_violated",
+      "code": "slot.not_provided" | "slot.constraint_violated" | "slot.intent_unclear",
       "facts": {
         "slot_label": "字符串",
         "actual": "字符串（仅 slot.constraint_violated 需要）"
@@ -51,7 +51,7 @@
 18. 日期归一规则：当参数的 `x-a2at-value-constraint` 指定了日期格式要求时，必须将自然语言日期按其指定格式归一（如约束要求 "YYYY-MM-DD~YYYY-MM-DD" 区间格式时，"2026年8月1日到2030年12月31日"归一为"2026-08-01~2030-12-31"）。输入日期已符合约束格式的直接保留；约束未指定日期格式的参数不做日期转换，保留原文。
 
 ## 错误报告规则
-仅在 `slot_errors` 数组中报告错误，只使用以下两个错误码：
+仅在 `slot_errors` 数组中报告错误，只使用以下三个错误码：
 
 - **slot.not_provided**（facts 仅含 `slot_label`）
   - 判定：必填参数在输入中没有任何可提取的值（含按规则 2、规则 9 等将值判为 null 的情形），值设为 null 并报告此码。
@@ -62,6 +62,12 @@
   - 判定：参数的 `x-a2at-value-constraint` 定义了违规触发条件且输入满足该条件。这包括但不限于规则 13 的「封闭取值范围」情形；任何写明“必须上报 slot.constraint_violated”的参数级规则（如歧义的跨任务引用、给成区间的百分比、约数频点）优先于上述通用定义——即使该参数没有封闭枚举，也必须上报。
   - 不适用：格式异常内容（无效日期、无意义字符等）——格式不是本码的判定对象，按规则 16 原样提取、由校验阶段判定；必填参数整体没有任何值 → slot.not_provided。
   - 正例：参数「授权策略的操作类型」的合法取值为"新增授权策略/修改授权策略"，输入词"导出"不在合法取值与同义对清单中 → `{"slot_name": "授权策略的操作类型", "code": "slot.constraint_violated", "facts": {"slot_label": "授权策略的操作类型", "actual": "导出"}}`。
+
+- **slot.intent_unclear**（facts 含 `slot_label` 和 `actual`）
+  - 判定：输入为该参数提供了内容，但该内容的意图表达不明确、无法判定用户想要的具体取值（如模糊、歧义、可作多种解读的表述）。任何写明“必须上报 slot.intent_unclear”的参数级规则优先于上述通用定义——即使该参数没有封闭枚举，也必须上报。
+  - 不适用：参数在输入中完全没有任何内容 → slot.not_provided；内容是明确的非法取值或违反封闭取值范围 → slot.constraint_violated。
+  - 报告此码时值设为 null。
+  - 正例：输入"把节能模式调一下"未说明调成什么 → `{"slot_name": "节能模式", "code": "slot.intent_unclear", "facts": {"slot_label": "节能模式", "actual": "把节能模式调一下"}}`。
 
 ### 必填与可选参数
 - 必填参数缺失：值设为 null，报告 `slot.not_provided`

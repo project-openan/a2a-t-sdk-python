@@ -11,7 +11,7 @@ Return a JSON object with the following structure:
   "slot_errors": [
     {
       "slot_name": "string",
-      "code": "slot.not_provided" | "slot.constraint_violated",
+      "code": "slot.not_provided" | "slot.constraint_violated" | "slot.intent_unclear",
       "facts": {
         "slot_label": "string",
         "actual": "string (only needed for slot.constraint_violated)"
@@ -51,7 +51,7 @@ Each `slot_errors` entry contains exactly the three keys `slot_name`, `code`, an
 18. Date normalization: when a slot's `x-a2at-value-constraint` specifies a date format, normalize natural-language dates to that format (e.g., when the constraint requires the "YYYY-MM-DD~YYYY-MM-DD" range format, normalize "August 1, 2026 to December 31, 2030" to "2026-08-01~2030-12-31"). Keep input dates that already match the required format as-is; do not convert dates for slots whose constraint specifies no date format — keep the original text.
 
 ## Error Reporting Rules
-Report errors only in the `slot_errors` array, using only the following two codes:
+Report errors only in the `slot_errors` array, using only the following three codes:
 
 - **slot.not_provided** (facts contains only `slot_label`)
   - Decision: a required slot has no extractable value anywhere in the input (including cases where the value is set to null under rule 2, rule 9, and the like); set the value to null and report this code.
@@ -62,6 +62,12 @@ Report errors only in the `slot_errors` array, using only the following two code
   - Decision: the slot's `x-a2at-value-constraint` defines a violation trigger and the input meets it. This includes, but is NOT limited to, the closed value range case of rule 13; per-slot rules that say "MUST report slot.constraint_violated" (e.g. an ambiguous cross-task reference, a range-valued percentage, an approximate frequency) take precedence over any general definition above — report them even though the slot has no closed enumeration.
   - Not applicable: format-anomalous content (invalid dates, meaningless characters, and the like) — formats are not this code's concern; extract such content as-is per rule 16 and let the validation stage decide; a required slot has no value at all in the input → use slot.not_provided.
   - Example: the allowed values of the slot "Authorization Policy Operation Type" are "add authorization policy / modify authorization policy", and the input word "export" is not among them nor in the synonym-pair list → `{"slot_name": "Authorization Policy Operation Type", "code": "slot.constraint_violated", "facts": {"slot_label": "Authorization Policy Operation Type", "actual": "export"}}`.
+
+- **slot.intent_unclear** (facts contains `slot_label` and `actual`)
+  - Decision: the input provides content for the slot, but the intent of that content is unclear and the concrete value the user wants cannot be determined (e.g. vague, ambiguous, or multi-interpretable wording). Per-slot rules that say "MUST report slot.intent_unclear" take precedence over any general definition above — report them even though the slot has no closed enumeration.
+  - Not applicable: the slot has no content at all in the input → use slot.not_provided; the content is a clearly invalid value or violates a "closed value range" → use slot.constraint_violated.
+  - Set the value to null when reporting this code.
+  - Example: the input "tweak the energy saving mode a bit" does not say what to change it to → `{"slot_name": "Energy saving mode", "code": "slot.intent_unclear", "facts": {"slot_label": "Energy saving mode", "actual": "tweak the energy saving mode a bit"}}`.
 
 ### Required vs Optional Slots
 - Required slot missing: set the value to null and report `slot.not_provided`

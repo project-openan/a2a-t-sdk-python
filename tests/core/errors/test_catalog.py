@@ -25,7 +25,7 @@ import pytest
 
 from a2a_t.core.errors.catalog import Category, ErrorCatalog, by_code
 
-# The full 42-entry table ported verbatim from the Java source
+# The full 43-entry table ported verbatim from the Java source
 # (a2a-t-core/.../core/exception/ErrorCatalog.java): (member name, code, category, fact parameters).
 # This literal table is the factParameters parity oracle; the assertions below pin the Python
 # catalog member-for-member against it.
@@ -42,6 +42,7 @@ JAVA_ERROR_CATALOG: tuple[tuple[str, str, Category, tuple[str, ...]], ...] = (
     ("SLOT_FABRICATED_VALUE", "slot.fabricated_value", Category.BUSINESS, ("slot_label", "actual")),
     ("SLOT_CROSS_SCENARIO_POLLUTION", "slot.cross_scenario_pollution", Category.BUSINESS, ("slot_label",)),
     ("SLOT_INSUFFICIENT_GROUNDING", "slot.insufficient_grounding", Category.BUSINESS, ("slot_label",)),
+    ("SLOT_INTENT_UNCLEAR", "slot.intent_unclear", Category.BUSINESS, ("slot_label", "actual")),
     ("SLOT_RULE_VIOLATION", "slot.rule_violation", Category.BUSINESS, ("slot_label",)),
     # domain: input
     ("INPUT_TEXT_TOO_LONG", "input.text_too_long", Category.BUSINESS, ("actual_length", "max_chars")),
@@ -143,10 +144,10 @@ def test_entry_matches_the_java_error_catalog(
     assert by_code(code) is member
 
 
-def test_catalog_size_is_42() -> None:
-    assert len(ErrorCatalog) == 42
-    assert len(JAVA_ERROR_CATALOG) == 42
-    assert len({entry[1] for entry in JAVA_ERROR_CATALOG}) == 42
+def test_catalog_size_is_43() -> None:
+    assert len(ErrorCatalog) == 43
+    assert len(JAVA_ERROR_CATALOG) == 43
+    assert len({entry[1] for entry in JAVA_ERROR_CATALOG}) == 43
     assert {member.name for member in ErrorCatalog} == {entry[0] for entry in JAVA_ERROR_CATALOG}
 
 
