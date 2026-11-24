@@ -1,0 +1,2365 @@
+[
+  {
+    "id": "TC00000001",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "标准投诉诊断诉求（业务名称+质差分类+流水号+UTC时间+投诉详情）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线质差，OSS侧事件流水号：event-id-20260511-09013，问题发生时间（UTC）：2026-05-16T08:21:46Z，请进行网络侧故障根因诊断。投诉详情：SZ访问GZ响应延迟骤升",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceName",
+          "serviceObjectValue": "SZ_汇聚专线业务_100M_SPN",
+          "complaintCategory": "专线质差",
+          "ossEventId": "event-id-20260511-09013",
+          "occurrenceTime": "2026-05-16T08:21:46Z",
+          "complaintDetail": "SZ访问GZ响应延迟骤升"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000002",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "业务标识形式对象（中断+UTC时间）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，投诉分类：专线中断，OSS侧事件流水号：event-id-20260512-09021，问题发生时间（UTC）：2026-05-16T10:05:00Z，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceId",
+          "serviceObjectValue": "5571d707-5aad-11ea-8629-286ed488cff3",
+          "complaintCategory": "专线中断",
+          "ossEventId": "event-id-20260512-09021",
+          "occurrenceTime": "2026-05-16T10:05:00Z"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000003",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "物理端口形式对象（中断，无时间）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17，投诉分类：专线中断，OSS侧事件流水号：event-id-20260513-09031，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "accessPortName",
+          "serviceObjectValue": "P180-SZ-PTN7900-23-TPA1EG24-17",
+          "complaintCategory": "专线中断",
+          "ossEventId": "event-id-20260513-09031"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000004",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "逻辑端口形式对象（质差+投诉详情，无时间）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)，投诉分类：专线质差，OSS侧事件流水号：event-id-20260514-09041，请进行网络侧故障根因诊断。投诉详情：GZ机房访问丢包率升高",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "accessPortName",
+          "serviceObjectValue": "P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)",
+          "complaintCategory": "专线质差",
+          "ossEventId": "event-id-20260514-09041",
+          "complaintDetail": "GZ机房访问丢包率升高"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000005",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "质差同义词映射（业务卡顿→专线质差）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：惠州江北汇聚专线业务_100M_SPN，该专线出现业务卡顿，OSS侧事件流水号：event-id-20260515-09051，问题发生时间（UTC）：2026-05-16T02:30:00Z，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceName",
+          "serviceObjectValue": "惠州江北汇聚专线业务_100M_SPN",
+          "complaintCategory": "专线质差",
+          "ossEventId": "event-id-20260515-09051",
+          "occurrenceTime": "2026-05-16T02:30:00Z"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000006",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "中断同义词映射（业务无法访问→专线中断）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，该专线业务无法访问，OSS侧事件流水号：event-id-20260516-09061，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceName",
+          "serviceObjectValue": "SZ_汇聚专线业务_100M_SPN",
+          "complaintCategory": "专线中断",
+          "ossEventId": "event-id-20260516-09061"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000007",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "北京时间转UTC（质差+详情）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线质差，OSS侧事件流水号：event-id-20260517-09071，问题发生时间（北京时间，UTC+8）：2026-05-16T16:21:46+08:00，请进行网络侧故障根因诊断。投诉详情：SZ至GZ时延增大",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceName",
+          "serviceObjectValue": "SZ_汇聚专线业务_100M_SPN",
+          "complaintCategory": "专线质差",
+          "ossEventId": "event-id-20260517-09071",
+          "occurrenceTime": "2026-05-16T08:21:46Z",
+          "complaintDetail": "SZ至GZ时延增大"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000008",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "业务标识+北京时间转UTC（中断+详情）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，投诉分类：专线中断，OSS侧事件流水号：event-id-20260518-09081，问题发生时间（北京时间，UTC+8）：2026-05-16T09:00:00+08:00，请进行网络侧故障根因诊断。投诉详情：用户反馈业务无法访问",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceId",
+          "serviceObjectValue": "5571d707-5aad-11ea-8629-286ed488cff3",
+          "complaintCategory": "专线中断",
+          "ossEventId": "event-id-20260518-09081",
+          "occurrenceTime": "2026-05-16T01:00:00Z",
+          "complaintDetail": "用户反馈业务无法访问"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000009",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "逻辑端口+UTC时间（质差+详情）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=200)，投诉分类：专线质差，OSS侧事件流水号：event-id-20260519-09091，问题发生时间（UTC）：2026-05-16T23:30:00Z，请进行网络侧故障根因诊断。投诉详情：业务抖动明显",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "accessPortName",
+          "serviceObjectValue": "P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=200)",
+          "complaintCategory": "专线质差",
+          "ossEventId": "event-id-20260519-09091",
+          "occurrenceTime": "2026-05-16T23:30:00Z",
+          "complaintDetail": "业务抖动明显"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000010",
+    "caseDimension": "01-意图清晰参数完整",
+    "caseDesc": "最小合法诉求（业务名称+中断+流水号）",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线中断，OSS侧事件流水号：event-id-20260520-09101，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "serviceObjectType": "serviceName",
+          "serviceObjectValue": "SZ_汇聚专线业务_100M_SPN",
+          "complaintCategory": "专线中断",
+          "ossEventId": "event-id-20260520-09101"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000011",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "投诉诉求缺少专线业务对象（中断+流水号+UTC时间），step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "帮我诊断一条专线投诉：投诉分类：专线中断，OSS侧事件流水号：event-id-20260516-09101，问题发生时间（UTC）：2026-05-16T08:21:46Z",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000012",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "投诉诉求缺少专线业务对象（质差+流水号），step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "帮我诊断一条专线投诉：投诉分类：专线质差，OSS侧事件流水号：event-id-20260516-09102",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000013",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "投诉诉求缺少专线业务对象（质差+流水号+详情），step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "帮我诊断一条专线投诉：投诉分类：专线质差，OSS侧事件流水号：event-id-20260516-09103。投诉详情：用户反馈访问缓慢",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000014",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "投诉诉求缺少专线业务对象（中断+流水号+UTC时间+详情），step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "帮我诊断一条专线投诉：投诉分类：专线中断，OSS侧事件流水号：event-id-20260516-09104，问题发生时间（UTC）：2026-05-16T08:21:46Z。投诉详情：用户反馈业务中断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000015",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "仅提供业务名称，缺少任务上下文，step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000016",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "仅提供业务标识，缺少任务上下文，step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000017",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "仅提供物理端口，缺少任务上下文，step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000018",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "仅提供逻辑端口，缺少任务上下文，step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000019",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "任务对象与任务上下文均未提供，step1 slot.not_provided",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "请帮我诊断专线投诉故障",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.not_provided",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000020",
+    "caseDimension": "04-关键信息缺失",
+    "caseDesc": "上下文缺少必选的流水号（仅分类+详情），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线质差。投诉详情：交易响应缓慢，请进行网络侧故障根因诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000021",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（具体编号我晚点发你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线质差，OSS侧事件流水号：具体编号我晚点发你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000022",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号仅引用附件（流水号见附件），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线中断，OSS侧事件流水号：流水号见附件，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000023",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（流水号回头发你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，投诉分类：专线质差，OSS侧事件流水号：流水号回头发你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000024",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（流水号我让同事整理后发你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17，投诉分类：专线中断，OSS侧事件流水号：流水号我让同事整理后发你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000025",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（流水号稍后提供给你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：惠州江北汇聚专线业务_100M_SPN，投诉分类：专线质差，OSS侧事件流水号：流水号稍后提供给你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000026",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号仅引用邮件（流水号在昨天的故障邮件里），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线中断，OSS侧事件流水号：流水号在昨天的故障邮件里，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000027",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号仅引用工单（流水号写在故障工单里），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，投诉分类：专线质差，OSS侧事件流水号：流水号写在故障工单里，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000028",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（流水号等审批通过后给你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)，投诉分类：专线中断，OSS侧事件流水号：流水号等审批通过后给你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000029",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（流水号我查到了就告诉你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线质差，OSS侧事件流水号：流水号我查到了就告诉你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000030",
+    "caseDimension": "05-意图描述模糊",
+    "caseDesc": "OSS事件流水号只有口头承诺（流水号下次开会时给你），step2 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，投诉分类：专线中断，OSS侧事件流水号：流水号下次开会时给你，请尽快诊断处理",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      },
+      {
+        "api": "validateTaskPromptAndDataFilling",
+        "args": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "serviceObjectType": {
+                "type": "string",
+                "description": "Form the user chose to identify the private line service; exactly one form is provided: serviceName (the private line service name on the network side), serviceId (the unique private line service identifier), accessPortName (the access port name, physical or logical).",
+                "enum": [
+                  "serviceName",
+                  "serviceId",
+                  "accessPortName"
+                ]
+              },
+              "serviceObjectValue": {
+                "type": "string",
+                "description": "Value of the chosen service object form, kept verbatim and carrying only the value without the 对象类型 prefix (e.g. drop the 专线业务名称： prefix). serviceName: e.g. SZ_汇聚专线业务_100M_SPN; serviceId: e.g. 5571d707-5aad-11ea-8629-286ed488cff3; accessPortName physical format 网元名称+单板号+单板型号+端口号 e.g. P180-SZ-PTN7900-23-TPA1EG24-17, logical format appends (cvlan=接入vlanid) e.g. P180-SZ-PTN7900-23-TPA1EG24-17(cvlan=100)."
+              },
+              "complaintCategory": {
+                "type": "string",
+                "description": "Complaint category, exactly one of two catalog values: 专线中断 (synonyms: 业务中断, 网络无法连通, 业务不通, 业务无法访问) or 专线质差 (synonyms: 业务卡顿, 业务访问超时, 业务丢包, 业务时延大, 业务抖动, 业务拥塞, 业务体验下滑, 业务误码率高, 业务光功率异常). Map the user's wording to the matching catalog value; when the stated category matches neither catalog value nor any listed synonym (e.g. 专线计费争议), report a format error.",
+                "enum": [
+                  "专线中断",
+                  "专线质差"
+                ]
+              },
+              "occurrenceTime": {
+                "type": "string",
+                "description": "Problem occurrence time, normalized to an ISO-8601 UTC timestamp with the Z suffix, e.g. 2026-05-16T08:21:46Z. A stated local time carries an explicit timezone (e.g. 北京时间 (UTC+8)); convert it to UTC (2026-05-16T16:21:46+08:00 → 2026-05-16T08:21:46Z) and never strip the timezone; report a format error when no timezone is stated and when the phrase cannot be resolved to an absolute timestamp (e.g. 上周五早上八点多). When not stated at all, extract null without error (the field is optional)."
+              },
+              "ossEventId": {
+                "type": "string",
+                "description": "OSS-side complaint ticket serial number of the private line service, kept verbatim, e.g. event-id-20260511-09013. When only a promise or placeholder is given instead of a concrete serial number (e.g. 具体编号我晚点发你, 流水号见附件, 流水号回头发你), report a format error."
+              },
+              "complaintDetail": {
+                "type": "string",
+                "description": "Complaint details stated by the user or pre-processed on the OSS side, kept verbatim. When not stated at all, extract null without error (the field is optional)."
+              }
+            },
+            "required": [
+              "serviceObjectType",
+              "serviceObjectValue",
+              "complaintCategory",
+              "ossEventId"
+            ]
+          },
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1",
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000031",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线计费争议”不在专线中断/专线质差取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线计费争议，OSS侧事件流水号：event-id-20260516-09103，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000032",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线施工”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线施工，OSS侧事件流水号：event-id-20260516-09302，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000033",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线扩容”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线扩容，OSS侧事件流水号：event-id-20260516-09303，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000034",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线开通”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线开通，OSS侧事件流水号：event-id-20260516-09304，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000035",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线退订”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务标识：5571d707-5aad-11ea-8629-286ed488cff3，投诉分类：专线退订，OSS侧事件流水号：event-id-20260516-09305，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000036",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线迁移”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线迁移，OSS侧事件流水号：event-id-20260516-09306，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000037",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线割接”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线割接，OSS侧事件流水号：event-id-20260516-09307，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000038",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线巡检”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "接入端口名称：P180-SZ-PTN7900-23-TPA1EG24-17，投诉分类：专线巡检，OSS侧事件流水号：event-id-20260516-09308，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000039",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线报装”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线报装，OSS侧事件流水号：event-id-20260516-09309，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000040",
+    "caseDimension": "06-值域违规检测",
+    "caseDesc": "投诉分类“专线续约”不在取值范围内，step1 slot.constraint_violated",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateTaskPromptFromText",
+        "args": {
+          "text": "专线业务名称：SZ_汇聚专线业务_100M_SPN，投诉分类：专线续约，OSS侧事件流水号：event-id-20260516-09310，请诊断",
+          "templateUri": "Task-T/network-layer/private-line-complaint/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "slot.constraint_violated",
+          "errMessage": ""
+        }
+      }
+    ]
+  }
+]

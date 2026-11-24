@@ -1,0 +1,5668 @@
+[
+  {
+    "id": "TC00000001",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合1（3项），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "专线业务对象",
+              "desc": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+            },
+            {
+              "name": "投诉分类",
+              "desc": "专线中断或专线质差，如专线质差"
+            },
+            {
+              "name": "OSS事件流水号",
+              "desc": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN",
+          "complaint_category": "专线质差",
+          "oss_event_id": "event-id-20260516-09103"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000002",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合2（2项+或关系），仅提供业务对象A，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "或"
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              }
+            },
+            "relationship": "或"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000003",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合3（2项），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "专线业务对象",
+              "desc": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+            },
+            {
+              "name": "投诉分类",
+              "desc": "专线中断或专线质差，如专线质差"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN",
+          "complaint_category": "专线质差"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000004",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合4（2项+或关系），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "投诉详情",
+                  "value": "用户对专线业务投诉的描述，如SZ访问GZ响应延迟骤升"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "或"
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "投诉详情",
+                  "value": "SZ访问GZ响应延迟骤升"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "complaint_detail": {
+                "type": "string",
+                "description": "投诉详情"
+              }
+            },
+            "relationship": "或"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "投诉分类",
+              "desc": "专线中断或专线质差，如专线质差"
+            },
+            {
+              "name": "投诉详情",
+              "desc": "用户对专线业务投诉的描述，如SZ访问GZ响应延迟骤升"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "complaint_category": "专线质差",
+          "complaint_detail": "SZ访问GZ响应延迟骤升"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000005",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合5（4项），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                },
+                {
+                  "name": "问题发生时间",
+                  "value": "问题发生的时间戳，如2026-05-16T08:21:46Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                },
+                {
+                  "name": "问题发生时间",
+                  "value": "2026-05-16T08:21:46Z"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              },
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "专线业务对象",
+              "desc": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+            },
+            {
+              "name": "投诉分类",
+              "desc": "专线中断或专线质差，如专线质差"
+            },
+            {
+              "name": "OSS事件流水号",
+              "desc": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+            },
+            {
+              "name": "问题发生时间",
+              "desc": "问题发生的时间戳，如2026-05-16T08:21:46Z"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN",
+          "complaint_category": "专线质差",
+          "oss_event_id": "event-id-20260516-09103",
+          "occurrence_time": "2026-05-16T08:21:46Z"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000006",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合6（1项），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "OSS事件流水号",
+              "desc": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "oss_event_id": "event-id-20260516-09103"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000007",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合7（2项+关系），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "与"
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": "与"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "专线业务对象",
+              "desc": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+            },
+            {
+              "name": "OSS事件流水号",
+              "desc": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN",
+          "oss_event_id": "event-id-20260516-09103"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000008",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合8（2项），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "投诉分类",
+              "desc": "专线中断或专线质差，如专线质差"
+            },
+            {
+              "name": "OSS事件流水号",
+              "desc": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "complaint_category": "专线质差",
+          "oss_event_id": "event-id-20260516-09103"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000009",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合9（2项+关系），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "问题发生时间",
+                  "value": "问题发生的时间戳，如2026-05-16T08:21:46Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": "与"
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "问题发生时间",
+                  "value": "2026-05-16T08:21:46Z"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": "与"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "投诉分类",
+              "desc": "专线中断或专线质差，如专线质差"
+            },
+            {
+              "name": "问题发生时间",
+              "desc": "问题发生的时间戳，如2026-05-16T08:21:46Z"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "complaint_category": "专线质差",
+          "occurrence_time": "2026-05-16T08:21:46Z"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000010",
+    "caseDimension": "01-结构化数据完整",
+    "caseDesc": "信息协商-propose-结构数据信息项组合10（2项），生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉详情",
+                  "value": "用户对专线业务投诉的描述，如SZ访问GZ响应延迟骤升"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉详情",
+                  "value": "SZ访问GZ响应延迟骤升"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "complaint_detail": {
+                "type": "string",
+                "description": "投诉详情"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          },
+          "data": [
+            {
+              "name": "专线业务对象",
+              "desc": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+            },
+            {
+              "name": "投诉详情",
+              "desc": "用户对专线业务投诉的描述，如SZ访问GZ响应延迟骤升"
+            }
+          ]
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN",
+          "complaint_detail": "SZ访问GZ响应延迟骤升"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000011",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-结构数据无信息项变体1，步骤1渲染器内容校验拦截，返回 negotiation.content_invalid",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.content_invalid",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000012",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-步骤1入参data.context丢失id字段，绑定层返回 negotiation.invalid_input",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.invalid_input",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000013",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-步骤2入参丢失templateUri，返回 template.not_found",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "template.not_found",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000014",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-请求3项时accept回填2项（空关系尽力而为），校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": "",
+            "required": [
+              "service_object",
+              "complaint_category",
+              "oss_event_id"
+            ]
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN",
+          "complaint_category": "专线质差"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000015",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-步骤4入参丢失templateUri，返回 template.not_found",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "template.not_found",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000016",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-结构数据无信息项变体6，步骤1渲染器内容校验拦截，返回 negotiation.content_invalid",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.content_invalid",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000017",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-步骤1入参data.context携带非法round（0），绑定层返回 negotiation.invalid_input",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 0,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.invalid_input",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000018",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-步骤2入参丢失templateUri（分类+流水号变体），返回 template.not_found",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "template.not_found",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000019",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-请求2项时accept回填1项（空关系尽力而为），校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "专线的业务名称、业务标识或接入端口名称，任选其一，如SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "专线业务对象",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "service_object": {
+                "type": "string",
+                "description": "专线的业务名称、业务标识或接入端口名称"
+              },
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              }
+            },
+            "relationship": "",
+            "required": [
+              "service_object",
+              "oss_event_id"
+            ]
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "service_object": "SZ_汇聚专线业务_100M_SPN"
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000020",
+    "caseDimension": "02-关键内容缺失",
+    "caseDesc": "信息协商-propose-步骤4入参丢失templateUri（流水号+详情变体），返回 template.not_found",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                },
+                {
+                  "name": "投诉详情",
+                  "value": "用户对专线业务投诉的描述，如SZ访问GZ响应延迟骤升"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "OSS事件流水号",
+                  "value": "event-id-20260516-09103"
+                },
+                {
+                  "name": "投诉详情",
+                  "value": "SZ访问GZ响应延迟骤升"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "oss_event_id": {
+                "type": "string",
+                "description": "OSS事件流水号"
+              },
+              "complaint_detail": {
+                "type": "string",
+                "description": "投诉详情"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "template.not_found",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000021",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项生成后步骤2校验缺失入参（context），规则门返回 negotiation.invalid_input",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "哪条专线",
+                  "value": "就你们管的那条汇聚专线"
+                },
+                {
+                  "name": "算哪类",
+                  "value": "反正上不了网"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.invalid_input",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000022",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项生成后步骤2校验缺失入参（promptText为空），输入门返回 negotiation.invalid_input",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线是哪条",
+                  "value": "用得最多的那条"
+                },
+                {
+                  "name": "工单号",
+                  "value": "OSS上能查到"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": "",
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.invalid_input",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000023",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体3，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "哪片业务",
+                  "value": "就是那片汇聚专线"
+                },
+                {
+                  "name": "算哪类",
+                  "value": "反正有影响"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "坂田片区那条专线业务"
+                },
+                {
+                  "name": "name",
+                  "value": "专线质差"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "哪片业务"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "算哪类"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000024",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体4，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线对象",
+                  "value": "财报系统那条"
+                },
+                {
+                  "name": "流水号多少",
+                  "value": "工单里写着"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "name",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "专线对象"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "流水号多少"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000025",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体5，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "啥时候的事",
+                  "value": "早上那会儿"
+                },
+                {
+                  "name": "啥现象",
+                  "value": "卡得没法用"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "2026-05-16T08:21:46Z"
+                },
+                {
+                  "name": "name",
+                  "value": "SZ访问GZ响应延迟骤升"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "啥时候的事"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "啥现象"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000026",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体6，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "业务对象",
+                  "value": "财报系统那条专线"
+                },
+                {
+                  "name": "流水号",
+                  "value": "OSS能查到"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "name",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "业务对象"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "流水号"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000027",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体7，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "分类",
+                  "value": "反正是有问题"
+                },
+                {
+                  "name": "开始时间",
+                  "value": "周五下午"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "专线中断"
+                },
+                {
+                  "name": "name",
+                  "value": "2026-05-16T08:21:46Z"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "分类"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "开始时间"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000028",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体8，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "专线名称",
+                  "value": "你们系统里能查"
+                },
+                {
+                  "name": "投诉原话",
+                  "value": "用户说很卡"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "name",
+                  "value": "SZ访问GZ响应延迟骤升"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "专线名称"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "投诉原话"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000029",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体9，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "对象",
+                  "value": "那条100M的"
+                },
+                {
+                  "name": "时间",
+                  "value": "头天晚上"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "SZ_汇聚专线业务_100M_SPN"
+                },
+                {
+                  "name": "name",
+                  "value": "2026-05-16T08:21:46Z"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "对象"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "时间"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000030",
+    "caseDimension": "03-内容描述模糊",
+    "caseDesc": "信息协商-propose-口语化信息项变体10，生成并校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "断还是质差",
+                  "value": "说不清"
+                },
+                {
+                  "name": "OSS流水号",
+                  "value": "在工单上"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "name",
+                  "value": "专线质差"
+                },
+                {
+                  "name": "name",
+                  "value": "event-id-20260516-09103"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "item_1": {
+                "type": "string",
+                "description": "断还是质差"
+              },
+              "item_2": {
+                "type": "string",
+                "description": "OSS流水号"
+              }
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000031",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-结构数据样例含非法时刻（样例不作判违），accept回填正常时间戳（+08:00偏移格式），校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "格式要求：2026-05-16T25:00:00Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "2026-05-16T16:21:46+08:00"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000032",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-结构数据样例含非法时刻（样例不作判违），accept回填越界时刻（13月），步骤4语义校验拒绝，返回 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "格式要求：2026-13-01T10:00:00Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "2026-13-01T08:00:00Z"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000033",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-结构数据样例含非法时刻（样例不作判违），accept回填正常时间戳（带秒Z格式），校验通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "格式要求：2026-05-16T25:00:00Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "2026-05-16T08:21:46Z"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000034",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-结构数据样例含非法时刻（样例不作判违），accept回填口语化不可解析时刻，步骤4语义校验拒绝，返回 negotiation.semantic_rejected",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "格式要求：2026-13-01T10:00:00Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationAcceptPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "ACCEPT"
+            },
+            "content": {
+              "conclusion": "Accept",
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "上周五早上八点多"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateAcceptPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "ACCEPT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.semantic_rejected",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000035",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-结构数据生成后步骤2校验缺失入参（context），规则门返回 negotiation.invalid_input",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "格式要求：早上8点来钟"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.invalid_input",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000036",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-拒绝理由引用正常取值（专线质差），validate通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "格式要求：专线计费争议"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationRejectPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "REJECT"
+            },
+            "content": {
+              "conclusion": "Reject",
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "我方可提供分类为专线质差，请求的取值越界，无法提供"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateRejectPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "REJECT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "complaint_category": {
+                "type": "string",
+                "description": "投诉分类"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000037",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-请求信息项名称重复（投诉分类×2），步骤2判重名违规，返回 negotiation.rule_violation",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.rule_violation",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000038",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-拒绝理由引用正常日期时间（2026-12-01），validate通过",
+    "caseCategory": "正常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "格式要求：2026-13-01T10:00:00Z"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      },
+      {
+        "api": "generateNegotiationRejectPromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "REJECT"
+            },
+            "content": {
+              "conclusion": "Reject",
+              "items": [
+                {
+                  "name": "问题发生时间",
+                  "value": "2026-12-01T10:00:00Z我方可提供，请求的月份越界，无法按请求提供"
+                }
+              ]
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      },
+      {
+        "api": "validateRejectPromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 3,
+            "$field": "promptText"
+          },
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "REJECT"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "occurrence_time": {
+                "type": "string",
+                "description": "问题发生时间"
+              }
+            },
+            "relationship": ""
+          },
+          "templateUri": "Negotiation-T/information-negotiation/accept-reject/v1"
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5
+          }
+        },
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000039",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-结构数据生成后步骤2校验缺失入参（promptText为空），输入门返回 negotiation.invalid_input",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "OSS事件流水号",
+                  "value": "OSS侧的投诉工单流水号，如event-id-20260511-09013"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": "",
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.invalid_input",
+          "errMessage": ""
+        }
+      }
+    ]
+  },
+  {
+    "id": "TC00000040",
+    "caseDimension": "04-值域违规检测",
+    "caseDesc": "信息协商-propose-请求信息项名称重复（投诉分类×2），步骤2判重名违规，返回 negotiation.rule_violation",
+    "caseCategory": "异常",
+    "input": [
+      {
+        "api": "generateNegotiationProposePromptFromData",
+        "args": {
+          "data": {
+            "context": {
+              "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+              "round": 1,
+              "maxRounds": 5,
+              "performative": "PROPOSE"
+            },
+            "content": {
+              "items": [
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                },
+                {
+                  "name": "投诉分类",
+                  "value": "专线中断或专线质差，如专线质差"
+                }
+              ],
+              "relationship": null
+            }
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1"
+        }
+      },
+      {
+        "api": "validateProposePromptAndDataFilling",
+        "args": {
+          "promptText": {
+            "$fromStep": 1,
+            "$field": "promptText"
+          },
+          "templateUri": "Negotiation-T/information-negotiation/propose/v1",
+          "context": {
+            "id": "8c4f2d61-93a7-4e5b-b1c8-2f6d0a9e7c35",
+            "round": 1,
+            "maxRounds": 5,
+            "performative": "PROPOSE"
+          },
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "信息项名称"
+                },
+                "desc": {
+                  "type": "string",
+                  "description": "指导对端补充取值的说明（含义、格式要求或样例）"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "relationship": ""
+          }
+        }
+      }
+    ],
+    "expected": [
+      {
+        "result": "success",
+        "data": {},
+        "error": {
+          "errCode": "",
+          "errMessage": ""
+        }
+      },
+      {
+        "result": "error",
+        "data": {},
+        "error": {
+          "errCode": "negotiation.rule_violation",
+          "errMessage": ""
+        }
+      }
+    ]
+  }
+]
