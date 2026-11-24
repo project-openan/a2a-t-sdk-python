@@ -155,8 +155,13 @@ def requires_operator_decision(content: str | None) -> bool:
 #: One clock token of a structured target segment.
 _TIME_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d{1,2}:\d{2}")
 
+#: Every spelling of megabit-per-second, rewritten to one form before the compact comparison.
+_RATE_UNIT: Final[re.Pattern[str]] = re.compile(r"m(?:bit/s|bit|bps|b/s)\b", re.IGNORECASE)
+
 #: One rate token of a structured target segment.
-_RATE_TOKEN: Final[re.Pattern[str]] = re.compile(r"\d+(?:\.\d+)?\s*Mbps", re.IGNORECASE)
+_RATE_TOKEN: Final[re.Pattern[str]] = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:Mbps|Mbit/s|Mbit\b|Mb/s)", re.IGNORECASE
+)
 
 #: One rate value, capturing the number so answers can be compared numerically. The OSP corpus
 #: writes rates as ``Mbit/s`` as often as ``Mbps``; a spelling the rule cannot see is a rate it
@@ -194,6 +199,7 @@ def repeats_already_sent(answer: str | None, sent_texts: Iterable[str]) -> bool:
 def _compact(value: object) -> str:
     """Return the separator-free comparison form of one value."""
     text = unicodedata.normalize("NFKC", str(value)).casefold()
+    text = _RATE_UNIT.sub("mbps", text)
     return _COMPACT_STRIP.sub("", text)
 
 
@@ -241,7 +247,7 @@ def ungrounded_answer_fields(
         "NFKC",
         " ".join([answer, *(str(item) for item in allow if item)]),
     ).casefold()
-    compact = _COMPACT_STRIP.sub("", text)
+    compact = _compact(text)
     missing: list[str] = []
     for name, value in (filled or {}).items():
         if any(not _value_grounded(item, text, compact) for item in _answer_items(value)):

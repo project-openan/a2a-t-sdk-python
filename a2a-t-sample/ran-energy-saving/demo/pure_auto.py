@@ -17,6 +17,7 @@ explicit rejection. Automatic mode has no operator to hand the question to.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Final
 
@@ -44,6 +45,15 @@ ASK_TEMPLATE: Final[str] = (
 #: Explicit refusal after the server kept asking without providing the value.
 REJECT_TEMPLATE: Final[str] = (
     "Reject: {item}; the server did not provide a usable value."
+)
+
+#: Rationales that describe our own reading of the question rather than the missing field. They
+#: must not be relayed as if the vendor had named the field.
+_NAMES_THE_QUESTION_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:overlap\w*|ambiguous|contradict\w*|segments?|reject\b)"
+    r"|\b(?:does\s+not|doesn't|no|not|never)\b[^.]{0,80}?"
+    r"(?:information items?|task-?t fields?|exact fields?|required items?|specific items?)",
+    re.IGNORECASE,
 )
 
 
@@ -82,6 +92,8 @@ class AutoPureAnswer:
         self._apply_client_policy = apply_client_policy
         self._basis_text = ""
         self._server_asks = 0
+        #: ``(question, answer)`` pairs of this negotiation, as actually sent to the vendor.
+        self._history: list[tuple[str, str]] = []
         self._proposal_sink: Callable[..., None] | None = None
         self._decision_sink: Callable[..., None] | None = None
 
@@ -104,10 +116,13 @@ class AutoPureAnswer:
         self._apply_client_policy = apply_client_policy
 
     def set_conversation_context(self, context: str | None) -> None:
-        """Forward the recent-turn context to the decision provider."""
-        setter = getattr(self._provider, "set_conversation_context", None)
-        if callable(setter):
-            setter(context)
+        """Ignore the earlier-run memory block.
+
+        That block describes previous runs of the same conversation, not this negotiation. Mixing
+        it into the round history lets the agent treat another run's value as its own earlier
+        answer, so only :meth:`_remember` feeds the provider.
+        """
+        del context
 
     def set_proposal_sink(self, sink: Callable[..., None] | None) -> None:
         """Keep the proposal observer; every question is announced here."""
@@ -140,7 +155,9 @@ class AutoPureAnswer:
                     propose,
                     session,
                 )
+                self._remember(propose, plan.text)
                 return plan.text
+        self._set_provider_context()
         decision = await self._provider.respond(propose, session)
         grounded, _notes = sanitize_pure_decision(
             decision,
@@ -153,8 +170,22 @@ class AutoPureAnswer:
         if grounded is not None:
             self._server_asks = 0
             self._announce(grounded, propose, session)
-            return _render(grounded)
-        return self._ask_or_reject(propose, session, decision)
+            text = _render(grounded)
+            self._remember(propose, text)
+            return text
+        text = self._ask_or_reject(propose, session, decision)
+        self._remember(propose, text)
+        return text
+
+    def _remember(self, propose: Any, answer: str) -> None:
+        """Record what the vendor asked and what this client actually sent."""
+        self._history.append((str(propose.content), answer))
+
+    def _set_provider_context(self) -> None:
+        """Give the agent this negotiation's earlier rounds before it decides the next one."""
+        setter = getattr(self._provider, "set_conversation_context", None)
+        if callable(setter):
+            setter(_render_history(self._history))
 
     def _ask_or_reject(
         self,
@@ -220,9 +251,37 @@ def _missing_item(propose: Any, decision: NegotiationDecision) -> str:
     if labels:
         return ", ".join(labels)
     rationale = (decision.rationale or "").strip()
-    if rationale:
-        return rationale[:160]
+    if rationale and not _NAMES_THE_QUESTION_PATTERN.search(rationale):
+        return _excerpt(rationale)
     return "the value the request does not state"
+
+
+def _excerpt(text: str, limit: int = 160) -> str:
+    """Return a sentence of ``text`` no longer than ``limit`` characters.
+
+    A plain prefix cuts words in half ("... the rate target stated in)"), so the cut prefers a
+    sentence boundary and otherwise a word boundary.
+    """
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    head = normalized[:limit]
+    sentence_end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if sentence_end > 0:
+        return head[: sentence_end + 1].strip()
+    space = head.rfind(" ")
+    return (head[:space] if space > 0 else head).rstrip(",;:，；：") + "…"
+
+
+def _render_history(history: list[tuple[str, str]]) -> str:
+    """Render this negotiation's earlier exchanges for the decision prompt."""
+    if not history:
+        return ""
+    lines = ["Earlier in this negotiation:"]
+    for question, answer in history:
+        lines.append(f"- The server asked: {question}")
+        lines.append(f"  This client answered: {answer}")
+    return "\n".join(lines)
 
 
 def _provider_text(provider: Any) -> str:

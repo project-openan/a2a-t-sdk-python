@@ -97,6 +97,25 @@ def test_structured_target_notation_matches_its_plain_spelling() -> None:
     )
 
 
+def test_a_structured_target_spelled_mbit_s_is_grounded_in_the_request() -> None:
+    """The corpus writes 10 Mbit/s; the answer's canonical Mbps spelling is the same rate."""
+    assert (
+        ungrounded_answer_fields(
+            "Guarantee 10 Mbit/s from 08:00 to 11:00 during the outage.",
+            {"guaranteedThroughputTarget": "{08:00~11:00,10Mbps}"},
+        )
+        == ()
+    )
+
+
+def test_a_structured_target_filled_above_the_request_is_still_rejected() -> None:
+    """Normalizing the unit must not let the answer invent a different rate."""
+    assert ungrounded_answer_fields(
+        "Guarantee 10 Mbit/s from 08:00 to 11:00 during the outage.",
+        {"guaranteedThroughputTarget": "{08:00~11:00,20Mbps}"},
+    ) == ("guaranteedThroughputTarget",)
+
+
 def test_the_vendor_missing_item_sentence_is_recognized() -> None:
     # The reported yellow-zone question: neither "missing items:" nor "provide the correct X name",
     # so the page and the structuring prompt used to show no asked item at all.

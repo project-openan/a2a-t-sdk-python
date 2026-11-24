@@ -115,12 +115,8 @@ async def build_demo_runtime(
         condition_checker = ConditionChecker(build_judge_client(config))
 
     def client_agent_factory(model: Any) -> Any:
-        """Build the decision agent with this run's policy and condition checker."""
-        return build_client_agent(
-            model,
-            policy=policy,
-            condition_checker=condition_checker,
-        )
+        """Build the decision agent with this run's condition checker."""
+        return build_client_agent(model, condition_checker=condition_checker)
 
     if pure_answers is not None:
         pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = _scripted_pure_answer(
@@ -159,6 +155,7 @@ async def build_demo_runtime(
                 user_request=run_spec.user_request,
                 session_db_path=config.client_db_path,
                 agent_factory=client_agent_factory,
+                policy=policy,
             )
             # Automatic mode has no operator to hand the question to. A value the client cannot
             # ground is asked of the NMS (which owns the inventory) and refused after three

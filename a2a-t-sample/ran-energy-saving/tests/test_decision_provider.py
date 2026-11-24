@@ -12,9 +12,11 @@ import pytest
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from demo.adk_fake_model import (
     CLIENT_AGENT_NAME,
+    PROGRESS_FUNCTION_RESPONSES,
     PROGRESS_MODEL_TURNS,
     FakeLlm,
     FakeScript,
+    FakeToolCall,
     FakeTurn,
     build_fake_model,
 )
@@ -88,7 +90,6 @@ def test_build_decision_prompt_requires_answering_required_items() -> None:
     assert "Required Information Items" in prompt
     assert "answer every item in filled_params" in prompt
     assert "A value must appear in the original request" in prompt
-    assert "get_client_policy()" in prompt
     assert "Configured NMS region" not in prompt
 
 
@@ -149,6 +150,26 @@ def test_build_decision_prompt_without_a_basis_has_no_basis_section() -> None:
     assert "Proposal content:" in prompt
 
 
+def test_build_decision_prompt_carries_the_client_policy() -> None:
+    """The static acceptance policy belongs in the prompt, not in a tool the model can loop on."""
+    from protocol.client_policy import ClientPolicy
+
+    prompt = build_decision_prompt(
+        _view(), _session(1), policy=ClientPolicy(min_throughput_mbps=2)
+    )
+
+    assert "Client acceptance policy:" in prompt
+    assert "Lowest guaranteed throughput accepted without a human: 2 Mbps." in prompt
+    assert "guaranteedThroughputTarget" in prompt
+    assert prompt.index("Client acceptance policy:") < prompt.index("Proposal content:")
+
+
+def test_build_decision_prompt_without_a_policy_states_no_floor() -> None:
+    prompt = build_decision_prompt(_view(), _session(1))
+
+    assert "Lowest guaranteed throughput accepted without a human: no throughput floor." in prompt
+
+
 async def test_set_decision_basis_is_task_local_on_a_shared_provider() -> None:
     """The OSS Agent shares one provider across concurrent inbound requests."""
     from shared.models import DecisionBasis
@@ -170,34 +191,6 @@ async def test_set_decision_basis_is_task_local_on_a_shared_provider() -> None:
     await asyncio.gather(run_a(), run_b())
 
     assert seen == {"a": "conditions-a", "b": "conditions-b"}
-
-
-def test_the_policy_tool_reports_the_current_decision_basis() -> None:
-    """The agent's own tool answers from the same basis the prompt carries."""
-    from demo.agents.client_agent.tools import make_get_client_policy
-    from protocol.client_policy import ClientPolicy
-    from protocol.decision_provider import current_decision_basis
-    from shared.models import DecisionBasis
-
-    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
-    provider.set_decision_basis(
-        DecisionBasis(
-            principles="Shared principles.",
-            principles_version="2026-11-23.1",
-            client_conditions="2Mbps is acceptable during the outage.",
-        )
-    )
-    try:
-        view = make_get_client_policy(ClientPolicy())()
-    finally:
-        provider.set_decision_basis(None)
-
-    assert current_decision_basis() is None
-    assert view["decision_basis"] == {
-        "principles_version": "2026-11-23.1",
-        "principles": "Shared principles.",
-        "case_conditions": "2Mbps is acceptable during the outage.",
-    }
 
 
 async def test_the_condition_tool_answers_from_the_current_basis() -> None:
@@ -232,6 +225,15 @@ async def test_the_condition_tool_answers_from_the_current_basis() -> None:
     assert any(
         getattr(tool, "__name__", "") == "check_client_condition"
         for tool in agent.tools
+    )
+
+
+def test_the_client_agent_has_no_static_policy_tool() -> None:
+    """A policy that never changes in a run must not cost a model turn each time it is asked."""
+    agent = build_client_agent(model=build_fake_model())
+
+    assert all(
+        getattr(tool, "__name__", "") != "get_client_policy" for tool in agent.tools
     )
 
 
@@ -479,6 +481,45 @@ async def test_adk_provider_returns_the_fake_model_decision() -> None:
     assert decision.action == "accept"
     assert decision.rationale
     assert decision is not OFFLINE_FALLBACK_DECISION
+
+
+async def test_a_turn_stops_after_the_tool_call_budget() -> None:
+    """A looping model is cut off and asked once more for the decision itself."""
+    from shared.condition_checker import ConditionChecker
+
+    class _Judge:
+        configured = True
+
+        async def complete_json(self, prompt: str, **kwargs: object) -> dict[str, object]:
+            del prompt, kwargs
+            return {"allowed": "unknown", "reason": "not decided"}
+
+    call = FakeToolCall(
+        name="check_client_condition",
+        args={"question": "Is 1Mbps acceptable?", "candidate_value": "1Mbps"},
+    )
+    model = build_fake_model(
+        (
+            FakeScript(
+                marker=CLIENT_AGENT_NAME,
+                turns=(FakeTurn(tool_calls=(call,)), FakeTurn(tool_calls=(call,))),
+                default_text=json.dumps({"action": "accept", "rationale": "ok"}),
+                progress=PROGRESS_FUNCTION_RESPONSES,
+            ),
+        )
+    )
+    provider = AdkDecisionProvider(
+        agent_factory=lambda built: build_client_agent(
+            built, condition_checker=ConditionChecker(_Judge())
+        ),
+        model=model,
+        max_tool_calls=2,
+    )
+
+    decision = await provider.respond(_view(), _session())
+
+    assert provider.tool_calls_this_turn == 2
+    assert decision.action == "accept"
 
 
 def _scripted_model(*texts: str) -> FakeLlm:

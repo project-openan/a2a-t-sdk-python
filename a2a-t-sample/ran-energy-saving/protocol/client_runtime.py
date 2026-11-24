@@ -52,10 +52,10 @@ from shared.model_factory import build_traced_adk_model
 from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     FINAL_STATE_INTENT_NOT_CONFIRMED,
-    MAX_ROUNDS,
     PROTOCOL_A2A_T,
     PROTOCOL_PLAIN,
     PROTOCOL_PURE,
+    PURE_CLIENT_MAX_ROUNDS,
     RUN_MODE_CREATE,
     RUN_MODE_MODIFY,
     SUPPORTED_PROTOCOLS,
@@ -366,6 +366,7 @@ def _build_adk_decision_provider(
         user_request=run_spec.user_request,
         session_db_path=config.client_db_path,
         agent_factory=client_agent_factory,
+        policy=ClientPolicy.from_config(config),
     )
 
 
@@ -762,14 +763,14 @@ class ClientRuntime:
                         answer = _announce_pure_proposals(
                             answer,
                             on_decision_requested,
-                            MAX_ROUNDS,
+                            PURE_CLIENT_MAX_ROUNDS,
                             on_decision_made,
                         )
                     return await run_pure_client_flow(
                         transport=self.transport,
                         user_request=raw_text if processed else self._raw_mode_request(custom_request),
                         answer=answer,
-                        max_rounds=MAX_ROUNDS,
+                        max_rounds=PURE_CLIENT_MAX_ROUNDS,
                         call_timeout_seconds=self.config.http_timeout_seconds,
                         event_sink=event_sink,
                         trace_sink=sink,

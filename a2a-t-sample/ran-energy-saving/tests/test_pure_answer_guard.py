@@ -120,6 +120,58 @@ def test_agent_mode_keeps_a_rate_below_the_client_floor() -> None:
     assert free.filled_params == {"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"}
 
 
+def test_agent_mode_sends_a_counter_that_states_no_rate() -> None:
+    """A time-only concession is the agent's decision, not a violation of the process policy."""
+    decision = NegotiationDecision(
+        action="counter",
+        rationale="shorten the outage",
+        counter_proposal="Shorten the outage window to 12:00-16:00.",
+    )
+
+    free, notes = _sanitize(
+        decision,
+        request_text="Shut down the cell from 12:00 to 20:00.",
+        question="The requested window is not feasible.",
+        kind="feasibility",
+        apply_client_policy=False,
+    )
+
+    assert free is not None
+    assert free.counter_proposal == "Shorten the outage window to 12:00-16:00."
+    assert notes == []
+
+
+def test_agent_mode_accepts_a_confirmation_question_that_states_no_plan() -> None:
+    """The agent read the earlier rounds; a bare accept is its answer to a bare confirmation."""
+    decision = NegotiationDecision(action="accept", rationale="accept the proposal")
+
+    free, _ = _sanitize(
+        decision,
+        request_text="Shut down the cell from 12:00 to 20:00.",
+        question="Not feasible, please confirm.",
+        kind="feasibility",
+        apply_client_policy=False,
+    )
+
+    assert free is not None
+    assert free.action == "accept"
+    assert free.filled_params is None
+
+
+def test_agent_mode_still_refuses_to_invent_a_region() -> None:
+    decision, _ = _sanitize(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "InventedRegion"},
+        ),
+        request_text="Create an energy saving task.",
+        apply_client_policy=False,
+    )
+
+    assert decision is None
+
+
 def test_an_invented_region_leaves_nothing_to_answer() -> None:
     decision, notes = _sanitize(
         NegotiationDecision(

@@ -2214,12 +2214,13 @@ def main() -> None:
             policy = ClientPolicy.from_config(config)
 
             def agent_factory(model: object) -> object:
-                """Build the decision agent with this process's client policy."""
-                return build_client_agent(model, policy=policy)  # ty: ignore[invalid-argument-type]
+                """Build the decision agent; the policy is stated in the decision prompt."""
+                return build_client_agent(model)  # ty: ignore[invalid-argument-type]
 
             decision_provider = AdkDecisionProvider(
                 agent_factory=agent_factory,
                 offline=False,
+                policy=policy,
             )
             answer = build_live_pure_answer(decision_provider, policy=policy)
             recommendation = build_live_pure_recommendation(decision_provider, policy=policy)

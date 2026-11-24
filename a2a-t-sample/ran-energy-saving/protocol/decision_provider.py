@@ -20,7 +20,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Final, Protocol, runtime_checkable
@@ -40,6 +40,7 @@ from shared.model_factory import build_traced_adk_model
 from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.trace import trace_scope
 
+from protocol.client_policy import MUTABLE_FIELDS, ClientPolicy
 from protocol.manual_answer import asks_for_confirmation, missing_item_labels
 
 _LOGGER = logging.getLogger("ran_energy_saving.decision_provider")
@@ -115,6 +116,16 @@ DECISION_RETRY_PROMPT = (
     "Your previous message did not contain a valid NegotiationDecision JSON object. "
     "Return exactly one JSON object with the decision fields and nothing else: no reasoning, "
     "markdown fences, or prose outside the JSON."
+)
+
+#: How many tool responses one decision turn may consume before the model is asked for the answer.
+DEFAULT_MAX_TOOL_CALLS: Final[int] = 12
+
+#: Forced user turn sent after the tool budget: the model must answer instead of calling a tool.
+DECISION_TOOL_BUDGET_PROMPT: Final[str] = (
+    "You have used the tools enough. Answer now with exactly one NegotiationDecision JSON object "
+    "and no tool call. If the available information is insufficient, return reject and say what "
+    "was missing."
 )
 
 #: Default retention of a decision session. Sessions are kept as an audit record of what the
@@ -243,6 +254,7 @@ def build_decision_prompt(
     user_request: str | None = None,
     conversation_context: str | None = None,
     decision_basis: DecisionBasis | None = None,
+    policy: ClientPolicy | None = None,
 ) -> str:
     """Build the user message handed to the ADK decision agent for one proposal.
 
@@ -260,6 +272,7 @@ def build_decision_prompt(
         else ""
     )
     basis = _decision_basis_block(decision_basis)
+    policy_block = _policy_block(policy)
     options = ""
     if propose.options is not None and propose.options.options:
         values = "; ".join(option.value for option in propose.options.options if option.value)
@@ -282,6 +295,7 @@ def build_decision_prompt(
         f"{original}"
         f"{history}"
         f"{basis}"
+        f"{policy_block}"
         "Proposal content:\n"
         f"{propose.content}\n\n"
         f"{options}"
@@ -289,7 +303,6 @@ def build_decision_prompt(
         "- The server is authoritative for region, site and cell names, and for whether a goal is "
         "feasible. Never add, rename, correct or reject a region, site or cell on your own. Use the "
         "value the original request states or a value this proposal offers.\n"
-        "- Call get_client_policy() when you need the client's own acceptance limits.\n"
         "- If the proposal lists Required Information Items, answer every item in filled_params "
         "using the exact Task-T parameter name. A value must appear in the original request or in "
         "this proposal; do not invent one. If an item cannot be answered from those sources, "
@@ -335,6 +348,23 @@ def _decision_basis_block(basis: DecisionBasis | None) -> str:
         "the request does not raise.\n"
         "- An entity value may only come from the original request, this proposal or the "
         "case-specific client conditions; never invent one.\n\n"
+    )
+
+
+def _policy_block(policy: ClientPolicy | None) -> str:
+    """Render the static client acceptance policy of one run.
+
+    The policy never changes during a run. A tool that returns it makes a non-converging model
+    call it again and again, so the values live in the prompt instead.
+    """
+    floor = policy.min_throughput_mbps if policy is not None else None
+    floor_text = f"{floor:g} Mbps" if floor is not None else "no throughput floor"
+    return (
+        "Client acceptance policy:\n"
+        f"- Lowest guaranteed throughput accepted without a human: {floor_text}.\n"
+        "- Task-T fields a negotiation may change: "
+        f"{', '.join(MUTABLE_FIELDS)}.\n"
+        "- The floor only limits a value you send; it never obliges you to send one.\n\n"
     )
 
 
@@ -436,6 +466,8 @@ class AdkDecisionProvider:
         conversation_context: str | None = None,
         session_db_path: str | None = None,
         agent_factory: Callable[[BaseLlm], Any] | None = None,
+        policy: ClientPolicy | None = None,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
     ) -> None:
         """Create one ADK-backed provider.
 
@@ -459,6 +491,9 @@ class AdkDecisionProvider:
                 with a logged warning (see :func:`build_session_service`).
             agent_factory: builder of the decision agent from the configured model, supplied by
                 the composition root (the sample's client agent lives with the demo assets).
+            policy: Static client acceptance policy stated in every decision prompt.
+            max_tool_calls: Tool responses one decision turn may consume before the provider asks
+                the model for its answer instead of another call.
 
         Raises:
             ValueError: when neither ``agent`` nor ``agent_factory`` is supplied.
@@ -490,6 +525,14 @@ class AdkDecisionProvider:
         self._conversation_context = conversation_context
         self._decision_basis: DecisionBasis | None = None
         self._durable_sessions = durable
+        self._policy = policy
+        self._max_tool_calls = max(1, max_tool_calls)
+        self._tool_calls_this_turn = 0
+
+    @property
+    def tool_calls_this_turn(self) -> int:
+        """Return how many tool responses the most recent decision turn consumed."""
+        return self._tool_calls_this_turn
 
     def set_conversation_context(self, conversation_context: str | None) -> None:
         """Set the recent-turn block used by the next decision prompts in this task."""
@@ -587,6 +630,7 @@ class AdkDecisionProvider:
                 user_request=self._current_user_request(),
                 conversation_context=self._current_conversation_context(),
                 decision_basis=self._current_decision_basis(),
+                policy=self._policy,
             ),
         )
         if final_event is None:
@@ -660,15 +704,40 @@ class AdkDecisionProvider:
 
     async def _run_turn(self, session_id: str, text: str) -> AdkEvent | None:
         """Run one user turn in an existing session and return its final event."""
+        self._tool_calls_this_turn = 0
         final_event: AdkEvent | None = None
-        async for event in self._runner.run_async(
-            user_id=self._user_id,
-            session_id=session_id,
-            new_message=types.Content(role="user", parts=[types.Part(text=text)]),
-        ):
+        exhausted = False
+        async for event in self._run_turn_events(session_id, text):
+            if _is_tool_response(event):
+                self._tool_calls_this_turn += 1
+                if self._tool_calls_this_turn >= self._max_tool_calls:
+                    exhausted = True
+                    break
+            if event.is_final_response():
+                final_event = event
+        if not exhausted:
+            return final_event
+        _LOGGER.warning(
+            "decision agent consumed %d tool responses without answering; forcing a final answer",
+            self._tool_calls_this_turn,
+        )
+        # One forced turn in the same session: the model already has every tool result it asked
+        # for, so the only remaining move is the decision itself. A tool response here is ignored
+        # rather than looped on; the caller's fallback handles a model that still refuses.
+        async for event in self._run_turn_events(session_id, DECISION_TOOL_BUDGET_PROMPT):
+            if _is_tool_response(event):
+                break
             if event.is_final_response():
                 final_event = event
         return final_event
+
+    def _run_turn_events(self, session_id: str, text: str) -> AsyncIterator[AdkEvent]:
+        """Return the raw ADK event stream of one user turn."""
+        return self._runner.run_async(
+            user_id=self._user_id,
+            session_id=session_id,
+            new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+        )
 
     def _session_id(self, negotiation_id: str) -> str:
         """Return the ADK session id of one negotiation session."""
@@ -679,6 +748,14 @@ class AdkDecisionProvider:
         if self._fallback is not None:
             return self._fallback
         raise DecisionProviderError(message)
+
+
+def _is_tool_response(event: AdkEvent) -> bool:
+    """Return whether one ADK event carries the result of a tool call."""
+    content = event.content
+    if content is None:
+        return False
+    return any(part.function_response is not None for part in content.parts or ())
 
 
 def _log_unparseable_decision(label: str, event: AdkEvent) -> None:

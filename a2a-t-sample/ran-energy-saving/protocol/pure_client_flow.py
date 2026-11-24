@@ -64,6 +64,17 @@ _UNANSWERED_QUESTION_REASON: Final[str] = (
     "未再作答，下游回执与意图已保留。"
 )
 
+#: Reason recorded when the vendor answers a round with an ``INPUT_REQUIRED`` that asks nothing.
+_EMPTY_VENDOR_QUESTION_REASON: Final[str] = (
+    "NMS 侧 bug：第 {round} 轮返回 INPUT_REQUIRED 但状态体中没有任何问题文本；"
+    "客户端未再作答（此前作答会引发 409 TASK_STREAM_CONFLICT），回执与意图已保留。"
+)
+
+#: Reason recorded when the dialogue ends because the client's round budget ran out.
+_ROUND_BUDGET_EXHAUSTED_REASON: Final[str] = (
+    "协商轮数已用尽（{rounds} 轮），厂商仍在要求确认；未再作答，下游回执与意图已保留。"
+)
+
 
 async def run_pure_client_flow(
     *,
@@ -244,6 +255,17 @@ async def _drive_negotiation(
         pending = _pending_negotiation(batch, allow_plain_question=plain_questions)
         if pending is None:
             break
+        if is_empty_vendor_question(pending):
+            result.error = _EMPTY_VENDOR_QUESTION_REASON.format(round=rounds + 1)
+            _emit_flow_note(
+                trace_sink,
+                kind="nms_bug_empty_question",
+                title="NMS returned INPUT_REQUIRED with no question",
+                round_number=rounds + 1,
+                context_id=_text(pending.get("context_id")),
+                detail={"reason": result.error, "vendorDefect": True},
+            )
+            break
         text = await _answer_for(pending, answer)
         if not text.strip():
             # The question is real but the caller has no answer left. Leaving it unanswered is
@@ -273,6 +295,25 @@ async def _drive_negotiation(
         batch = await transport.send(follow, _call_context(call_timeout_seconds))
         _collect(result, batch, event_sink, transport_emits_events)
         rounds += 1
+    else:
+        # The loop ended because the round budget ran out, not because the vendor stopped asking.
+        # A vendor that keeps returning INPUT_REQUIRED would otherwise leave the last question
+        # unanswered with no reason anywhere. Record it.
+        unanswered = _pending_negotiation(batch, allow_plain_question=plain_questions)
+        if unanswered is not None:
+            result.error = _ROUND_BUDGET_EXHAUSTED_REASON.format(rounds=rounds)
+            _emit_flow_note(
+                trace_sink,
+                kind="round_budget_exhausted",
+                title="Pure A2A negotiation stopped at the round budget",
+                round_number=rounds,
+                context_id=_text(unanswered.get("context_id")),
+                detail={
+                    "reason": result.error,
+                    "maxRounds": max_rounds,
+                    "unanswered": True,
+                },
+            )
 
     # Only the last send phase decides the state; a prior round's message must not look like the
     # end of the flow. A direct vendor hop keeps answering standalone messages, so a plain
@@ -397,6 +438,28 @@ def is_plain_question(event: Mapping[str, object]) -> bool:
     if isinstance(metadata, Mapping) and is_negotiation_message(metadata_to_dict(metadata)):
         return False
     return not event.get("task_id")
+
+
+def is_empty_vendor_question(event: Mapping[str, object]) -> bool:
+    """Return whether one ``INPUT_REQUIRED`` status asks for input but states nothing.
+
+    The vendor NMS can answer a round with a bare ``INPUT_REQUIRED``: no message part, no proposal,
+    and the timestamp still at the value of the previous round. There is no question to read, so an
+    answer would be invented; the vendor then refuses that invented answer with HTTP 409
+    ``TASK_STREAM_CONFLICT``. A receipt is excluded: it also carries no question, but it stops the
+    flow by design rather than by a vendor defect.
+    """
+    if event.get("kind") != "status":
+        return False
+    if event.get("state") != "TASK_STATE_INPUT_REQUIRED":
+        return False
+    text = event.get("text")
+    if isinstance(text, str) and text.strip():
+        return False
+    proposal = pure_metadata(event).get("proposal")
+    if isinstance(proposal, str) and proposal.strip():
+        return False
+    return not _is_downstream_receipt(event)
 
 
 def _is_downstream_receipt(event: Mapping[str, object]) -> bool:
@@ -610,6 +673,7 @@ __all__ = [
     "DEFAULT_PURE_LABEL",
     "build_follow_up_request",
     "continue_pure_client_flow",
+    "is_empty_vendor_question",
     "is_plain_question",
     "pure_metadata",
     "pure_negotiation_kind",

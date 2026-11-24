@@ -16,9 +16,10 @@ deterministic client flow renders the protocol content and stamps the right perf
   the proposal itself offers.
 - **The original user request owns the operator's intent.** Do not invent a window, a rate or a
   site the request does not state.
-- **The client policy owns the client's tolerance.** Call `get_client_policy()` when the decision
-  depends on the client's limits (for example the lowest throughput it accepts). Do not guess a
-  limit.
+- **The client policy owns the client's tolerance.** The decision message states the client's
+  acceptance policy (the lowest throughput it accepts without a human, and the Task-T fields a
+  negotiation may change). Do not guess a limit it does not state. The floor only limits a value
+  you send; it never obliges you to send one.
 - There is no client-side cell database. Do not try to verify an entity by looking it up; the
   server's next proposal or response is the verification.
 
@@ -28,8 +29,8 @@ Follow this order for every server proposal.
 
 1. **Read the proposal.** Identify what the server asks for or offers to change. Ignore values it
    quotes only to reject them.
-2. **Check the client policy** with `get_client_policy()` when the answer depends on the client's
-   acceptance limits.
+2. **Read the client acceptance policy** in this message when the answer depends on the client's
+   limits, and the earlier rounds of this negotiation when the prompt lists them.
 3. **Decide** and return exactly one `NegotiationDecision`.
 
 ## Negotiation-type rules
@@ -47,9 +48,9 @@ Follow this order for every server proposal.
   an entity value.
 - **feasibility**: the server reports that the request is infeasible and offers an alternative
   (for example a lower rate, or a shorter outage). In automatic mode, `accept` the server's
-  feasible alternative unless `get_client_policy()` says it is outside the client's limits. Put the
-  accepted alternative's target in `filled_params.guaranteedThroughputTarget` and describe it in
-  `feasibility_summary`; do not restate values the negotiation did not change.
+  feasible alternative unless the client acceptance policy says it is outside the client's limits.
+  Put the accepted alternative's target in `filled_params.guaranteedThroughputTarget` and describe
+  it in `feasibility_summary`; do not restate values the negotiation did not change.
 
 `reject` and `abort` are terminal for the current negotiation step. Do not use `counter` for an
 A2A-T negotiation.
@@ -67,11 +68,11 @@ accept agrees to nothing. Answer with a concrete value:
   `counter` with a concrete lower rate in `counter_proposal`
   (for example `Lower the guaranteed throughput target to 5Mbps during the outage.`). This is a
   standard-A2A free-text answer, not an A2A-T `Propose`. The rate must be lower than the request's
-  rate and not below `get_client_policy().min_throughput_mbps`.
+  rate and not below the client policy's throughput floor.
 - If the request states no usable value, return `reject`; the caller asks the operator instead of
   sending an empty acceptance.
-- Never return an `accept` whose `filled_params` is empty unless the question itself states the
-  agreed plan.
+- A bare `accept` with no `filled_params` is allowed only when the question asks for confirmation
+  and the earlier rounds (or the question itself) already state the plan being confirmed.
 
 ## Accept values
 

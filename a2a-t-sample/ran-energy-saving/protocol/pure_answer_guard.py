@@ -111,6 +111,11 @@ def sanitize_pure_decision(
     if decision.action == "counter":
         counter = decision.counter_proposal
         if isinstance(counter, str) and counter.strip():
+            if not apply_client_policy:
+                # The agent authored this counter; the rate rules below are the process policy's
+                # acceptance limits, not a sanity check the agent has to satisfy. A time-only
+                # concession states no rate by design.
+                return decision, notes
             problem = _counter_problem(
                 counter,
                 request_text,
@@ -128,6 +133,11 @@ def sanitize_pure_decision(
         if value is not None and not (isinstance(value, str) and not value.strip())
     }
     if not filled:
+        if not apply_client_policy and decision.action == "accept":
+            # The agent read this question and the earlier rounds of this negotiation; a bare
+            # accept is its answer, and the renderer sends the fixed "Accepted. Please proceed."
+            # The rules below keep the deterministic path from agreeing to a plan nobody stated.
+            return decision.model_copy(update={"filled_params": None}), notes
         if decision.action == "accept" and _asks_for_confirmation(propose):
             if server_target_rates(propose):
                 # The question states the revised plan itself ("reduce ... to 2Mbps"), so a plain

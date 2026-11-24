@@ -6,6 +6,7 @@ from a2a.client.client import ClientCallContext
 from a2a.types import SendMessageRequest
 from protocol.pure_client_flow import (
     continue_pure_client_flow,
+    is_empty_vendor_question,
     pure_proposal_view,
     run_pure_client_flow,
 )
@@ -256,6 +257,107 @@ async def test_a_receipt_prefix_is_not_answered_without_a_payload() -> None:
 
     assert len(transport.requests) == 1
     assert result.final_state == FINAL_STATE_INCOMPLETE
+
+
+def _empty_input_required() -> dict[str, object]:
+    """The vendor's bare answer: the right state, no question, and no new timestamp."""
+    return {
+        "kind": "status",
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "state": "TASK_STATE_INPUT_REQUIRED",
+        "timestamp": "2026-11-24T08:00:46.197279801Z",
+    }
+
+
+async def test_a_question_the_vendor_left_empty_is_an_nms_bug_not_an_answer() -> None:
+    """Answering a bare INPUT_REQUIRED invents a question; the vendor answers it with 409."""
+    transport = _FakeTransport([[_empty_input_required()]])
+    answers: list[str] = []
+    spans: list[dict[str, object]] = []
+
+    def answer(event: dict[str, object]) -> str:
+        del event
+        answers.append("invented")
+        return "invented"
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=answer,
+        trace_sink=spans.append,
+    )
+
+    assert answers == []
+    assert len(transport.requests) == 1
+    assert result.final_state == FINAL_STATE_INCOMPLETE
+    assert result.error is not None
+    assert result.error.startswith("NMS 侧 bug")
+    assert "第 1 轮" in result.error
+    note = next(span for span in spans if span.get("kind") == "nms_bug_empty_question")
+    assert note["detail"]["vendorDefect"] is True
+
+
+def test_an_empty_question_is_recognised_by_the_public_helper() -> None:
+    assert is_empty_vendor_question(_empty_input_required()) is True
+
+
+def test_a_question_with_text_is_not_an_empty_vendor_question() -> None:
+    assert is_empty_vendor_question(_input_required()) is False
+
+
+def test_a_receipt_without_a_question_is_not_an_empty_vendor_question() -> None:
+    """A receipt carries no question either, but it ends the flow by design."""
+    receipt = _empty_input_required()
+    receipt["text"] = (
+        'Task modification succeeded{"Operation type":"Modify",'
+        '"Energy saving region":"A2ATestRegion"}'
+    )
+
+    assert is_empty_vendor_question(receipt) is False
+
+
+async def test_an_exhausted_round_budget_records_why_it_stopped() -> None:
+    """A vendor that keeps asking must not leave the run silent about the unanswered question."""
+    transport = _FakeTransport(
+        [
+            [_input_required(round_number=1)],
+            [_input_required(round_number=2)],
+            [_input_required(round_number=3)],
+            [_input_required(round_number=4)],
+        ]
+    )
+    spans: list[dict[str, object]] = []
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        max_rounds=3,
+        trace_sink=spans.append,
+    )
+
+    assert len(transport.requests) == 4
+    assert result.error is not None
+    assert "3" in result.error and "轮" in result.error
+    note = next(span for span in spans if span.get("kind") == "round_budget_exhausted")
+    assert note["detail"]["maxRounds"] == 3
+    assert note["detail"]["unanswered"] is True
+
+
+async def test_a_converged_negotiation_leaves_no_budget_note() -> None:
+    transport = _FakeTransport([[_input_required()], [_completed()]])
+    spans: list[dict[str, object]] = []
+
+    result = await run_pure_client_flow(
+        transport=transport,  # type: ignore[arg-type]
+        user_request="Create a RAN energy saving task.",
+        answer=lambda event: "Use {00:00~06:00,10Mbps}.",
+        trace_sink=spans.append,
+    )
+
+    assert result.error is None
+    assert all(span.get("kind") != "round_budget_exhausted" for span in spans)
 
 
 async def test_an_exhausted_answer_script_records_why_it_stopped() -> None:

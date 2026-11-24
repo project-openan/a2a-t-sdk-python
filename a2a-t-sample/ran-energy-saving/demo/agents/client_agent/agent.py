@@ -7,9 +7,10 @@ and uses the configured OpenAI-compatible endpoint in ``live`` mode.
 The agent's structured output is :class:`shared.models.NegotiationDecision`: ADK parses the model
 response into that schema, so the deterministic client flow never parses free text.
 
-The agent's only tool exposes the client's own acceptance policy. It deliberately has no network
-inventory: the server is the authority for region, site and cell names, so a client-side
-``unknown_cell`` would be a judgment the client must not make.
+The client acceptance policy is stated in the decision prompt, not fetched through a tool. The
+agent deliberately has no network inventory: the server is the authority for region, site and cell
+names, so a client-side ``unknown_cell`` would be a judgment the client must not make. Its only
+tool checks a candidate value against the client's own conditions.
 """
 
 from __future__ import annotations
@@ -18,16 +19,12 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 from google.adk.models.base_llm import BaseLlm
-from protocol.client_policy import ClientPolicy
 from shared.condition_checker import ConditionChecker
 from shared.model_factory import build_adk_model
 from shared.models import NegotiationDecision
 
 from demo.adk_fake_model import build_fake_model
-from demo.agents.client_agent.tools import (
-    make_check_client_condition,
-    make_get_client_policy,
-)
+from demo.agents.client_agent.tools import make_check_client_condition
 
 #: Agent name; the offline fake model keys its client script on this name.
 AGENT_NAME = "ran_energy_request_agent"
@@ -42,7 +39,6 @@ REQUEST_INSTRUCTION = INSTRUCTION_PATH.read_text(encoding="utf-8")
 def build_client_agent(
     model: BaseLlm | None = None,
     *,
-    policy: ClientPolicy | None = None,
     condition_checker: ConditionChecker | None = None,
 ) -> LlmAgent:
     """Build the RAN energy-saving client decision agent.
@@ -50,13 +46,10 @@ def build_client_agent(
     Args:
         model: Model to use; defaults to :func:`shared.model_factory.build_adk_model` (the fake
             model in offline mode, ``LiteLlm`` in live mode).
-        policy: Client acceptance policy exposed by ``get_client_policy``; the default has no
-            throughput floor and never reads the ambient configuration.
         condition_checker: optional checker exposed by ``check_client_condition``; ``None`` keeps
             the tool out of the agent.
     """
-    resolved_policy = policy or ClientPolicy()
-    tools: list[object] = [make_get_client_policy(resolved_policy)]
+    tools: list[object] = []
     if condition_checker is not None:
         tools.append(make_check_client_condition(condition_checker))
     return LlmAgent(

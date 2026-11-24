@@ -34,7 +34,9 @@ _SYSTEM: Final[str] = (
     "You answer one question about a client's negotiation acceptance conditions. Use only the "
     "decision basis provided. Answer yes when the candidate value is acceptable, no when it "
     "violates a stated boundary, and unknown when the basis does not decide it. Never invent a "
-    "boundary the basis does not state."
+    "boundary the basis does not state.\n"
+    'Reply with exactly one JSON object and no other text: {"allowed": "yes"|"no"|"unknown", '
+    '"reason": "<short explanation>"}.'
 )
 
 

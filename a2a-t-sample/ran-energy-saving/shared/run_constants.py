@@ -13,6 +13,12 @@ from typing import Final, Literal
 #: Round budget of one pre-task negotiation (design D11).
 MAX_ROUNDS: Final[int] = 3
 
+#: Round budget the client spends on a direct standard-A2A negotiation.
+#: The vendor NMS budgets five rounds on its own side and its terse "Not feasible, please confirm"
+#: never says what it objects to, so the client needs room to concede in steps instead of
+#: assuming the first three answers were the whole negotiation.
+PURE_CLIENT_MAX_ROUNDS: Final[int] = 8
+
 #: A2A Task state that proves the Task was accepted (Create) or updated (Modify). It is the
 #: machine-readable task-success signal; business text such as "Task creation succeeded" is
 #: localized copy and must never decide success. The structured payload a downstream appends to

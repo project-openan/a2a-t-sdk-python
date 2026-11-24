@@ -22,6 +22,7 @@ class _Judge:
     def __init__(self, response: object) -> None:
         self.response = response
         self.prompts: list[str] = []
+        self.systems: list[str] = []
 
     async def complete_json(
         self,
@@ -30,8 +31,9 @@ class _Judge:
         system: str = "",
         json_schema: object | None = None,
     ) -> dict[str, object]:
-        del system, json_schema
+        del json_schema
         self.prompts.append(prompt)
+        self.systems.append(system)
         if isinstance(self.response, BaseException):
             raise self.response
         assert isinstance(self.response, Mapping)
@@ -56,6 +58,17 @@ async def test_a_candidate_value_is_answered_from_the_basis() -> None:
     assert answer == ConditionAnswer(ALLOWED_NO, "1Mbps is below the stated floor")
     assert "1Mbps" in judge.prompts[0]
     assert "below 2Mbps is not" in judge.prompts[0]
+
+
+async def test_the_system_prompt_asks_for_the_json_object_itself() -> None:
+    """The gateway does not always enforce response_format, so the prompt must name the object."""
+    judge = _Judge({"allowed": "unknown", "reason": "not decided"})
+
+    await ConditionChecker(judge).check("Is this rate acceptable?", "2Mbps", basis=_basis())
+
+    system = judge.systems[0]
+    assert '{"allowed": "yes"|"no"|"unknown"' in system
+    assert "no other text" in system
 
 
 async def test_a_disabled_checker_is_unknown() -> None:
