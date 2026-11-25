@@ -16,6 +16,7 @@ const STATUS_LABELS = {
 const FINAL_STATE_LABELS = {
   task_completed: "任务完成",
   task_failed: "任务失败",
+  incomplete: "观察结束（未到终态）",
   input_invalid: "输入校验未通过",
   decision_ungrounded: "决策值无确定性来源",
   negotiation_aborted: "协商中止",
