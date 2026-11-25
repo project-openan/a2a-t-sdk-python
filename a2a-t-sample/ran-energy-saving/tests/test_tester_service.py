@@ -142,6 +142,7 @@ class _FakeRuns:
         self._gate = gate
         self.calls: list[dict[str, object]] = []
         self.cancelled: list[str] = []
+        self.released: list[tuple[str, str]] = []
         self.runs: dict[str, RunState] = {}
 
     async def start(
@@ -184,6 +185,14 @@ class _FakeRuns:
 
     async def cancel(self, run_id: str) -> bool:
         self.cancelled.append(run_id)
+        return True
+
+    async def release(self, run_id: str, *, reason: str) -> bool:
+        self.released.append((run_id, reason))
+        run = self.runs.get(run_id)
+        if run is not None and not run.finished():
+            # The real manager finishes a released run instead of reporting an operator cancel.
+            run.status = "finished"
         return True
 
 
@@ -1980,6 +1989,83 @@ def test_an_ordinary_unfinished_run_stays_partial(tmp_path: Path) -> None:
     assert manager._item_status(item) == CASE_PARTIAL
 
 
+async def test_a_warning_stage_makes_the_item_partial(tmp_path: Path) -> None:
+    """A round-count or unpushed-terminal deviation needs a human, not a clean pass."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(
+        case_id=32,
+        name="x",
+        protocol=PROTOCOL_A2A,
+        status="running",
+        stages={
+            "send": StageResult("send", STAGE_PASSED),
+            "negotiate": StageResult("negotiate", STAGE_WARNING, "协商轮次与用例预期不同。"),
+        },
+    )
+
+    assert manager._item_status(item) == CASE_PARTIAL
+
+
+def test_a_recorded_final_with_an_expected_state_is_partial(tmp_path: Path) -> None:
+    """The corpus named a terminal state and the run never observed it."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(
+        case_id=32,
+        name="x",
+        protocol=PROTOCOL_A2A_T,
+        status="running",
+        stages={
+            "send": StageResult("send", STAGE_PASSED),
+            "final": StageResult(
+                "final", STAGE_RECORDED, "", expected="task_completed", actual="incomplete"
+            ),
+        },
+    )
+
+    assert manager._item_status(item) == CASE_PARTIAL
+
+
+def test_a_recorded_final_without_an_expectation_stays_passed(tmp_path: Path) -> None:
+    """Pure A2A has no terminal-state oracle; record-only must not become 待定."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    item = CaseItem(
+        case_id=32,
+        name="x",
+        protocol=PROTOCOL_A2A,
+        status="running",
+        stages={
+            "send": StageResult("send", STAGE_PASSED),
+            "final": StageResult("final", STAGE_RECORDED, "", expected=None, actual="incomplete"),
+        },
+    )
+
+    assert manager._item_status(item) == CASE_PASSED
+
+
+async def test_a_run_that_died_while_still_in_negotiation_is_an_accepted_error(
+    tmp_path: Path,
+) -> None:
+    """A vendor 500 leaves the last state INPUT_REQUIRED; the run error must win over it."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = RunState(
+        run_id="run-500",
+        scenario="night",
+        mode=MODE_AUTO,
+        transport="sse",
+    )
+    run.status = "failed"
+    run.error = "NmsProtocolError: HTTP 500"
+    run.latest_task_state = "TASK_STATE_INPUT_REQUIRED"
+    run.remote_task_id = "task-1"
+    run.remote_context_id = "ctx-1"
+    item = CaseItem(case_id=28, name="case", protocol=PROTOCOL_A2A)
+
+    result = await manager._judge_accepted(run, item, None, True, 0.1)
+
+    assert result.status == STAGE_ERROR
+    assert result.message == "NmsProtocolError: HTTP 500"
+
+
 async def test_a_validate_only_batch_freezes_the_case_reference_and_intent(
     tmp_path: Path,
 ) -> None:
@@ -2589,7 +2675,8 @@ async def test_a_working_item_releases_its_remote_task_after_the_evidence(
 
     item = manager._batches[batch_id].items[0]
     assert item.stages["working"].status == STAGE_PASSED
-    assert runs.cancelled == ["run-1"]
+    assert [run_id for run_id, _ in runs.released] == ["run-1"]
+    assert runs.released[0][1] == "The tester ended observation at the 'working' stage."
 
 
 async def test_keep_tasks_leaves_the_remote_task_running(tmp_path: Path) -> None:
@@ -2608,7 +2695,7 @@ async def test_keep_tasks_leaves_the_remote_task_running(tmp_path: Path) -> None
     await manager.start(str(created["batchId"]))
     await _wait_status(manager, str(created["batchId"]), "finished")
 
-    assert runs.cancelled == []
+    assert runs.released == []
 
 
 async def test_releasing_an_item_covers_its_baseline_run(tmp_path: Path) -> None:
@@ -2620,7 +2707,7 @@ async def test_releasing_an_item_covers_its_baseline_run(tmp_path: Path) -> None
 
     await manager._release_item_runs(item)
 
-    assert runs.cancelled == ["run-1", "run-baseline"]
+    assert [run_id for run_id, _ in runs.released] == ["run-1", "run-baseline"]
 
 
 async def test_shutdown_releases_the_runs_of_finished_batches(tmp_path: Path) -> None:
@@ -2639,7 +2726,7 @@ async def test_shutdown_releases_the_runs_of_finished_batches(tmp_path: Path) ->
 
     await manager.shutdown()
 
-    assert runs.cancelled == ["run-1"]
+    assert [run_id for run_id, _ in runs.released] == ["run-1"]
 
 
 def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -> None:
@@ -3384,10 +3471,17 @@ class _GatedRuns(_FakeRuns):
             gate.set()
         return True
 
-    def release(self, run_id: str) -> None:
+    async def release(self, run_id: str, *, reason: str) -> bool:
+        released = await super().release(run_id, reason=reason)
+        gate = self.gates.get(run_id)
+        if gate is not None:
+            gate.set()
+        return released
+
+    def open_gate(self, run_id: str) -> None:
         self.gates[run_id].set()
 
-    def release_all(self) -> None:
+    def open_all(self) -> None:
         for gate in self.gates.values():
             gate.set()
 
@@ -3473,13 +3567,13 @@ async def test_a_sequential_batch_still_runs_one_item_at_a_time(tmp_path: Path) 
     assert snapshot["currentIndex"] == 0
     assert len(runs.calls) == 1
 
-    runs.release(next(iter(runs.gates)))
+    runs.open_gate(next(iter(runs.gates)))
     deadline = asyncio.get_running_loop().time() + 10.0
     while len(runs.calls) < 2 and asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(0.01)
     assert len(runs.calls) == 2
 
-    runs.release_all()
+    runs.open_all()
     finished = await _wait_status(manager, batch_id, "finished")
     assert runs.max_in_flight == 1
     assert finished["summary"]["passed"] == 2
@@ -3505,7 +3599,7 @@ async def test_a_concurrent_batch_runs_three_items_at_once(tmp_path: Path) -> No
     assert snapshot["concurrency"] == 3
     assert sorted(snapshot["activeIndices"]) == [0, 1, 2]
 
-    runs.release_all()
+    runs.open_all()
     finished = await _wait_status(manager, batch_id, "finished")
     assert runs.max_in_flight == 3
     assert finished["summary"]["passed"] == 3
@@ -3534,7 +3628,7 @@ async def test_cancelling_one_running_item_leaves_the_others_running(tmp_path: P
     assert snapshot["items"][0]["status"] == CASE_CANCELLED
     assert snapshot["items"][1]["status"] == CASE_RUNNING
 
-    runs.release_all()
+    runs.open_all()
     finished = await _wait_status(manager, batch_id, "finished")
     assert finished["summary"]["cancelled"] == 1
     assert finished["summary"]["passed"] == 1
@@ -3553,7 +3647,7 @@ async def test_cancelling_a_queued_item_skips_it(tmp_path: Path) -> None:
     assert snapshot is not None
     assert snapshot["items"][1]["status"] == CASE_CANCELLED
 
-    runs.release_all()
+    runs.open_all()
     finished = await _wait_status(manager, batch_id, "finished")
     assert len(runs.calls) == 1
     assert finished["summary"]["passed"] == 1
@@ -3920,7 +4014,7 @@ async def test_rounds_run_with_a_barrier_between_passes(tmp_path: Path) -> None:
     assert snapshot["items"][1]["status"] == CASE_PENDING
     assert len(runs.calls) == 1
 
-    runs.release(next(iter(runs.gates)))
+    runs.open_gate(next(iter(runs.gates)))
     deadline = asyncio.get_running_loop().time() + 10.0
     while len(runs.calls) < 2 and asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(0.01)
@@ -3931,7 +4025,7 @@ async def test_rounds_run_with_a_barrier_between_passes(tmp_path: Path) -> None:
     assert snapshot["items"][0]["status"] == CASE_PASSED
     assert snapshot["items"][1]["status"] == CASE_RUNNING
 
-    runs.release_all()
+    runs.open_all()
     finished = _wide(await _wait_status(manager, batch_id, "finished"))
     assert finished["summary"]["passed"] == 2
     assert [entry["round"] for entry in finished["roundSummaries"]] == [1, 2]
@@ -3958,7 +4052,7 @@ async def test_cancelling_one_round_leaves_the_other_rounds_running(tmp_path: Pa
     snapshot = _required(manager.get(batch_id))
     assert snapshot["items"][1]["status"] == CASE_CANCELLED
 
-    runs.release_all()
+    runs.open_all()
     finished = _wide(await _wait_status(manager, batch_id, "finished"))
     assert len(runs.calls) == 1
     assert finished["summary"]["passed"] == 1

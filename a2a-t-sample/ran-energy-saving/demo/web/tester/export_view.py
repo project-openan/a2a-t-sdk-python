@@ -18,6 +18,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
+from eval.osp.compare import (
+    INTENT_ROW_ADDED,
+    INTENT_ROW_CHANGED,
+    INTENT_ROW_MISSING,
+    INTENT_ROW_SAME,
+    CompareRow,
+    flatten_intent,
+)
+from eval.osp.intent_schema import OSP_INTENT_KEYS
 from protocol.client_service import RunState
 
 #: Rendered diff of an intent equal to its reference.
@@ -278,19 +287,51 @@ def render_intent_diff(
     expected: Mapping[str, object] | None,
     actual: Mapping[str, object] | None,
 ) -> str:
-    """Render the structural difference between the reference and the answer intent.
+    """Render the difference between the reference and the answer intent.
 
-    ``完全一致`` when both documents are structurally equal; ``""`` when the answer intent was not
-    collected (pure A2A or a batch that stopped before the SDK stages).
+    An OSP intent is compared with the same normalization the pass/fail decision uses, so a
+    notation-only difference is reported as an expression difference instead of a value change.
+    A document outside the OSP schema falls back to a structural walk. ``完全一致`` when both
+    documents agree; ``""`` when the answer intent was not collected (pure A2A or a batch that
+    stopped before the SDK stages).
     """
     if not isinstance(expected, Mapping) or not isinstance(actual, Mapping):
         return ""
+    if _is_osp_intent(expected) and _is_osp_intent(actual):
+        lines = [
+            line
+            for row in flatten_intent(expected, actual)
+            if (line := _flattened_diff_line(row))
+        ]
+        return "\n".join(lines) if lines else DIFF_IDENTICAL
     missing: list[str] = []
     added: list[str] = []
     changed: list[str] = []
     _walk(expected, actual, "", missing, added, changed)
     lines = [*missing, *added, *changed]
     return "\n".join(lines) if lines else DIFF_IDENTICAL
+
+
+def _is_osp_intent(document: Mapping[str, object]) -> bool:
+    """Return whether every key of one document belongs to the OSP intent schema."""
+    return set(document) <= set(OSP_INTENT_KEYS)
+
+
+def _flattened_diff_line(row: CompareRow) -> str:
+    """Render one normalized intent row in the workbook's diff notation."""
+    path = row.path.removeprefix("intent.")
+    if row.verdict == INTENT_ROW_MISSING:
+        return f"缺失: {path} (ref值为 {_json(row.expected)})"
+    if row.verdict == INTENT_ROW_ADDED:
+        return f"新增: {path} (ans值为 {_json(row.actual)})"
+    if row.verdict == INTENT_ROW_CHANGED:
+        return f"值变更: {path} ({_plain(row.expected)} → {_plain(row.actual)})"
+    if row.status != INTENT_ROW_SAME:
+        return (
+            f"表达差异（归一化后一致）: {path} "
+            f"({_plain(row.expected)} → {_plain(row.actual)})"
+        )
+    return ""
 
 
 def _walk(
@@ -371,6 +412,90 @@ def render_trajectory(exchanges: Sequence[Mapping[str, object]]) -> str:
     return "\n\n".join(lines)
 
 
+#: Stage names in execution order, used to name the first unexplained stage of a row.
+_STAGE_ORDER: Final[tuple[str, ...]] = (
+    "intent",
+    "task_t",
+    "validate",
+    "send",
+    "negotiate",
+    "accepted",
+    "working",
+    "final",
+)
+
+#: Stage statuses whose message explains why the row is not a clean pass.
+_EXPLAINING_STAGE_STATUSES: Final[frozenset[str]] = frozenset(
+    {"waiting", "warning", "error", "failed"}
+)
+
+#: Record-only stages whose message still explains a non-green row.
+_RECORDED_REASON_STAGES: Final[frozenset[str]] = frozenset({"intent", "final"})
+
+
+def verdict_reason(item: Mapping[str, object]) -> str:
+    """Explain why one row is not ``passed``.
+
+    The arbitration workbook used to leave the whole column empty for a ``partial`` row: the
+    evidence was spread across the stage-difference sheet and the run console. The reason is built
+    from the same snapshot the UI shows, in the order a reviewer needs it: the run's own error, the
+    first non-green stage message, then the human-review trigger of an undecided intent.
+    """
+    status = str(item.get("status") or "")
+    if status in {"", "passed"}:
+        return ""
+    reasons: list[str] = []
+    error = item.get("error")
+    if isinstance(error, str) and error.strip():
+        reasons.append(error.strip())
+    stages = item.get("stages")
+    if isinstance(stages, Mapping):
+        for stage_name in reversed(_STAGE_ORDER):
+            stage = stages.get(stage_name)
+            if not isinstance(stage, Mapping):
+                continue
+            stage_status = str(stage.get("status") or "")
+            message = str(stage.get("message") or "").strip()
+            if message and any(message in reason for reason in reasons):
+                # The run error and the stage message often carry the same sentence; one copy is
+                # enough.
+                continue
+            if stage_status in _EXPLAINING_STAGE_STATUSES:
+                reasons.append(f"{stage_name}: {message}" if message else stage_name)
+            elif stage_status == "recorded" and stage_name in _RECORDED_REASON_STAGES:
+                reasons.append(
+                    f"{stage_name}: {message}" if message else f"{stage_name}: 只记录，未判定"
+                )
+    if item.get("needsReview") and not any("转人工复核" in reason for reason in reasons):
+        paths = _residual_paths(item.get("intentVerdict"))
+        suffix = f"（{', '.join(paths[:3])}）" if paths else ""
+        reasons.append(f"转人工复核{suffix}")
+    return "；".join(_unique_reasons(reasons))
+
+
+def _residual_paths(verdict: object) -> list[str]:
+    """Return the field paths of one persisted intent verdict's residual rows."""
+    if not isinstance(verdict, Mapping):
+        return []
+    residual = verdict.get("residual")
+    if not isinstance(residual, list):
+        return []
+    return [
+        str(row.get("path") or "")
+        for row in residual
+        if isinstance(row, Mapping) and row.get("path")
+    ]
+
+
+def _unique_reasons(reasons: Sequence[str]) -> list[str]:
+    """Drop empty and repeated reasons while keeping their priority order."""
+    unique: list[str] = []
+    for reason in reasons:
+        if reason and reason not in unique:
+            unique.append(reason)
+    return unique
+
+
 def score_for(status: str) -> int | None:
     """Return the automatic score of one item status, ``None`` when not judged."""
     return _SCORE_BY_STATUS.get(status)
@@ -387,4 +512,5 @@ __all__ = [
     "render_trajectory",
     "result_label",
     "score_for",
+    "verdict_reason",
 ]

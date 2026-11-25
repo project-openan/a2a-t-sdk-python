@@ -620,6 +620,41 @@ async def test_cancel_asks_the_remote_side_and_stops_the_run(
     assert await manager.cancel(run.run_id) is False
 
 
+async def test_release_finishes_the_run_without_an_operator_cancel_label(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """Stopping at a requested stage is a normal end of observation, not a user cancel."""
+    wait = asyncio.Event()
+    manager, store, runtimes = _manager(tmp_path, offline_config, wait=wait)
+    run = await manager.start("information", "auto", "sse", user_request="slow")
+    while not runtimes or not runtimes[0].entered.is_set():
+        await asyncio.sleep(0.01)
+
+    canceled: list[str] = []
+
+    async def cancel_remote(task_id: str) -> None:
+        canceled.append(task_id)
+
+    runtime = run.runtime
+    assert runtime is not None
+    runtime.transport = SimpleNamespace(cancel=cancel_remote)  # type: ignore[attr-defined]
+    run.remote_task_id = "task-1"
+
+    reason = "The tester ended observation at the 'accepted' stage."
+    assert await manager.release(run.run_id, reason=reason) is True
+
+    assert canceled == ["task-1"]
+    assert run.status == "finished"
+    assert run.error is None
+    assert run.release_reason == reason
+    stored = await store.get_run(run.run_id)
+    assert stored is not None
+    assert stored.status == "finished"
+    assert stored.error is None
+    assert await manager.release(run.run_id, reason=reason) is False
+
+
 async def test_a_modify_run_stops_the_previous_run_of_the_same_task(
     tmp_path: Path,
     offline_config: SampleConfig,

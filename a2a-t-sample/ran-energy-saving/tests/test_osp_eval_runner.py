@@ -464,6 +464,65 @@ def test_flatten_intent_reports_a_missing_nested_entry_as_missing_leaves() -> No
     assert missing.expected == "5Mbps"
 
 
+def test_adjacent_equal_rate_segments_are_the_same_target_as_one_merged_segment() -> None:
+    """The vendor may merge two equal-rate windows; that is the same schedule, not a diff."""
+    expected = {
+        "Scenario-based energy saving": [
+            {
+                "Site list": ["NE 1"],
+                "Guaranteed throughput target by site": [
+                    {
+                        "Guaranteed throughput target": "2Mbps",
+                        "Effective time period": "08:00:00-11:59:59",
+                    },
+                    {
+                        "Guaranteed throughput target": "2Mbps",
+                        "Effective time period": "12:00:00-17:59:59",
+                    },
+                ],
+            }
+        ]
+    }
+    actual = {
+        "Scenario-based energy saving": [
+            {
+                "Site list": ["NE 1"],
+                "Guaranteed throughput target by site": [
+                    {
+                        "Guaranteed throughput target": "2Mbps",
+                        "Effective time period": "08:00:00-17:59:59",
+                    },
+                ],
+            }
+        ]
+    }
+
+    rows = {row.path: row for row in flatten_intent(expected, actual)}
+    path = "intent.Scenario-based energy saving[0].Guaranteed throughput target by site"
+
+    assert rows[path].verdict == INTENT_ROW_SAME
+    assert rows[path].status == INTENT_ROW_CHANGED
+    assert rows[path].reason == "时段分段表达不同，归一化后一致"
+    assert compare_intent(expected, actual) == []
+
+
+def test_adjacent_segments_with_different_rates_are_still_a_difference() -> None:
+    """Merging only applies to the same rate: a changed rate per window must stay visible."""
+    expected = {
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "2Mbps", "Effective time period": "08:00-11:59"},
+            {"Guaranteed throughput target": "5Mbps", "Effective time period": "12:00-17:59"},
+        ]
+    }
+    actual = {
+        "Guaranteed throughput target by zone": [
+            {"Guaranteed throughput target": "2Mbps", "Effective time period": "08:00-17:59"}
+        ]
+    }
+
+    assert compare_intent(expected, actual) != []
+
+
 def test_compare_intent_reports_nested_leaf_paths() -> None:
     expected = {
         "Guaranteed throughput target by zone": [

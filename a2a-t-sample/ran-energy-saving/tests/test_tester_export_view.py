@@ -39,8 +39,8 @@ def test_a_missing_nested_field_names_its_array_indices() -> None:
     diff = render_intent_diff(expected, actual)
 
     assert diff == (
-        "缺失: Scenario-based energy saving[0].Guaranteed throughput target by site "
-        '(ref值为 [{"Rate": "2Mbps"}])'
+        "缺失: Scenario-based energy saving[0].Guaranteed throughput target by site[0].Rate "
+        '(ref值为 "2Mbps")'
     )
 
 
@@ -54,11 +54,12 @@ def test_an_added_nested_field_is_reported_with_the_answer_value() -> None:
 
     diff = render_intent_diff(expected, actual)
 
-    assert diff == (
-        "新增: Guaranteed throughput target by zone[0] "
-        '(ans值为 {"Guaranteed throughput target": "2Mbps", "Effective time period": '
-        '"00:00:00-00:59:59"})'
-    )
+    assert diff.splitlines() == [
+        '新增: Guaranteed throughput target by zone[0].Guaranteed throughput target '
+        '(ans值为 "2Mbps")',
+        "新增: Guaranteed throughput target by zone[0].Effective time period "
+        '(ans值为 "00:00:00-00:59:59")',
+    ]
 
 
 def test_a_changed_scalar_shows_both_values() -> None:
@@ -84,6 +85,49 @@ def test_every_difference_is_reported_in_one_block() -> None:
         "新增: D (ans值为 \"4\")",
         "值变更: B (2 → 9)",
     ]
+
+
+def test_a_segmented_target_list_renders_an_expression_difference() -> None:
+    """A merged window is the same schedule; the cell must not read as missing/changed."""
+    expected = {
+        "Scenario-based energy saving": [
+            {
+                "Site list": ["NE 1"],
+                "Guaranteed throughput target by site": [
+                    {
+                        "Guaranteed throughput target": "2Mbps",
+                        "Effective time period": "08:00:00-11:59:59",
+                    },
+                    {
+                        "Guaranteed throughput target": "2Mbps",
+                        "Effective time period": "12:00:00-17:59:59",
+                    },
+                ],
+            }
+        ]
+    }
+    actual = {
+        "Scenario-based energy saving": [
+            {
+                "Site list": ["NE 1"],
+                "Guaranteed throughput target by site": [
+                    {
+                        "Guaranteed throughput target": "2Mbps",
+                        "Effective time period": "08:00:00-17:59:59",
+                    }
+                ],
+            }
+        ]
+    }
+
+    diff = render_intent_diff(expected, actual)
+
+    assert diff.startswith(
+        "表达差异（归一化后一致）: "
+        "Scenario-based energy saving[0].Guaranteed throughput target by site"
+    )
+    assert "缺失" not in diff
+    assert "值变更" not in diff
 
 
 def test_no_collected_intent_renders_an_empty_diff() -> None:

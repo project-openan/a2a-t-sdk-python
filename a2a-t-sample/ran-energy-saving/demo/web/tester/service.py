@@ -94,7 +94,7 @@ from shared.run_constants import (
 from shared.trace import reset_task_sink, set_task_sink
 
 from demo.web.tester.decisions import a2at_decisions, pure_answers
-from demo.web.tester.export_view import build_answer, read_traceparent
+from demo.web.tester.export_view import build_answer, read_traceparent, verdict_reason
 
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
 
@@ -478,7 +478,7 @@ class CaseItem:
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-friendly representation."""
-        return {
+        item: dict[str, object] = {
             "caseId": self.case_id,
             "name": self.name,
             "protocol": self.protocol,
@@ -506,6 +506,8 @@ class CaseItem:
             "intentVerdict": self.intent_verdict,
             "needsReview": self.needs_review,
         }
+        item["verdictReason"] = verdict_reason(item)
+        return item
 
 
 @dataclass
@@ -957,7 +959,9 @@ class EvalBatchManager:
             if batch.keep_tasks:
                 continue
             for item in batch.items:
-                await self._release_item_runs(item)
+                await self._release_item_runs(
+                    item, reason="The tester shut down and released the run."
+                )
         self._close_prompt_pool()
 
     def _owned(self, batch_id: str, owner: str | None) -> _Batch | None:
@@ -989,7 +993,9 @@ class EvalBatchManager:
         if not selected:
             raise ValueError("没有失败、错误或取消的用例可以重跑。")
         for item in selected:
-            await self._release_item_runs(item)
+            await self._release_item_runs(
+                item, reason="The tester retried this case and released the previous run."
+            )
         # The new batch keeps the original round count: a failed case is retried in every round,
         # so the operator can see whether the failure repeats or was a single-pass flake.
         unique: list[CaseItem] = []
@@ -1098,7 +1104,9 @@ class EvalBatchManager:
         item = batch.items[index]
         # The previous attempt may still hold a remote Task; release it before the new identity
         # starts, so a rerun never doubles the quota the batch consumes.
-        await self._release_item_runs(item)
+        await self._release_item_runs(
+            item, reason="The tester replaced this run with a new attempt."
+        )
         item.attempts.append(
             {
                 "runId": item.run_id,
@@ -1635,7 +1643,11 @@ class EvalBatchManager:
             # tester — unlike the presentation page — never reattaches to that run, so leaving the
             # Task running through a 51-case acceptance batch would exhaust the NMS quota.
             if not batch.keep_tasks:
-                await self._release_item_runs(item, run)
+                await self._release_item_runs(
+                    item,
+                    run,
+                    reason=f"The tester ended observation at the '{batch.stop_after}' stage.",
+                )
 
     async def _record_client_quality(
         self,
@@ -1727,25 +1739,36 @@ class EvalBatchManager:
             )
         await self._collect_metrics(item, run)
         if not batch.keep_tasks:
-            await self._release_item_runs(item, run)
+            await self._release_item_runs(
+                item,
+                run,
+                reason="The tester ended observation after the scratch request.",
+            )
 
-    async def _release_item_runs(self, item: CaseItem, run: RunState | None = None) -> None:
-        """Cancel the runs one item created and release their remote Tasks.
+    async def _release_item_runs(
+        self,
+        item: CaseItem,
+        run: RunState | None = None,
+        *,
+        reason: str = "The tester ended observation.",
+    ) -> None:
+        """End the runs one item created and release their remote Tasks.
 
         ``run`` is the item's own run when the caller still holds it; it is then awaited so the
-        cancellation unwinds before the batch moves on to the next item. A Modify item's baseline
-        run is released too: it is normally already stopped by the Task handover, in which case
-        ``RunManager.cancel`` is a no-op. Unknown or finished runs are ignored, so the shutdown
-        sweep can call this for every item.
+        observation unwinds before the batch moves on to the next item. Reaching the configured
+        stage is a normal end of observation: the run is released (finished, no error), never
+        labelled as an operator cancel. A Modify item's baseline run is released too: it is
+        normally already stopped by the Task handover, in which case release is a no-op. Unknown
+        or finished runs are ignored, so the shutdown sweep can call this for every item.
         """
         if run is not None and run.status == "running":
-            await self._runs.cancel(run.run_id)
+            await self._runs.release(run.run_id, reason=reason)
             await self._wait_for_run(run, _CANCEL_GRACE_SECONDS)
         elif run is None and item.run_id:
-            await self._runs.cancel(item.run_id)
+            await self._runs.release(item.run_id, reason=reason)
         baseline = _baseline_run_id(item)
         if baseline is not None and baseline != item.run_id:
-            await self._runs.cancel(baseline)
+            await self._runs.release(baseline, reason=reason)
 
     def _run_identity(self, batch: _Batch, index: int, item: CaseItem) -> tuple[str, str]:
         """Return the conversation id and idempotency key of this attempt.
@@ -2183,9 +2206,6 @@ class EvalBatchManager:
         if final_state in _PRE_SEND_TERMINAL_STATES:
             status = STAGE_FAILED
             message = f"run 在发送前结束：{final_state}"
-        elif run.remote_task_id is None or run.remote_context_id is None:
-            status = STAGE_FAILED
-            message = "run 已结束但没有 Task。" if run.finished() else "等待 Task 超时。"
         elif state in _FAILED_TASK_STATES:
             status = STAGE_FAILED
             message = f"Task 状态为 {state}。"
@@ -2196,6 +2216,15 @@ class EvalBatchManager:
             else:
                 status = STAGE_PASSED
                 message = ""
+        elif run.status == STATUS_FAILED:
+            # The flow died while the last observed Task state was still INPUT_REQUIRED (a vendor
+            # HTTP 500 is the common case). Reading only the stale state turned a real failure into
+            # "waiting", and the item then read as an inconclusive partial.
+            status = STAGE_ERROR
+            message = run.error or "运行失败。"
+        elif run.remote_task_id is None or run.remote_context_id is None:
+            status = STAGE_FAILED
+            message = "run 已结束但没有 Task。" if run.finished() else "等待 Task 超时。"
         elif state == "TASK_STATE_INPUT_REQUIRED":
             status = STAGE_WAITING
             message = "Task 仍在协商（INPUT_REQUIRED），尚未确认受理。"
@@ -2253,6 +2282,11 @@ class EvalBatchManager:
         elif state in _FAILED_TASK_STATES:
             status = STAGE_FAILED
             message = f"Task 状态为 {state}。"
+        elif run.status == STATUS_FAILED:
+            # The flow failed after the last observed Task state; that state alone must not turn
+            # the row into "still working".
+            status = STAGE_ERROR
+            message = run.error or "运行失败。"
         elif state == TASK_STATE_SUBMITTED:
             status = STAGE_WAITING
             message = f"{working_timeout_seconds:g}s 内 Task 仍停留在 SUBMITTED。"
@@ -3006,12 +3040,20 @@ class EvalBatchManager:
             return CASE_FAILED
         if any(status == STAGE_WAITING for status in statuses):
             return CASE_PARTIAL
+        if any(status == STAGE_WARNING for status in statuses):
+            # A deviation the client did not cause still needs a human to confirm it. The stage is
+            # yellow in the console; the row must not read as a clean pass next to it.
+            return CASE_PARTIAL
         if _stops_on_a_vendor_defect(item.error):
             # The vendor broke the exchange (an empty INPUT_REQUIRED): the client cannot prove its
             # work, so the row is an error of the system under test, never an inconclusive partial.
             return CASE_ERROR
         if item.needs_review:
             # A residual the judge could not decide is unproven, not green.
+            return CASE_PARTIAL
+        if _terminal_state_unconfirmed(item):
+            # The corpus named a terminal state and the run never observed it. "Recorded" keeps the
+            # evidence visible; it must not turn the row green.
             return CASE_PARTIAL
         if item.error:
             # The run failed, but its only red stage was recorded (assertion off / simulator
@@ -3516,6 +3558,21 @@ def _pairs(items: Sequence[CaseItem]) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _terminal_state_unconfirmed(item: CaseItem) -> bool:
+    """Return whether the case expected a terminal state the run never observed.
+
+    ``_wait_for_stage`` records ``final`` when the corpus names no terminal state (pure A2A) or
+    when the case turns the assertion off. Both are deliberate record-only decisions; only a
+    named expectation that was not observed leaves the row unproven.
+    """
+    final = item.stages.get("final")
+    if final is None or final.status != STAGE_RECORDED:
+        return False
+    if final.expected is None or final.message == _ASSERTION_OFF_MESSAGE:
+        return False
+    return True
 
 
 def _pair_entry(item: CaseItem) -> dict[str, object]:

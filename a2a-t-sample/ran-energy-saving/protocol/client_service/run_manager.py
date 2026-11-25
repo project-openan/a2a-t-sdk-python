@@ -59,6 +59,7 @@ from shared.run_constants import (
 from shared.run_source import normalize_run_source
 from shared.trace import (
     PHASE_DISPATCH,
+    PHASE_DONE,
     PHASE_NEGOTIATION,
 )
 from shared.trace_propagation import (
@@ -164,6 +165,23 @@ def _cancel_label(run: RunState) -> str:
     if run.cancel_reason:
         return run.cancel_reason
     return CANCELED_BY_OPERATOR if run.cancel_requested else CANCELED_BY_SHUTDOWN
+
+
+def _mark_released(run: RunState) -> None:
+    """Finish a run whose caller deliberately ended its observation window.
+
+    Reaching the configured stage is a normal end of observation, not an operator cancel: the run
+    keeps its ``incomplete`` result (the remote Task has no terminal state yet) but carries no
+    error, so the run console does not report it as an interrupted/failed run.
+    """
+    run.status = STATUS_FINISHED
+    run.error = None
+    run.emit_trace(
+        kind="observation_ended",
+        phase=PHASE_DONE,
+        title="Run observation ended",
+        detail={"reason": run.release_reason or ""},
+    )
 
 
 def _long_task_id(run: RunState, result: ClientFlowResult | None) -> str:
@@ -520,28 +538,47 @@ class RunManager:
         run.cancel_reason = reason
         if remote:
             await self._cancel_remote_task(run)
-        task = run.task
-        if task is not None and not task.done():
-            task.cancel()
-            _, pending = await asyncio.wait({task}, timeout=CANCEL_UNWIND_TIMEOUT_SECONDS)
-            if pending:
-                _LOGGER.warning(
-                    "run %s did not unwind within %.0fs after cancel",
-                    run.run_id,
-                    CANCEL_UNWIND_TIMEOUT_SECONDS,
-                )
-                # The run task never reached its ``finally``: flush its exporter here so the
-                # spans already queued in the OTel processor are not lost with the process.
-                exporter = run.langfuse_exporter
-                if exporter is not None:
-                    with suppress(Exception):
-                        await asyncio.to_thread(
-                            exporter.finish, result=run.result, error=run.error
-                        )
-                        # Publish the ingestion warning without resolving the URL (that lookup
-                        # is best effort and must not delay a cancel).
-                        run.langfuse = await asyncio.to_thread(exporter.snapshot)
+        await self._stop_run_task(run)
         return True
+
+    async def release(self, run_id: str, *, reason: str) -> bool:
+        """End one run's observation window without reporting it as a cancel.
+
+        The tester stops watching at its configured stage. The remote Task is still released so a
+        batch does not exhaust the NMS quota, but the run itself finishes with no error: reaching
+        the requested stage is a normal end of observation, not an operator cancel or a failure.
+        """
+        run = self._runs.get(run_id)
+        if run is None or run.finished():
+            return False
+        run.release_reason = reason
+        await self._cancel_remote_task(run)
+        await self._stop_run_task(run)
+        return True
+
+    async def _stop_run_task(self, run: RunState) -> None:
+        """Cancel the run task, flushing its exporter when it cannot unwind in time."""
+        task = run.task
+        if task is None or task.done():
+            return
+        task.cancel()
+        _, pending = await asyncio.wait({task}, timeout=CANCEL_UNWIND_TIMEOUT_SECONDS)
+        if not pending:
+            return
+        _LOGGER.warning(
+            "run %s did not unwind within %.0fs after cancel",
+            run.run_id,
+            CANCEL_UNWIND_TIMEOUT_SECONDS,
+        )
+        # The run task never reached its ``finally``: flush its exporter here so the spans already
+        # queued in the OTel processor are not lost with the process.
+        exporter = run.langfuse_exporter
+        if exporter is not None:
+            with suppress(Exception):
+                await asyncio.to_thread(exporter.finish, result=run.result, error=run.error)
+                # Publish the ingestion warning without resolving the URL (that lookup is best
+                # effort and must not delay a cancel).
+                run.langfuse = await asyncio.to_thread(exporter.snapshot)
 
     def _task_handover_candidates(self, task_id: str) -> list[RunState]:
         """Return the live runs a Modify of ``task_id`` supersedes.
@@ -755,9 +792,12 @@ class RunManager:
             transcript.record_final(result)
             run.status = STATUS_FINISHED
         except asyncio.CancelledError:
-            run.status = STATUS_INTERRUPTED
-            run.error = _cancel_label(run)
-            transcript.record_error(run.error)
+            if run.release_reason is not None:
+                _mark_released(run)
+            else:
+                run.status = STATUS_INTERRUPTED
+                run.error = _cancel_label(run)
+                transcript.record_error(run.error)
             raise
         except Exception as exc:  # noqa: BLE001 - a failed recovery must reach the UI
             _LOGGER.exception("recovered run %s failed", run.run_id)
@@ -1813,9 +1853,12 @@ class RunManager:
             transcript.record_final(result)
             run.status = STATUS_FINISHED
         except asyncio.CancelledError:
-            run.status = STATUS_INTERRUPTED
-            run.error = _cancel_label(run)
-            transcript.record_error(run.error)
+            if run.release_reason is not None:
+                _mark_released(run)
+            else:
+                run.status = STATUS_INTERRUPTED
+                run.error = _cancel_label(run)
+                transcript.record_error(run.error)
             raise
         except Exception as exc:  # noqa: BLE001 - a failed run must reach the UI, not a bare task
             _LOGGER.exception("client run %s failed", run.run_id)

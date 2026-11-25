@@ -227,6 +227,9 @@ class RunState:
     #: Error label recorded when the run was stopped; ``None`` keeps the operator/shutdown default.
     #: A handover sets it so the stopped run is not reported as an operator cancel.
     cancel_reason: str | None = None
+    #: Reason a caller deliberately ended its observation window (the tester stopping at a stage).
+    #: A released run finishes normally with no error instead of being reported as a cancel.
+    release_reason: str | None = None
     remote_task_id: str | None = None
     #: Context id paired with :attr:`remote_task_id`, when a status event or a poll carried one.
     remote_context_id: str | None = None

@@ -41,6 +41,7 @@ REFERENCE_HEADERS: tuple[str, ...] = (
     "自动评分",
     "最终得分",
     "汇总结果",
+    "判定原因",
     "仲裁得分",
     "人工标记结果",
     "备注",
@@ -166,6 +167,46 @@ def test_the_arbitration_row_carries_the_intent_diff_and_answer() -> None:
     assert row[29] == "通过"
     assert row[30] in (None, "")
     assert row[31] in (None, "")
+    assert row[32] in (None, "")
+    assert row[33] in (None, "")
+
+
+def test_a_partial_row_names_the_stage_that_left_it_unproven() -> None:
+    batch = _snapshot()
+    item = batch["items"][0]
+    item["status"] = "partial"
+    item["needsReview"] = True
+    item["intentVerdict"] = {"residual": [{"path": "intent.Energy saving time"}]}
+    item["stages"]["intent"] = {
+        "stage": "intent",
+        "status": "recorded",
+        "message": "没有可用的独立判定模型，转人工复核",
+    }
+
+    rows = _reference_sheet(batch)
+    headers = list(rows[0])
+    reason = str(rows[1][headers.index("判定原因")])
+
+    assert "intent: 没有可用的独立判定模型，转人工复核" in reason
+    assert rows[1][headers.index("汇总结果")] == "待定"
+
+
+def test_an_error_row_carries_the_run_error_next_to_the_summary() -> None:
+    batch = _snapshot()
+    item = batch["items"][0]
+    item["status"] = "error"
+    item["error"] = "NmsProtocolError: HTTP 500"
+    item["stages"]["accepted"] = {
+        "stage": "accepted",
+        "status": "error",
+        "message": "NmsProtocolError: HTTP 500",
+    }
+
+    rows = _reference_sheet(batch)
+    headers = list(rows[0])
+
+    assert rows[1][headers.index("汇总结果")] == "错误"
+    assert rows[1][headers.index("判定原因")] == "NmsProtocolError: HTTP 500"
 
 
 def test_a_pure_a2a_row_leaves_the_intent_columns_blank_and_says_so() -> None:
@@ -183,7 +224,7 @@ def test_a_pure_a2a_row_leaves_the_intent_columns_blank_and_says_so() -> None:
     assert row[11] in (None, "")
     assert row[12] in (None, "")
     assert row[15] in (None, "")
-    assert "纯 A2A 未采集服务端意图" in str(row[32])
+    assert "纯 A2A 未采集服务端意图" in str(row[33])
 
 
 def test_a_row_without_a_server_payload_keeps_the_sdk_column_and_says_why() -> None:
@@ -197,7 +238,7 @@ def test_a_row_without_a_server_payload_keeps_the_sdk_column_and_says_why() -> N
     assert row[11] in (None, "")
     assert json.loads(str(row[12]))["Energy saving region"] == "SDKRegion"
     assert row[15] in (None, "")
-    assert "下游未返回结构化意图" in str(row[32])
+    assert "下游未返回结构化意图" in str(row[33])
 
 
 def test_a_validate_only_row_does_not_blame_the_downstream() -> None:
@@ -207,7 +248,7 @@ def test_a_validate_only_row_does_not_blame_the_downstream() -> None:
     item["answer"] = None
 
     rows = _reference_sheet(batch)
-    note = str(rows[1][32])
+    note = str(rows[1][33])
 
     assert "未执行发送阶段" in note
     assert "下游未返回结构化意图" not in note
@@ -226,7 +267,7 @@ def test_a_v2_item_without_export_fields_still_exports() -> None:
     assert row[0] in (None, "")
     assert row[11] in (None, "")
     assert row[16] in (None, "")
-    assert "本批次未采集意图" in str(row[32])
+    assert "本批次未采集意图" in str(row[33])
 
 
 def _results_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:
@@ -314,15 +355,15 @@ def test_the_arbitration_note_names_a_langfuse_export_failure() -> None:
 
     rows = _reference_sheet(batch)
 
-    assert "Langfuse 导出失败" in str(rows[1][32])
-    assert "HTTP 403" in str(rows[1][32])
+    assert "Langfuse 导出失败" in str(rows[1][33])
+    assert "HTTP 403" in str(rows[1][33])
 
 
 def test_the_arbitration_note_names_a_failed_baseline() -> None:
     """The arbitration sheet is the comparison view; a baseline failure must not look silent."""
     rows = _reference_sheet(_with_baseline())
 
-    assert "Modify 基线 Create 失败" in str(rows[1][32])
+    assert "Modify 基线 Create 失败" in str(rows[1][33])
 
 
 def test_the_stage_diff_sheet_labels_interception_stages() -> None:

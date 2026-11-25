@@ -343,7 +343,8 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
   `negotiation.messages` 仍是协商过程的 oracle。判定规则见 5.3 之后的
   `negotiation.messages` 一节。没有该块时只判轮数与类型。
 - **轮次偏差只告警**：类型与报文一致、仅轮数与用例记录不同 → `warning`（用例轮次只作参考，
-  由人工确认）；类型或报文不一致仍为 `failed`。
+  由人工确认）；类型或报文不一致仍为 `failed`。`warning` 的阶段会让 item 落为 `partial`（待定），
+  不再显示为「通过」。
 - **通用原则版本 `2026-11-24.4`**：让步策略（速率/时间两维、逐级让步）、本轮历史回读、
   “能答就答、必要时才反问”、复合提案一次答完；配置的 `min_throughput` 是唯一硬下限，
   原则中的 2Mbps 只是无硬下限时的让步目标。批次创建时冻结版本与正文。
@@ -357,6 +358,8 @@ A2A-T 只有 10 条需要协商（26/28/29/30/31/32/50/51/88/89），其余 90 �
 **真机批次默认执行到 `accepted`**：`accepted` 指网管已明确受理、协商已结束（不再是 A2A 的
 `submitted` 文案；见架构文档 §2.1）。只回 `TASK_STATE_SUBMITTED`、既无成功回执也无结构化意图副本时
 记“等待受理”，不算 accepted；执行、完成、报告与业务效果当前不观测，`final_state` 的执行后状态只记录。
+到达 `stopAfter` 后 tester 结束的是**观察窗口**：run 记 `finished`、不写 `cancelled by the operator`，
+远端 Task 仍按配额策略释放；item 结论只由已观察到的阶段推导。
 厂商已确认受理并停在 `WORKING`、但不推终态时，`final` 阶段记 `warning`；真正推了
 `task_failed` / `task_rejected` 仍记 `failed`。
 
@@ -454,9 +457,13 @@ PYTHONPATH=. ../../.venv/Scripts/python.exe -m eval.osp.runner --ids 1 --stop-af
 - 结果抽屉新增「轨迹」tab：读取 `/api/runs/{runId}/trace.json` 的 transcript timeline，按 seq 展示
   事件/状态/耗时，展开可看原始 JSON；Modify 可在「基线 / 修改」两个 run 之间切换。抽屉打开时随批次
   轮询刷新（只有事件数或 run 状态变化才重绘，保留滚动位置）。
-- 报告导出 JSON / XLSX；JSON 带完整 `baseline` 对象，XLSX「用例结果」新增「基线状态 / 基线 Run ID /
-  基线 taskId / 基线 state / 基线错误」列，「仲裁格式」的备注会写明基线失败原因。Excel 只作为导出
-  格式，不再是输入。
+- 报告导出 JSON / XLSX；JSON 带完整 `baseline` 对象和 `verdictReason`，XLSX「用例结果」有
+  「基线状态 / 基线 Run ID / 基线 taskId / 基线 state / 基线错误」列，「仲裁格式」在「汇总结果」
+  之后新增「判定原因」列：`partial` / `failed` / `error` 行写明未通过的具体阶段或 run 错误，
+  `partial` 行不再为空。Excel 只作为导出格式，不再是输入。
+- 意图差异点与判定同源：`answer与reference差异点` 使用 `flatten_intent` 的归一化结果。同速率、
+  相邻/重叠的时段会先合并（`08:00-11:59 + 12:00-17:59` ≡ `08:00-17:59`），只留表达差异时显示
+  “表达差异（归一化后一致）”，不再报「缺失 + 值变更」；只有真正不同的速率/时段才需要独立判定。
 - 临时请求 tab：手输文本直接跑一次，不做预期断言。
 
 ### 9.1 Modify 的配对基线与限制

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -112,6 +112,9 @@ INTENT_ROW_MISSING: Final[str] = "missing"
 INTENT_ROW_ADDED: Final[str] = "added"
 #: Fixed template prose: shown for inspection and never part of a pass/fail decision.
 INTENT_ROW_RECORDED: Final[str] = "recorded"
+#: Explanation of a target list whose entries describe the same schedule with a different
+#: segmentation (two adjacent equal-rate segments vs one merged segment).
+_SEGMENTED_LIST_REASON: Final[str] = "时段分段表达不同，归一化后一致"
 
 
 @dataclass(frozen=True)
@@ -365,6 +368,27 @@ def _zone_list_rows(path: str, expected: object, actual: object) -> list[Compare
                 _normalize_zone_targets,
             )
         ]
+    if (
+        expected_entries
+        and actual_entries
+        and not _verbatim_equal(expected, actual)
+        and _zone_lists_equivalent(expected_entries, actual_entries)
+    ):
+        # The same schedule may be written as two adjacent segments or as one merged segment.
+        # Pairing entries by index would report the merge as "missing + changed", so the business
+        # meaning is compared first: same rate over the same hours is one target, whatever
+        # segmentation the downstream chose. A verbatim-equal list keeps its per-leaf rows so the
+        # serialized comparison still names every field.
+        return [
+            CompareRow(
+                path,
+                expected if expected is not None else [],
+                actual if actual is not None else [],
+                INTENT_ROW_CHANGED,
+                _SEGMENTED_LIST_REASON,
+                INTENT_ROW_SAME,
+            )
+        ]
     rows: list[CompareRow] = []
     for index in range(max(len(expected_entries), len(actual_entries))):
         expected_entry = expected_entries[index] if index < len(expected_entries) else None
@@ -406,6 +430,69 @@ def _zone_entry_rows(
         )
         for field in fields
     ]
+
+
+def _zone_lists_equivalent(
+    expected: Sequence[object], actual: Sequence[object]
+) -> bool:
+    """Return whether two target lists describe the same rates over the same hours.
+
+    An entry's identity is its normalized rate plus the hours its period covers. Entries with the
+    same rate are combined before comparison, so ``08:00-11:59 + 12:00-17:59`` and
+    ``08:00-17:59`` are the same target. Entries otherwise (a different rate, a gap between the
+    hours, an unparseable period) stay distinct.
+    """
+    return _canonical_zone_entries(expected) == _canonical_zone_entries(actual)
+
+
+def _canonical_zone_entries(entries: Sequence[object]) -> tuple[object, ...]:
+    """Return the order- and segmentation-insensitive identity of one target list."""
+    hours_by_rate: dict[str, set[int]] = {}
+    others: list[object] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            others.append(("other", _normalize_generic(entry)))
+            continue
+        rate = _normalize_rate(entry.get("Guaranteed throughput target"))
+        hours = time_period_hours(entry.get("Effective time period"))
+        if not hours:
+            others.append(
+                ("other", rate, _normalize_time(entry.get("Effective time period")))
+            )
+            continue
+        hours_by_rate.setdefault(rate, set()).update(hours)
+    canonical: list[object] = [
+        ("rate", rate, run)
+        for rate, hours in hours_by_rate.items()
+        for run in _circular_hour_runs(hours)
+    ]
+    canonical.extend(others)
+    return tuple(sorted(canonical, key=repr))
+
+
+def _circular_hour_runs(hours: set[int]) -> list[tuple[int, int]]:
+    """Split a set of hours of day into contiguous runs, allowing a run to cross midnight."""
+    if not hours:
+        return []
+    if len(hours) >= 24:
+        return [(0, 23)]
+    ordered = sorted(hours)
+    start_index = 0
+    for index, hour in enumerate(ordered):
+        following = ordered[(index + 1) % len(ordered)]
+        if (hour + 1) % 24 != following:
+            start_index = (index + 1) % len(ordered)
+            break
+    runs: list[tuple[int, int]] = []
+    run_start = previous = ordered[start_index]
+    for offset in range(1, len(ordered)):
+        hour = ordered[(start_index + offset) % len(ordered)]
+        if hour != (previous + 1) % 24:
+            runs.append((run_start, previous))
+            run_start = hour
+        previous = hour
+    runs.append((run_start, previous))
+    return runs
 
 
 def _scenario_list_rows(path: str, expected: object, actual: object) -> list[CompareRow]:

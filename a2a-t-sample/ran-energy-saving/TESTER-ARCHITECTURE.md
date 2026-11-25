@@ -590,6 +590,10 @@ flowchart TB
 | D17 | 通用协商原则由谁维护 | 测试侧 / 协议 / 共同维护 | 测试侧负责人维护，按批次冻结版本 | 已对齐（2026-11-23） |
 | D18 | client 质量评委由谁担任 | 模型 / 人工 / 模型 + 人工复核 | 模型先判，分歧交人工复核 | 已对齐（2026-11-23） |
 | D19 | 条件检查器的调用是否算通过标准 | 算 / 不算 / 按用例配置 | 原为“不算，只作为决策证据记录”；2026-11-24 条件检查器整体移除，不再有该调用 | 已撤销（2026-11-24） |
+| D20 | `stopAfter` 到达后 run 怎么收尾 | 记取消 / 记失败 / 记观察结束 | 观察结束：run `finished`、无 error、`final_state` 保留 `incomplete`；仍释放远端 Task 以控制配额 | 已对齐（2026-11-25） |
+| D21 | `warning` / `final=recorded` 是否让 item 待定 | 保持通过 / 待定 / 失败 | `warning` 与“有预期终态但未观察到”的 `final` 记 `partial`；无终态预期的纯 A2A `recorded` 不算待定 | 已对齐（2026-11-25） |
+| D22 | 分段时段的语义等价 | 结构逐项比较 / 先合并同速率相邻段 | 先合并同速率、相邻/重叠的时段，再比较；差异列使用同一套归一化结果 | 已对齐（2026-11-25） |
+| D23 | 非通过行的判定理由 | 只看备注 / 只看错误列 / 汇总结果后单列 | 仲裁格式新增「判定原因」列，`partial` / `failed` / `error` 行不得为空 | 已对齐（2026-11-25） |
 
 **D5/D19 撤销说明（2026-11-24）**：决策依据（通用原则 + 用例 `client_conditions`）本来就会完整写入
 决策 prompt，grounding 也直接使用同一份依据；条件检查器是用第二个模型回答同一份依据里的问题，
@@ -597,3 +601,11 @@ flowchart TB
 调用，黄区还出现过全部返回“不可用”的情况，反而增加延迟、token 与一个配置依赖。因此移除工具、
 `shared/condition_checker.py`、`A2AT_SAMPLE_CLIENT_CONDITION_CHECKER` 开关及其测试；client agent
 现在没有任何工具，决策只依赖 prompt。独立评委仍用于 client 质量附表和意图残余判定。
+
+**D20–D23 说明（2026-11-25）**：黄区 `batch-a33edec75401` 暴露出“导出结论与真实执行不一致”。
+根因是 tester 在每个 item 结束时把“观察窗口结束”当成了 `RunManager.cancel`，run 被写成
+`cancelled by the operator` + `incomplete`；同时 `_judge_accepted` 只看最后的 Task 状态，NMS 500
+之后残留的 `INPUT_REQUIRED` 把真实失败记成了 waiting。现在 tester 用 `RunManager.release` 结束
+观察：run `finished`、无 error，远端 Task 仍释放。意图比较先把同速率、相邻/重叠时段合并，避免
+`08:00-11:59 + 12:00-17:59` 与 `08:00-17:59` 被逐项索引配对成“缺失 + 值变更”；未判定残余、
+轮次偏差、未观察到的预期终态都落 `partial`，并在导出「判定原因」里写明具体阶段或 run 错误。

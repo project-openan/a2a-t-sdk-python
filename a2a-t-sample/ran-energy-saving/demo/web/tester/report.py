@@ -25,6 +25,7 @@ from demo.web.tester.export_view import (
     render_trajectory,
     result_label,
     score_for,
+    verdict_reason,
 )
 
 _STAGE_ORDER: Final[tuple[str, ...]] = (
@@ -70,6 +71,7 @@ _REFERENCE_HEADERS: Final[tuple[str, ...]] = (
     "自动评分",
     "最终得分",
     "汇总结果",
+    "判定原因",
     "仲裁得分",
     "人工标记结果",
     "备注",
@@ -104,6 +106,7 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
         "用例名称",
         "协议",
         "执行状态",
+        "判定原因",
         "耗时(ms)",
         "Token 总量",
         "Run ID",
@@ -139,6 +142,7 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
             item.get("name", ""),
             item.get("protocol", ""),
             item.get("status", ""),
+            verdict_reason(item),
             item.get("durationMs", ""),
             token_map.get("total", ""),
             item.get("runId", ""),
@@ -162,7 +166,7 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
             row.insert(3, item.get("round", 1))
         results.append(row)
     widths = [
-        12, 42, 10, 10, 12, 12, 34,
+        12, 42, 10, 10, 40, 12, 12, 34,
         10, 34, 34, 18, 40,
         10, 10, 10, 14, 48,
         12, 12, 12, 12, 14, 12, 12, 12, 40,
@@ -599,6 +603,7 @@ def _reference_row(item: Mapping[str, Any]) -> list[object]:
         _score_cell(status),
         _score_cell(status),
         result_label(status),
+        verdict_reason(item),
         "",
         "",
         _reference_note(item, refs, intent_meta, answer, server_intent, sdk_intent),
