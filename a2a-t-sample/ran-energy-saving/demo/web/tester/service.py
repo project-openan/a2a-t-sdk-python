@@ -2513,10 +2513,12 @@ class EvalBatchManager:
         """Collect the trace id, the operator request and the reference answer of one run."""
         try:
             item.trace_id = run.trace_id or run.run_id
-            if item.error is None and run.result is not None and run.result.error:
-                # The flow finished unfinished on purpose (an exhausted answer script): show its
-                # reason in the result column so a batch run does not need the drawer to read it.
-                item.error = run.result.error
+            if item.error is None:
+                # The flow finished unfinished on purpose (an exhausted answer script) or failed
+                # outright. Either reason belongs in the result column so a batch run does not
+                # need the drawer to read it.
+                result_error = run.result.error if run.result is not None else None
+                item.error = result_error or run.error
             langfuse_url = _langfuse_url(run)
             if langfuse_url:
                 item.langfuse_url = langfuse_url

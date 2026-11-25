@@ -2324,6 +2324,35 @@ async def test_an_unfinished_flow_reason_is_visible_in_the_item(tmp_path: Path) 
     assert item.to_dict()["error"] == reason
 
 
+async def test_a_run_exception_is_visible_on_the_item_and_not_hidden_as_waiting(
+    tmp_path: Path,
+) -> None:
+    """The 28/a2a case: HTTP 500 after INPUT_REQUIRED must be an error with its reason."""
+    error = "NmsProtocolError: HTTP 500"
+
+    def builder(run: RunState) -> None:
+        run.status = "failed"
+        run.error = error
+        run.result = None
+        run.remote_task_id = "task-1"
+        run.remote_context_id = "ctx-1"
+        run.latest_task_state = "TASK_STATE_INPUT_REQUIRED"
+        run.traces.append({"kind": "message_sent"})
+
+    manager = _manager(tmp_path, _FakeRuns(builder))
+    created = manager.create(
+        case_ids=[1], protocols=[PROTOCOL_A2A], stop_after="accepted", approval=None
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager._batches[batch_id].items[0]
+    assert item.stages["accepted"].status == STAGE_ERROR
+    assert item.status == CASE_ERROR
+    assert item.error == error
+
+
 async def test_a_downstream_that_returns_no_payload_records_the_intent_stage(
     tmp_path: Path,
 ) -> None:
