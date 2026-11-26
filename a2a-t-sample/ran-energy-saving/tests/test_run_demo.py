@@ -880,3 +880,34 @@ def test_child_env_pins_the_launcher_run_dir(
     env = run_demo._child_env("en-US")
 
     assert env["A2AT_SAMPLE_RUN_DIR"] == str(tmp_path / "state")
+
+
+def test_real_nms_can_start_the_inbound_gateway(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Gemini Enterprise -> gateway -> vendor NMS is one supported launcher topology."""
+    monkeypatch.setenv("A2AT_SAMPLE_GATEWAY_PUBLIC_URL", "https://ran-client.example/gateway")
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source(), extra_args=["--gateway"]
+    )
+
+    assert code == 0
+    modules = [str(call["command"][2]) for call in started]
+    assert "protocol.client_gateway" in modules
+    gateway = started[modules.index("protocol.client_gateway")]["env"]
+    assert gateway["A2AT_SAMPLE_GATEWAY_PUBLIC_URL"] == "https://ran-client.example/gateway"
+    assert gateway["A2AT_SAMPLE_WEBHOOK_PORT"] == "9001"
+
+
+def test_real_nms_gateway_requires_a_public_callback_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("A2AT_SAMPLE_GATEWAY_PUBLIC_URL", raising=False)
+
+    code, started, _ = _launch_both_nms(
+        monkeypatch, tmp_path, _both_nms_source(), extra_args=["--gateway"]
+    )
+
+    assert code == 2
+    assert started == []

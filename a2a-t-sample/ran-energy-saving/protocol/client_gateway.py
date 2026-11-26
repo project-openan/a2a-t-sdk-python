@@ -33,6 +33,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -58,10 +59,15 @@ from a2a.types import (
     AgentCard,
     AgentProvider,
     AgentSkill,
+    HTTPAuthSecurityScheme,
     Part,
+    SecurityRequirement,
+    SecurityScheme,
+    StringList,
     TaskState,
 )
 from a2a.utils.constants import TransportProtocol
+from a2a.utils.errors import InvalidParamsError
 from google.protobuf.json_format import ParseDict
 from shared.agent_card import AGENT_CARD_ORGANIZATION, AGENT_CARD_PROVIDER_URL
 from shared.config import DISCOVERY_NMS, GATEWAY_SCENARIO_ENV_KEY, SampleConfig, load_config
@@ -111,11 +117,19 @@ def _message_text(message: Any) -> str:
     return ""
 
 
-def build_gateway_agent_card(*, host: str, port: int) -> AgentCard:
+def build_gateway_agent_card(
+    *,
+    host: str,
+    port: int,
+    public_url: str = "",
+    secured: bool = False,
+) -> AgentCard:
     """Build the inbound AgentCard of the client gateway.
 
     The card advertises a plain A2A agent: the A2A-T extensions describe the client's **outbound**
-    call to the RAN server, not the inbound contract of this gateway.
+    call to the RAN server, not the inbound contract of this gateway. ``public_url`` is the
+    externally reachable base URL a caller such as Gemini Enterprise must use; ``secured`` declares
+    the bearer scheme the gateway actually enforces.
     """
     card = AgentCard(
         name=GATEWAY_AGENT_NAME,
@@ -125,6 +139,12 @@ def build_gateway_agent_card(*, host: str, port: int) -> AgentCard:
         capabilities=AgentCapabilities(streaming=True, push_notifications=True),
         default_input_modes=["text/plain", "application/json"],
         default_output_modes=["text/plain", "application/json"],
+        security_schemes=(
+            {"bearer": SecurityScheme(http_auth_security_scheme=HTTPAuthSecurityScheme(scheme="bearer"))}
+            if secured
+            else {}
+        ),
+        security_requirements=([SecurityRequirement(schemes={"bearer": StringList()})] if secured else []),
         skills=[
             AgentSkill(
                 id=GATEWAY_SKILL_ID,
@@ -142,7 +162,7 @@ def build_gateway_agent_card(*, host: str, port: int) -> AgentCard:
         ],
     )
     card.supported_interfaces.add(
-        url=f"http://{host}:{port}",
+        url=(public_url.rstrip("/") if public_url else f"http://{host}:{port}"),
         protocol_binding=TransportProtocol.HTTP_JSON.value,
         protocol_version="1.0.0",
     )
@@ -193,8 +213,16 @@ class ClientGatewayExecutor(AgentExecutor):
         await updater.start_work()
         _LOGGER.info("gateway inbound message accepted; starting a client run")
 
-        request_text = _message_text(message) or "Create a RAN energy saving task."
+        request_text = _message_text(message)
+        if not request_text:
+            raise InvalidParamsError(message="The gateway request carries no text part.")
         conversation_id = f"a2a-{context_id}"
+        caller = context.call_context.user
+        user_id = (
+            caller.user_name
+            if caller.is_authenticated and caller.user_name
+            else "a2a-caller"
+        )
         try:
             run = await self._service.start(
                 self._config.gateway_scenario,
@@ -202,9 +230,10 @@ class ClientGatewayExecutor(AgentExecutor):
                 self._config.transport,
                 self._config.discovery,
                 request_text,
+                protocol=self._config.gateway_downstream_protocol,
                 conversation_id=conversation_id,
                 external_conversation_id=context.context_id or None,
-                user_id="a2a-caller",
+                user_id=user_id,
                 source={
                     "kind": "gateway",
                     "channel": "a2a-gateway",
@@ -389,7 +418,12 @@ def build_gateway_app(
     resolved_host = host or config.gateway_host
     resolved_port = port or config.gateway_port
     validate_bind_security(resolved_host, config.auth_token)
-    card = build_gateway_agent_card(host=resolved_host, port=resolved_port)
+    card = build_gateway_agent_card(
+        host=resolved_host,
+        port=resolved_port,
+        public_url=config.gateway_public_url,
+        secured=bool(config.auth_token),
+    )
     executor = ClientGatewayExecutor(service=service, config=config)
     resolved_task_store = task_store or InMemoryTaskStore()
     inner_push_store = push_config_store or _build_push_config_store(config)
@@ -477,6 +511,8 @@ def build_gateway_service(
         from demo.catalog import DemoRunCatalog
 
         catalog = DemoRunCatalog.from_config(config)
+    if config.gateway_webhook_port is not None:
+        config = replace(config, webhook_port=config.gateway_webhook_port)
     if config.gateway_scenario not in catalog.names:
         raise ValueError(
             f"Unsupported {GATEWAY_SCENARIO_ENV_KEY}: {config.gateway_scenario}; "

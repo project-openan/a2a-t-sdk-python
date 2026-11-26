@@ -1398,3 +1398,27 @@ def test_the_judge_token_budget_rejects_an_invalid_value(tmp_path: Path, value: 
 
     with pytest.raises(ValueError, match=JUDGE_MAX_TOKENS_KEY):
         load_config(env_path=env_file)
+
+
+def test_gateway_delivery_keys_load_and_validate(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "A2AT_SAMPLE_GATEWAY_PUBLIC_URL=https://ran-client.example/gateway/",
+                "A2AT_SAMPLE_GATEWAY_WEBHOOK_PORT=9001",
+                "A2AT_SAMPLE_GATEWAY_DOWNSTREAM_PROTOCOL=a2a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=env_file)
+
+    assert config.gateway_public_url == "https://ran-client.example/gateway"
+    assert config.gateway_webhook_port == 9001
+    assert config.gateway_downstream_protocol == "a2a"
+
+    env_file.write_text("A2AT_SAMPLE_GATEWAY_DOWNSTREAM_PROTOCOL=bogus\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="A2AT_SAMPLE_GATEWAY_DOWNSTREAM_PROTOCOL"):
+        load_config(env_path=env_file)

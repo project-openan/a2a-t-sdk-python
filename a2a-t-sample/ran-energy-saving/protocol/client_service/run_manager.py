@@ -1166,7 +1166,7 @@ class RunManager:
             model_label=self._config.model_label,
             expected_sequence=[
                 {"actor": step.actor, "performative": step.performative, "round": step.round}
-                for step in spec.expected_sequence
+                for step in (() if discovery == DISCOVERY_NMS else spec.expected_sequence)
             ],
         )
         try:
@@ -1383,6 +1383,14 @@ class RunManager:
             expected = self._catalog.spec(run.scenario, language=self._config.language)
         except KeyError:
             expected = None
+        if expected is not None and run.discovery == DISCOVERY_NMS:
+            # A real-NMS run is not scored against the demo's recorded dialogue. Only the terminal
+            # state and report presence remain comparable ground truth.
+            expected = replace(
+                expected,
+                expected_sequence=(),
+                expected_negotiation_target=None,
+            )
         return build_run_metrics(
             run_id=run.run_id,
             conversation_id=run.conversation_id,

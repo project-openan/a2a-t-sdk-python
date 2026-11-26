@@ -19,7 +19,13 @@ from typing import Literal
 
 from dotenv import dotenv_values
 
-from shared.run_constants import LANGUAGE_ZH, PROTOCOL_A2A_T, SERVER_PROTOCOL_MODES, SUPPORTED_LANGUAGES
+from shared.run_constants import (
+    LANGUAGE_ZH,
+    PROTOCOL_A2A_NAME,
+    PROTOCOL_A2A_T,
+    SERVER_PROTOCOL_MODES,
+    SUPPORTED_LANGUAGES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,6 +163,9 @@ GATEWAY_HOST_ENV_KEY = "A2AT_SAMPLE_GATEWAY_HOST"
 GATEWAY_PORT_ENV_KEY = "A2AT_SAMPLE_GATEWAY_PORT"
 GATEWAY_SCENARIO_ENV_KEY = "A2AT_SAMPLE_GATEWAY_SCENARIO"
 GATEWAY_TASK_DB_ENV_KEY = "A2AT_SAMPLE_GATEWAY_TASK_DB"
+GATEWAY_PUBLIC_URL_ENV_KEY = "A2AT_SAMPLE_GATEWAY_PUBLIC_URL"
+GATEWAY_WEBHOOK_PORT_ENV_KEY = "A2AT_SAMPLE_GATEWAY_WEBHOOK_PORT"
+GATEWAY_DOWNSTREAM_PROTOCOL_ENV_KEY = "A2AT_SAMPLE_GATEWAY_DOWNSTREAM_PROTOCOL"
 AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_AUTH_TOKEN"
 SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
 #: Server-side protocol mode (``a2a-t`` / ``a2a`` / ``both``). The launcher also writes it into the
@@ -436,7 +445,7 @@ def _pure_message_mode(values: dict[str, str | None]) -> str:
 #: Prefixes of the keys the sample owns. A shell export with one of these prefixes overrides the
 #: source ``.env``; the launcher also merges them into the per-run ``.env`` so every file reader
 #: (the SDK facade, helper scripts) sees the same effective value.
-SAMPLE_ENV_PREFIXES = ("A2AT_", "ADK_", "LANGFUSE_", "REGISTRY_", "OTEL_")
+SAMPLE_ENV_PREFIXES = ("A2AT_", "ADK_", "LANGFUSE_", "OTEL_")
 
 
 def merge_sample_process_env(values: Mapping[str, str]) -> dict[str, str]:
@@ -468,6 +477,20 @@ def _env_int(values: dict[str, str | None], key: str, default: int) -> int:
         return int(raw_value)
     except ValueError as exc:
         raise ValueError(f"Invalid integer value for {key}: {raw_value}") from exc
+
+
+def _optional_port(values: dict[str, str | None], key: str) -> int | None:
+    """Resolve one optional TCP port; an empty value means unset."""
+    raw_value = _env_value(values, key, "").strip()
+    if not raw_value:
+        return None
+    try:
+        port = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer value for {key}: {raw_value}") from exc
+    if not 0 <= port <= 65535:
+        raise ValueError(f"Invalid port for {key}: {raw_value}")
+    return port
 
 
 def _env_float(values: dict[str, str | None], key: str, default: float) -> float:
@@ -750,6 +773,9 @@ class SampleConfig:
     gateway_host: str = DEFAULT_HOST
     gateway_port: int = DEFAULT_GATEWAY_PORT
     gateway_scenario: str = DEFAULT_GATEWAY_SCENARIO
+    gateway_public_url: str = ""
+    gateway_webhook_port: int | None = None
+    gateway_downstream_protocol: str = PROTOCOL_A2A_T
     runs_dir: str = str(DEFAULT_RUNS_DIR)
     run_dir: str = ""
     pure_followup: str = PURE_FOLLOWUP_BOTH
@@ -929,6 +955,14 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     # The scenario catalog is supplied by the composition root, so config only carries the name:
     # validating it against the demo scenarios here would couple configuration to demo assets.
     gateway_scenario = _env_value(values, GATEWAY_SCENARIO_ENV_KEY, DEFAULT_GATEWAY_SCENARIO)
+    gateway_downstream_protocol = _env_value(
+        values, GATEWAY_DOWNSTREAM_PROTOCOL_ENV_KEY, PROTOCOL_A2A_T
+    )
+    if gateway_downstream_protocol not in (PROTOCOL_A2A_T, PROTOCOL_A2A_NAME):
+        raise ValueError(
+            f"Unsupported {GATEWAY_DOWNSTREAM_PROTOCOL_ENV_KEY}: {gateway_downstream_protocol}; "
+            f"expected one of {(PROTOCOL_A2A_T, PROTOCOL_A2A_NAME)}"
+        )
 
     adk_model_name = _env_value(values, ADK_MODEL_NAME_ENV_KEY, DEFAULT_ADK_MODEL_NAME)
     adk_model_api_base = _env_value(values, ADK_MODEL_API_BASE_ENV_KEY, DEFAULT_ADK_MODEL_API_BASE)
@@ -1009,6 +1043,9 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         gateway_host=_env_value(values, GATEWAY_HOST_ENV_KEY, DEFAULT_HOST),
         gateway_port=_env_int(values, GATEWAY_PORT_ENV_KEY, DEFAULT_GATEWAY_PORT),
         gateway_scenario=gateway_scenario,
+        gateway_public_url=_env_value(values, GATEWAY_PUBLIC_URL_ENV_KEY, "").strip().rstrip("/"),
+        gateway_webhook_port=_optional_port(values, GATEWAY_WEBHOOK_PORT_ENV_KEY),
+        gateway_downstream_protocol=gateway_downstream_protocol,
         runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
         run_dir=_optional_resolved_dir(values, RUN_DIR_ENV_KEY),
         pure_followup=_pure_followup(values),

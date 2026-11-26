@@ -514,7 +514,7 @@ def _accuracy(
             # Pure A2A answers are not Negotiation-T performatives; the round count and the
             # agreed target are the comparable checks.
             checks["sequence"] = None
-    if expected is not None:
+    if expected is not None and expected.expected_sequence:
         rounds = _negotiation(
             protocol=protocol,
             transcript=transcript,

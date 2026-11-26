@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from a2a.auth.user import User
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.context import ServerCallContext, UnauthenticatedUser
 from a2a.server.events import Event as A2AEvent
@@ -30,7 +31,7 @@ from demo.catalog import DemoRunCatalog
 from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import ClientFlowResult
 from protocol.client_gateway import ClientGatewayExecutor, build_gateway_app, build_gateway_service
-from protocol.client_service import RunManager
+from protocol.client_service import RunConflictError, RunManager
 from protocol.client_store import SqliteClientStore
 from protocol.gateway_push import validate_push_url
 from protocol.sqlite_push_config_store import SqlitePushNotificationConfigStore
@@ -561,3 +562,79 @@ def test_push_url_validation_rejects_unsafe_destinations() -> None:
         validate_push_url("https://user:secret@caller.example/hook")
     with pytest.raises(InvalidParamsError, match="loopback"):
         validate_push_url("http://caller.example/hook")
+
+
+class _AuthenticatedUser(User):
+    """Minimal authenticated caller used by the inbound identity test."""
+
+    @property
+    def is_authenticated(self) -> bool:
+        return True
+
+    @property
+    def user_name(self) -> str:
+        return "gemini-user"
+
+
+def test_the_gateway_card_advertises_the_public_url_and_bearer_scheme() -> None:
+    """Gemini Enterprise must discover the externally reachable URL, not the bind address."""
+    from protocol.client_gateway import build_gateway_agent_card
+
+    card = build_gateway_agent_card(
+        host="127.0.0.1",
+        port=8001,
+        public_url="https://ran-client.example/gateway",
+        secured=True,
+    )
+
+    assert card.supported_interfaces[0].url == "https://ran-client.example/gateway"
+    assert "bearer" in card.security_schemes
+
+
+async def test_the_gateway_rejects_a_message_without_text(
+    offline_config: SampleConfig, tmp_path: Path
+) -> None:
+    from protocol.client_gateway import build_gateway_app
+
+    config = replace(
+        offline_config,
+        gateway_public_url="https://ran-client.example/gateway",
+        auth_token="caller-token",
+    )
+    manager, _store = _manager(tmp_path, config)
+    app = build_gateway_app(config=config, service=manager)
+    try:
+        executor = app.state.gateway_executor
+        with pytest.raises(InvalidParamsError):
+            await executor.execute(_context("   "), RecordingEventQueue())
+    finally:
+        await manager.shutdown()
+
+
+async def test_the_gateway_maps_the_authenticated_caller_and_downstream_protocol(
+    offline_config: SampleConfig,
+    tmp_path: Path,
+) -> None:
+    """The caller identity comes from the auth context; the downstream form is configurable."""
+    captured: dict[str, object] = {}
+
+    class _CapturingService:
+        async def start(self, *args: object, **kwargs: object) -> None:
+            captured["args"] = args
+            captured.update(kwargs)
+            raise RunConflictError("captured")
+
+    from protocol.client_gateway import ClientGatewayExecutor
+
+    config = replace(offline_config, gateway_downstream_protocol="a2a")
+    executor = ClientGatewayExecutor(service=_CapturingService(), config=config)  # type: ignore[arg-type]
+    message = Message(message_id="message-1", role=Role.ROLE_USER, context_id=CONTEXT_ID)
+    message.parts.add(text="Save energy in Region A.")
+    request = SendMessageRequest(message=message)
+    call_context = ServerCallContext(state={}, user=_AuthenticatedUser())
+    context = RequestContext(call_context=call_context, request=request)
+
+    await executor.execute(context, RecordingEventQueue())
+
+    assert captured["user_id"] == "gemini-user"
+    assert captured["protocol"] == "a2a"

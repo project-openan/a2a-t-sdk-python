@@ -1254,6 +1254,23 @@ def _build_parser(
         default=default_gateway_port,
         help=f"bind port of the A2A gateway (default: {default_gateway_port}; A2AT_SAMPLE_GATEWAY_PORT)",
     )
+    parser.add_argument(
+        "--gateway-public-url",
+        default=_env_str(env, "A2AT_SAMPLE_GATEWAY_PUBLIC_URL", ""),
+        help="externally reachable base URL advertised in the gateway AgentCard",
+    )
+    parser.add_argument(
+        "--gateway-webhook-port",
+        type=int,
+        default=_env_int(env, "A2AT_SAMPLE_GATEWAY_WEBHOOK_PORT", 0),
+        help="callback receiver port of the gateway process (default: webhook port + 1)",
+    )
+    parser.add_argument(
+        "--gateway-downstream-protocol",
+        default=_env_str(env, "A2AT_SAMPLE_GATEWAY_DOWNSTREAM_PROTOCOL", PROTOCOL_A2A_T),
+        choices=[PROTOCOL_A2A_T, PROTOCOL_A2A_NAME],
+        help="protocol the gateway uses toward the RAN server or vendor NMS (default: a2a-t)",
+    )
     parser.add_argument("--keep-alive", action="store_true", help="leave the local server running afterwards")
     parser.add_argument("--keep-logs", action="store_true", help="keep the temporary run directory (logs/.env)")
     parser.add_argument("--stop", action="store_true", help="stop a previous --keep-alive run and exit")
@@ -1348,22 +1365,16 @@ def main() -> int:
         parser.error(f"--mode {args.mode} requires --ui (the decision lives in the Web UI)")
     if args.protocol == PROTOCOL_MODE_BOTH and not args.ui:
         parser.error("--protocol both requires --ui (the protocol is chosen per run in the page)")
-    if args.protocol == PROTOCOL_MODE_BOTH and args.gateway:
-        parser.error("--gateway is not supported with --protocol both")
     if args.protocol == PROTOCOL_PURE:
         from demo.scenario import PURE_PROTOCOL_SCENARIOS
 
         if args.scenario not in PURE_PROTOCOL_SCENARIOS:
             parser.error(f"--protocol a2a supports only {', '.join(PURE_PROTOCOL_SCENARIOS)}")
-        if args.gateway:
-            parser.error("--gateway is not supported with --protocol a2a")
     if args.nms:
         if args.transport != "webhook":
             parser.error(
                 "a real --nms run requires --transport webhook (message:send + push notifications)"
             )
-        if args.gateway:
-            parser.error("--nms is not supported with --gateway")
 
     python = sys.executable
     if not _preflight(python, source_env):
@@ -1645,6 +1656,35 @@ def main() -> int:
                 },
             ) is None:
                 return 1
+        if args.gateway and args.nms:
+            gateway_webhook_port = args.gateway_webhook_port or (webhook_port + 1)
+            gateway_public_url = args.gateway_public_url.strip()
+            if not gateway_public_url:
+                print(
+                    "[run_demo] --nms --gateway needs A2AT_SAMPLE_GATEWAY_PUBLIC_URL; the UI and "
+                    "the gateway bind separate callback receivers and the NMS must reach both."
+                )
+                return 2
+            gateway_env = {
+                "A2AT_SAMPLE_MODEL_MODE": "live",
+                "A2AT_SAMPLE_WEBHOOK_PORT": str(gateway_webhook_port),
+                "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL": gateway_public_url,
+                "A2AT_SAMPLE_GATEWAY_PUBLIC_URL": gateway_public_url,
+                "A2AT_SAMPLE_GATEWAY_WEBHOOK_PORT": str(gateway_webhook_port),
+                "A2AT_SAMPLE_GATEWAY_DOWNSTREAM_PROTOCOL": args.gateway_downstream_protocol,
+            }
+            gateway_auth_token = _env_str(source_values, "A2AT_SAMPLE_AUTH_TOKEN", "")
+            if gateway_auth_token:
+                gateway_env["A2AT_SAMPLE_AUTH_TOKEN"] = gateway_auth_token
+            if start(
+                "gateway",
+                GATEWAY_MODULE,
+                args.gateway_port,
+                gateway_env,
+                reuse=False,
+            ) is None:
+                return 1
+
         ui_proc: subprocess.Popen[str] | None = None
         if args.ui:
             print(
