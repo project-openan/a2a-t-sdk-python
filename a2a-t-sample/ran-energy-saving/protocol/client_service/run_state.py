@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from typing import Any, Final, Literal, Protocol
 
 from a2a_t.core.metadata import NegotiationContext
-from shared.config import DISCOVERY_REGISTRY
+from shared.config import DISCOVERY_DIRECT
 from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
     PROTOCOL_A2A_T,
@@ -188,7 +188,7 @@ class RunState:
     mode: str
     transport: str
     protocol: str = PROTOCOL_A2A_T
-    discovery: str = DISCOVERY_REGISTRY
+    discovery: str = DISCOVERY_DIRECT
     user_request: str | None = None
     status: RunStatus = STATUS_RUNNING
     detached: bool = False

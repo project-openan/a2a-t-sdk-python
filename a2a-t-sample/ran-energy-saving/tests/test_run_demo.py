@@ -38,11 +38,8 @@ def test_write_run_env_points_both_processes_at_the_task_database(
         webhook_port=0,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8080,
         gateway_port=8001,
-        gateway_register=True,
     )
 
     values = dotenv_values(env_path)
@@ -64,7 +61,6 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert gateway_db == run_demo.GATEWAY_TASK_DB_PATH
     assert gateway_db.name == "gateway-task-status.sqlite3"
     assert values["A2AT_SAMPLE_GATEWAY_PORT"] == "8001"
-    assert values["A2AT_SAMPLE_GATEWAY_REGISTER"] == "1"
     assert Path(str(values["A2AT_SAMPLE_RUNS_DIR"])) == run_demo.RUNS_DIR
 
 
@@ -83,8 +79,6 @@ def test_write_run_env_carries_the_pure_message_mode_override(
         webhook_port=9001,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8081,
         protocol="both",
         oss_port=8011,
@@ -110,8 +104,6 @@ def test_write_run_env_keeps_nms_discovery_for_pure_nms(monkeypatch: pytest.Monk
         webhook_port=9001,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8081,
         protocol="pure",
         oss_port=8011,
@@ -513,8 +505,6 @@ def test_write_run_env_anchors_relative_webhook_tls_paths_to_the_sample_root(
         webhook_port=9000,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8080,
     )
 
@@ -543,8 +533,6 @@ def test_write_run_env_carries_the_langfuse_keys(monkeypatch: pytest.MonkeyPatch
         webhook_port=9000,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8080,
     )
 
@@ -575,8 +563,6 @@ def test_write_run_env_lets_the_shell_override_the_webhook_callback(
         webhook_port=9000,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8080,
     )
 
@@ -609,8 +595,6 @@ def test_write_run_env_lets_the_shell_override_the_model_keys(monkeypatch: pytes
         webhook_port=9000,
         server_host="127.0.0.1",
         server_port=8000,
-        registry_host="127.0.0.1",
-        registry_port=5001,
         ui_port=8080,
     )
 

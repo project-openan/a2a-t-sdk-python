@@ -69,7 +69,6 @@ from protocol.sqlite_task_store import read_task_summaries
 from shared.config import (
     DISCOVERY_DIRECT,
     DISCOVERY_NMS,
-    DISCOVERY_REGISTRY,
     PURE_HOP_NMS,
     SUPPORTED_DISCOVERY_MODES,
     SUPPORTED_INTENT_MODES,
@@ -477,7 +476,7 @@ def create_app(
         )
     protocol_defaults: dict[str, dict[str, str]] = {
         PROTOCOL_A2A_T: {
-            "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_REGISTRY,
+            "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_DIRECT,
             # The launcher pins the NMS transport: a real vendor run uses webhook.
             "transport": resolved_default_transport,
         },

@@ -30,11 +30,10 @@ SUPPORTED_MODEL_MODES = (MODEL_MODE_LIVE, MODEL_MODE_OFFLINE)
 ModelMode = Literal["live", "offline"]
 
 #: Discovery modes.
-DISCOVERY_REGISTRY = "registry"
 DISCOVERY_DIRECT = "direct"
 #: Direct A2A surface of a vendor NMS that publishes no AgentCard.
 DISCOVERY_NMS = "nms"
-SUPPORTED_DISCOVERY_MODES = (DISCOVERY_REGISTRY, DISCOVERY_DIRECT, DISCOVERY_NMS)
+SUPPORTED_DISCOVERY_MODES = (DISCOVERY_DIRECT, DISCOVERY_NMS)
 
 #: Transport modes.
 TRANSPORT_SSE = "sse"
@@ -91,8 +90,6 @@ MODEL_MODE_ENV_KEY = "A2AT_SAMPLE_MODEL_MODE"
 LANGUAGE_ENV_KEY = "A2AT_LANGUAGE"
 HOST_ENV_KEY = "A2AT_SAMPLE_HOST"
 PORT_ENV_KEY = "A2AT_SAMPLE_PORT"
-REGISTRY_HOST_ENV_KEY = "REGISTRY_CENTER_HOST"
-REGISTRY_PORT_ENV_KEY = "REGISTRY_CENTER_PORT"
 WEBHOOK_HOST_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_HOST"
 WEBHOOK_PORT_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_PORT"
 WEBHOOK_TOKEN_ENV_KEY = "A2AT_SAMPLE_WEBHOOK_TOKEN"
@@ -163,7 +160,6 @@ ADK_SESSION_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_ADK_SESSION_RETENTION_DAYS"
 CLIENT_MIN_THROUGHPUT_ENV_KEY = "A2AT_SAMPLE_CLIENT_MIN_THROUGHPUT_MBPS"
 GATEWAY_HOST_ENV_KEY = "A2AT_SAMPLE_GATEWAY_HOST"
 GATEWAY_PORT_ENV_KEY = "A2AT_SAMPLE_GATEWAY_PORT"
-GATEWAY_REGISTER_ENV_KEY = "A2AT_SAMPLE_GATEWAY_REGISTER"
 GATEWAY_SCENARIO_ENV_KEY = "A2AT_SAMPLE_GATEWAY_SCENARIO"
 GATEWAY_TASK_DB_ENV_KEY = "A2AT_SAMPLE_GATEWAY_TASK_DB"
 AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_AUTH_TOKEN"
@@ -255,8 +251,6 @@ JUDGE_MAX_TOKENS_ENV_KEY = "A2AT_OSP_JUDGE_MAX_TOKENS"
 #: Defaults matching ``env.example``.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
-DEFAULT_REGISTRY_HOST = "127.0.0.1"
-DEFAULT_REGISTRY_PORT = 5001
 DEFAULT_OSS_PORT = 8001
 DEFAULT_MIE_HOST = "127.0.0.1"
 DEFAULT_MIE_PORT = 8002
@@ -627,7 +621,6 @@ class SampleConfig:
         language: Process-level language (``en-US`` / ``zh-CN``).
         host: Sample bind host.
         port: Sample bind port.
-        registry_url: Registry center base URL.
         webhook_host: Webhook receiver bind host; use a reachable LAN address for a real NMS.
         webhook_port: Webhook receiver bind port (``0`` selects an ephemeral port).
         webhook_token: Push token checked by the webhook receiver.
@@ -645,7 +638,7 @@ class SampleConfig:
         adk_model_output_schema_with_tools: ``auto`` / ``true`` / ``false``; controls whether ADK
             may send a response schema together with tools. ``false`` makes ADK expose the schema
             through the ``set_model_response`` tool, which Qwen-compatible endpoints require.
-        discovery: Discovery mode (``registry`` / ``direct``).
+        discovery: Discovery mode (``direct`` / ``nms``).
         transport: Event transport (``sse`` / ``webhook``).
         intent_mode: Intent handling (``processed`` / ``raw``).
         pre_send_validation: Client-side Task-T validation scope (``off`` / ``on`` / ``always``);
@@ -683,7 +676,6 @@ class SampleConfig:
             human; ``None`` means no floor.
         gateway_host: bind host of the optional inbound A2A gateway.
         gateway_port: bind port of the optional inbound A2A gateway.
-        gateway_register: whether the gateway registers its AgentCard in the registry center.
         gateway_scenario: scenario used for an inbound gateway request.
         runs_dir: directory of run transcripts, NMS wire logs and the UI history.
         run_dir: launcher-owned directory with the child-process logs; empty disables the console's
@@ -764,7 +756,6 @@ class SampleConfig:
     language: str
     host: str
     port: int
-    registry_url: str
     webhook_port: int
     webhook_token: str
     webhook_idle_timeout: int
@@ -773,7 +764,7 @@ class SampleConfig:
     adk_model_api_base: str
     adk_model_api_key: str
     adk_model_output_schema_with_tools: str = DEFAULT_ADK_OUTPUT_SCHEMA_WITH_TOOLS
-    discovery: str = DISCOVERY_REGISTRY
+    discovery: str = DISCOVERY_DIRECT
     transport: str = TRANSPORT_SSE
     intent_mode: str = INTENT_MODE_PROCESSED
     pre_send_validation: str = DEFAULT_PRE_SEND_VALIDATION
@@ -803,7 +794,6 @@ class SampleConfig:
     client_min_throughput_mbps: float | None = None
     gateway_host: str = DEFAULT_HOST
     gateway_port: int = DEFAULT_GATEWAY_PORT
-    gateway_register: bool = False
     gateway_scenario: str = DEFAULT_GATEWAY_SCENARIO
     runs_dir: str = str(DEFAULT_RUNS_DIR)
     run_dir: str = ""
@@ -907,7 +897,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     if language not in SUPPORTED_LANGUAGES:
         raise ValueError(f"Unsupported {LANGUAGE_ENV_KEY}: {language}; expected one of {SUPPORTED_LANGUAGES}")
 
-    discovery = _env_value(values, DISCOVERY_ENV_KEY, DISCOVERY_REGISTRY)
+    discovery = _env_value(values, DISCOVERY_ENV_KEY, DISCOVERY_DIRECT)
     if discovery not in SUPPORTED_DISCOVERY_MODES:
         raise ValueError(f"Unsupported {DISCOVERY_ENV_KEY}: {discovery}; expected one of {SUPPORTED_DISCOVERY_MODES}")
 
@@ -1012,8 +1002,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         if missing:
             raise ValueError(f"NMS discovery requires {', '.join(missing)}; set them in the .env used by the run")
 
-    registry_host = _env_value(values, REGISTRY_HOST_ENV_KEY, DEFAULT_REGISTRY_HOST)
-    registry_port = _env_int(values, REGISTRY_PORT_ENV_KEY, DEFAULT_REGISTRY_PORT)
 
     # The scenario catalog is supplied by the composition root, so config only carries the name:
     # validating it against the demo scenarios here would couple configuration to demo assets.
@@ -1055,7 +1043,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         language=language,
         host=_env_value(values, HOST_ENV_KEY, DEFAULT_HOST),
         port=_env_int(values, PORT_ENV_KEY, DEFAULT_PORT),
-        registry_url=f"http://{registry_host}:{registry_port}",
         webhook_host=_env_value(values, WEBHOOK_HOST_ENV_KEY, DEFAULT_HOST),
         webhook_port=_env_int(values, WEBHOOK_PORT_ENV_KEY, DEFAULT_WEBHOOK_PORT),
         webhook_token=_env_value(values, WEBHOOK_TOKEN_ENV_KEY, DEFAULT_WEBHOOK_TOKEN),
@@ -1103,7 +1090,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         client_min_throughput_mbps=_optional_positive_float(values, CLIENT_MIN_THROUGHPUT_ENV_KEY),
         gateway_host=_env_value(values, GATEWAY_HOST_ENV_KEY, DEFAULT_HOST),
         gateway_port=_env_int(values, GATEWAY_PORT_ENV_KEY, DEFAULT_GATEWAY_PORT),
-        gateway_register=_env_bool(values, GATEWAY_REGISTER_ENV_KEY, False),
         gateway_scenario=gateway_scenario,
         runs_dir=_resolved_dir(values, RUNS_DIR_ENV_KEY, DEFAULT_RUNS_DIR),
         run_dir=_optional_resolved_dir(values, RUN_DIR_ENV_KEY),

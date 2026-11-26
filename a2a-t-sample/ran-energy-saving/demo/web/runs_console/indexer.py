@@ -25,7 +25,6 @@ PROCESS_LOG_NAMES: Final[tuple[str, ...]] = (
     "server",
     "oss",
     "gateway",
-    "registry",
 )
 
 #: Bytes read from each end of an oversized process log.

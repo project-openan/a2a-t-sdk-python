@@ -30,7 +30,6 @@ from shared.config import (
     DEFAULT_PLANNER_MAX_STEPS,
     DEFAULT_WEBHOOK_IDLE_TIMEOUT,
     GATEWAY_PORT_ENV_KEY,
-    GATEWAY_REGISTER_ENV_KEY,
     GATEWAY_SCENARIO_ENV_KEY,
     GATEWAY_TASK_DB_ENV_KEY,
     HTTP_TIMEOUT_ENV_KEY,
@@ -126,7 +125,6 @@ _ENV_KEYS = (
     CLIENT_MEMORY_TURNS_ENV_KEY,
     ADK_SESSION_RETENTION_DAYS_ENV_KEY,
     GATEWAY_PORT_ENV_KEY,
-    GATEWAY_REGISTER_ENV_KEY,
     GATEWAY_SCENARIO_ENV_KEY,
     GATEWAY_TASK_DB_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
@@ -199,8 +197,6 @@ def test_offline_config_loads_from_env_file(tmp_path: Path) -> None:
                 "A2AT_LANGUAGE=en-US",
                 "A2AT_SAMPLE_HOST=0.0.0.0",
                 "A2AT_SAMPLE_PORT=8100",
-                "REGISTRY_CENTER_HOST=registry.local",
-                "REGISTRY_CENTER_PORT=5002",
                 "A2AT_SAMPLE_WEBHOOK_PORT=0",
                 "A2AT_SAMPLE_WEBHOOK_TOKEN=token-123",
                 "A2AT_SAMPLE_WEBHOOK_IDLE_TIMEOUT=15",
@@ -222,7 +218,6 @@ def test_offline_config_loads_from_env_file(tmp_path: Path) -> None:
     assert config.language == "en-US"
     assert config.host == "0.0.0.0"
     assert config.port == 8100
-    assert config.registry_url == "http://registry.local:5002"
     assert config.webhook_port == 0
     assert config.webhook_token == "token-123"
     assert config.webhook_idle_timeout == 15
@@ -365,7 +360,6 @@ def test_client_db_gateway_and_planner_settings(tmp_path: Path) -> None:
                 f"{CLIENT_MIN_THROUGHPUT_ENV_KEY}=2.5",
                 f"{ADK_SESSION_RETENTION_DAYS_ENV_KEY}=30",
                 f"{GATEWAY_PORT_ENV_KEY}=8101",
-                f"{GATEWAY_REGISTER_ENV_KEY}=yes",
                 f"{GATEWAY_SCENARIO_ENV_KEY}=target",
                 f"{GATEWAY_TASK_DB_ENV_KEY}={tmp_path / 'gateway-tasks.sqlite3'}",
                 f"{SERVER_AUTH_TOKEN_ENV_KEY}=server-secret",
@@ -384,7 +378,6 @@ def test_client_db_gateway_and_planner_settings(tmp_path: Path) -> None:
     assert config.client_min_throughput_mbps == 2.5
     assert config.adk_session_retention_days == 30
     assert config.gateway_port == 8101
-    assert config.gateway_register is True
     assert config.gateway_scenario == "target"
     assert config.gateway_task_db_path == str(tmp_path / "gateway-tasks.sqlite3")
     assert config.server_auth_token == "server-secret"
@@ -412,7 +405,6 @@ def test_planner_defaults_follow_the_adk_endpoint(tmp_path: Path) -> None:
     assert config.planner_api_base == "http://127.0.0.1:31943/v1"
     assert config.planner_api_key == "not-needed"
     assert config.planner_max_steps == DEFAULT_PLANNER_MAX_STEPS
-    assert config.gateway_register is False
 
 
 @pytest.mark.parametrize(
@@ -422,7 +414,6 @@ def test_planner_defaults_follow_the_adk_endpoint(tmp_path: Path) -> None:
         (CLIENT_MEMORY_TURNS_ENV_KEY, "-1"),
         (CLIENT_MIN_THROUGHPUT_ENV_KEY, "0"),
         (ADK_SESSION_RETENTION_DAYS_ENV_KEY, "0"),
-        (GATEWAY_REGISTER_ENV_KEY, "sometimes"),
         (PLANNER_MAX_STEPS_ENV_KEY, "0"),
     ],
 )
@@ -438,7 +429,6 @@ def test_missing_env_file_uses_offline_defaults(tmp_path: Path) -> None:
     config = load_config(env_path=tmp_path / "missing.env")
 
     assert config.model_mode == MODEL_MODE_OFFLINE
-    assert config.registry_url == "http://127.0.0.1:5001"
     assert config.http_timeout_seconds == DEFAULT_HTTP_TIMEOUT_SECONDS == 300.0
     assert config.llm_timeout_seconds == DEFAULT_LLM_TIMEOUT_SECONDS == 180.0
     assert config.llm_max_attempts == DEFAULT_LLM_MAX_ATTEMPTS == 1

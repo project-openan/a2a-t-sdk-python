@@ -46,7 +46,6 @@ from protocol.pre_task_negotiation import (
 )
 from protocol.server_app import (
     build_agent_card,
-    build_registration_payload,
     build_server_runtime,
     prepare_sdk_env_path,
 )
@@ -361,15 +360,6 @@ def test_agent_card_declares_the_task_and_negotiation_extensions() -> None:
     extension_uris = {extension.uri for extension in card.capabilities.extensions}
     assert TASK_T_EXTENSION_URI in extension_uris
     assert NEGOTIATION_T_EXTENSION_URI in extension_uris
-
-
-def test_registration_payload_is_a_registry_card_list() -> None:
-    payload = build_registration_payload(build_agent_card(host="127.0.0.1", port=8000))
-
-    cards = cast(list[dict[str, object]], payload["agentCards"])
-    assert len(cards) == 1
-    assert cards[0]["name"] == "RAN NMS Agent"
-    assert "supportedInterfaces" in cards[0]
 
 
 def test_live_sdk_env_fills_empty_values_without_mutating_the_source(

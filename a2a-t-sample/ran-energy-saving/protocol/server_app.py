@@ -19,14 +19,13 @@ side of a cross-process run reaches the client timeline (design §4).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 import httpx
 import uvicorn
@@ -49,7 +48,6 @@ from a2a.types import (
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH, TransportProtocol
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 from a2a_t.server.a2at_server import A2ATServer
-from google.protobuf.json_format import MessageToDict
 from shared.agent_card import (
     AGENT_CARD_DESCRIPTION,
     AGENT_CARD_EXAMPLE,
@@ -67,7 +65,6 @@ from shared.http_security import (
     validate_bind_security,
 )
 from shared.logging_setup import configure_logging
-from shared.registry_client import register_agentcard
 from shared.run_constants import (
     MAX_ROUNDS,
     PROTOCOL_A2A_NAME,
@@ -216,11 +213,6 @@ def build_agent_card(*, host: str, port: int, secured: bool = False) -> AgentCar
         protocol_version="1.0.0",
     )
     return card
-
-
-def build_registration_payload(agent_card: AgentCard) -> dict[str, Any]:
-    """Build the registry-center registration payload for one AgentCard."""
-    return {"agentCards": [MessageToDict(agent_card)]}
 
 
 def prepare_sdk_env_path(config: SampleConfig, env_path: Path | None = None) -> Path:
@@ -576,42 +568,8 @@ def build_server_app(
     ).app
 
 
-async def register_server_agent_card(
-    agent_card: AgentCard,
-    *,
-    config: SampleConfig,
-    env_path: Path | None = None,
-    tolerate_failure: bool = False,
-) -> dict[str, Any]:
-    """Register the AgentCard with the registry center.
-
-    Args:
-        agent_card: card to register.
-        config: sample configuration carrying the registry URL.
-        env_path: optional ``.env`` path used by the registry client.
-        tolerate_failure: when ``True``, a failed registration is logged and returned; otherwise it
-            raises.
-
-    Raises:
-        RuntimeError: when registration fails and ``tolerate_failure`` is ``False``.
-    """
-    result = await register_agentcard(
-        registration_payload=build_registration_payload(agent_card),
-        env_path=env_path,
-        registry_center_url=config.registry_url,
-    )
-    if result.get("status") != "success":
-        message = str(result.get("message", "unknown error"))
-        if tolerate_failure:
-            _LOGGER.warning("agent-card registration failed (tolerated): %s", message)
-            return result
-        raise RuntimeError(f"Agent card registration failed: {message}")
-    _LOGGER.info("agent-card registration succeeded: %s", config.registry_url)
-    return result
-
-
 def main() -> None:
-    """Entry point: assemble the runtime, register the card, and start uvicorn."""
+    """Entry point: assemble the runtime and start uvicorn."""
     configure_logging()
     env_path = Path.cwd() / ".env"
     resolved_env_path = env_path if env_path.exists() else None
@@ -642,13 +600,6 @@ def main() -> None:
         install_offline_provider=install_offline_provider,
         protocol_mode=protocol_mode,
         pure_policy=pure_policy,
-    )
-    asyncio.run(
-        register_server_agent_card(
-            runtime.agent_card,
-            config=runtime.config,
-            env_path=resolved_env_path,
-        )
     )
     _LOGGER.info(
         "starting RAN energy-saving server on %s:%s (model_mode=%s, model=%s, language=%s, task_db=%s)",

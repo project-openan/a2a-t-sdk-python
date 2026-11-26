@@ -390,11 +390,11 @@ async def test_meta_exposes_the_read_only_process_language(client: httpx.AsyncCl
     assert meta["modelLabel"] == "offline (scripted)"
     assert "information" in meta["scenarios"]
     assert meta["modes"] == ["auto", "manual", "confirm"]
-    assert meta["discoveries"] == ["registry", "direct", "nms"]
+    assert meta["discoveries"] == ["direct", "nms"]
     assert meta["defaultScenario"] == "night"
     assert meta["defaultMode"] == "auto"
     assert meta["defaultTransport"] == "sse"
-    assert meta["defaultDiscovery"] == "registry"
+    assert meta["defaultDiscovery"] == "direct"
     # The UI's stream grace is served by the backend, never hard-coded client-side. This fixture
     # disables the grace so streaming tests finish immediately.
     assert meta["finishedGraceMs"] == 0
@@ -959,7 +959,7 @@ async def test_client_run_endpoints_return_persisted_runs_and_conversations(
             scenario="information",
             mode="auto",
             transport="sse",
-            discovery="registry",
+            discovery="direct",
             user_request="save energy",
             status="finished",
             final_state="task_completed",
@@ -2329,7 +2329,7 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
             "outage",
         ]
         assert meta["protocolDefaults"]["a2a-t"] == {
-            "discovery": "registry",
+            "discovery": "direct",
             "transport": "sse",
         }
         assert meta["protocolDefaults"]["pure"] == {
@@ -2349,7 +2349,7 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         await _wait_status(http_client, standard.json()["runId"], lambda data: data["status"] == "finished")
 
     assert calls == [
-        ("a2a-t", "sse", "registry"),
+        ("a2a-t", "sse", "direct"),
         ("pure", "sse", "direct"),
     ]
 

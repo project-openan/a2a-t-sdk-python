@@ -62,7 +62,7 @@ from a2a.types import (
     TaskState,
 )
 from a2a.utils.constants import TransportProtocol
-from google.protobuf.json_format import MessageToDict, ParseDict
+from google.protobuf.json_format import ParseDict
 from shared.agent_card import AGENT_CARD_ORGANIZATION, AGENT_CARD_PROVIDER_URL
 from shared.config import DISCOVERY_NMS, GATEWAY_SCENARIO_ENV_KEY, SampleConfig, load_config
 from shared.http_security import (
@@ -73,7 +73,6 @@ from shared.http_security import (
     validate_bind_security,
 )
 from shared.logging_setup import configure_logging, log_context
-from shared.registry_client import register_agentcard
 from shared.run_constants import PROTOCOL_A2A_T
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -520,24 +519,6 @@ def build_gateway_service(
     )
 
 
-async def register_gateway_card(
-    card: AgentCard,
-    *,
-    config: SampleConfig,
-    env_path: Path | None = None,
-) -> dict[str, Any]:
-    """Register the gateway AgentCard, tolerating a registry-center failure."""
-    del config
-    try:
-        return await register_agentcard(
-            registration_payload={"agentCards": [MessageToDict(card)]},
-            env_path=env_path,
-        )
-    except Exception as exc:  # noqa: BLE001 - a registry outage must not stop the gateway
-        _LOGGER.warning("gateway AgentCard registration failed: %s", exc)
-        return {"error": str(exc)}
-
-
 def run_gateway(
     *,
     config: SampleConfig,
@@ -552,9 +533,6 @@ def run_gateway(
         else None
     )
     app = build_gateway_app(config=config, service=service, task_store=task_store)
-    card = app.state.agent_card
-    if config.gateway_register:
-        asyncio.run(register_gateway_card(card, config=config, env_path=env_path))
     print(
         f"[gateway] A2A gateway on http://{config.gateway_host}:{config.gateway_port} "
         f"(scenario={config.gateway_scenario}, discovery={config.discovery}, "

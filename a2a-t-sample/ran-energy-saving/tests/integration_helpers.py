@@ -75,7 +75,6 @@ def offline_direct_config(
         language=LANGUAGE_EN,
         host="127.0.0.1",
         port=port,
-        registry_url="http://127.0.0.1:5001",
         webhook_port=webhook_port,
         webhook_token="demo-webhook-token",
         webhook_idle_timeout=TEST_WEBHOOK_IDLE_TIMEOUT_SECONDS,

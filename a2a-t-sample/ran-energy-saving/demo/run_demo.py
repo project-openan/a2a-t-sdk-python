@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Three-process launcher of the RAN energy-saving A2A-T sample (ADK client only).
 
-The registry center and the A2A server each bind a port; started in the foreground they would
+The local RAN server binds a port; started in the foreground it would
 block the terminal. This launcher starts them as **background subprocesses** (new layout:
-``registry.registry_main`` and ``protocol.server_app``), waits for their ports, then runs the client
+``protocol.server_app``), waits for its port, then runs the client
 in the foreground — or starts the Web UI as one more managed subprocess with ``--ui`` — and finally
 stops the background processes unless ``--keep-alive`` is given.
 
@@ -31,7 +31,7 @@ Usage:
     python run_demo.py --scenario target --mode manual --ui
     python run_demo.py --scenario reject --transport webhook --model-mode offline
     python run_demo.py --ui --ui-port 8080 --language zh-CN
-    python run_demo.py --keep-alive          # leave registry/server running; stop with --stop
+    python run_demo.py --keep-alive          # leave the local server running; stop with --stop
     python run_demo.py --stop
 """
 
@@ -98,14 +98,12 @@ ENV_CANDIDATES = (CASE_DIR / ".env", SAMPLE_DIR / ".env", SAMPLE_DIR / "env.exam
 #: (the child processes run from ``RUN_DIR``, where relative paths do not resolve).
 _TLS_PATH_KEYS = ("A2AT_SAMPLE_WEBHOOK_TLS_CERT", "A2AT_SAMPLE_WEBHOOK_TLS_KEY")
 
-REGISTRY_MODULE = "demo.registry.registry_main"
 SERVER_MODULE = "protocol.server_app"
 UI_MODULE = "demo.web.serve"
 GATEWAY_MODULE = "protocol.client_gateway"
 OSS_MODULE = "protocol.oss_agent"
 MIE_MODULE = "protocol.mie_agent"
 
-DEFAULT_REGISTRY_PORT = 5001
 DEFAULT_SERVER_PORT = 8000
 DEFAULT_OSS_PORT = 8001
 DEFAULT_MIE_PORT = 8002
@@ -425,11 +423,8 @@ def _write_run_env(
     server_host: str,
     server_port: int,
     webhook_host: str | None = None,
-    registry_host: str,
-    registry_port: int,
     ui_port: int,
     gateway_port: int = 8001,
-    gateway_register: bool = False,
     protocol: str = PROTOCOL_A2A_T,
     oss_port: int = 8001,
     mie_port: int = 8002,
@@ -481,9 +476,6 @@ def _write_run_env(
             "A2AT_SAMPLE_GATEWAY_TASK_DB": str(GATEWAY_TASK_DB_PATH),
             "A2AT_SAMPLE_GATEWAY_HOST": server_host,
             "A2AT_SAMPLE_GATEWAY_PORT": str(gateway_port),
-            "A2AT_SAMPLE_GATEWAY_REGISTER": "1" if gateway_register else "0",
-            "REGISTRY_CENTER_HOST": registry_host,
-            "REGISTRY_CENTER_PORT": str(registry_port),
         }
     )
     if intent_mode:
@@ -689,7 +681,7 @@ def _is_ui_child(pid: int) -> bool:
     """Return whether ``pid`` is the managed ``demo.web.serve`` UI child.
 
     Only this leaf process is safe to restart from the launcher: killing an older launcher that
-    served the UI in-process would also take down the registry/server children it owns.
+    served the UI in-process would also take down the server child it owns.
     """
     return _is_module_child(pid, "demo.web.serve")
 
@@ -1233,23 +1225,23 @@ def _build_parser(
     )
     parser.add_argument(
         "--discovery",
-        default=_env_str(env, "A2AT_SAMPLE_DISCOVERY", "registry"),
+        default=_env_str(env, "A2AT_SAMPLE_DISCOVERY", "direct"),
         choices=list(SUPPORTED_DISCOVERY_MODES),
-        help="server discovery: registry center (default), direct AgentCard, or nms",
+        help="server discovery: direct AgentCard (default) or nms",
     )
     parser.add_argument(
         "--nms",
         action="store_true",
         help=(
-            "connect the client to a real vendor NMS: skip the local registry, RAN server, "
-            "MIE and OSS processes and use A2AT_SAMPLE_NMS_* from the source .env"
+            "connect the client to a real vendor NMS: skip the local RAN server "
+            "and use A2AT_SAMPLE_NMS_* from the source .env"
         ),
     )
     parser.add_argument(
         "--language",
         default=_env_str(env, "A2AT_LANGUAGE", "en-US"),
         choices=list(SUPPORTED_LANGUAGES),
-        help="process-level language of registry, server and client (default: en-US)",
+        help="process-level language of the local server and client (default: en-US)",
     )
     parser.add_argument(
         "--request",
@@ -1340,12 +1332,7 @@ def _build_parser(
         default=default_gateway_port,
         help=f"bind port of the A2A gateway (default: {default_gateway_port}; A2AT_SAMPLE_GATEWAY_PORT)",
     )
-    parser.add_argument(
-        "--gateway-register",
-        action="store_true",
-        help="register the A2A gateway AgentCard with the registry center",
-    )
-    parser.add_argument("--keep-alive", action="store_true", help="leave registry/server running afterwards")
+    parser.add_argument("--keep-alive", action="store_true", help="leave the local server running afterwards")
     parser.add_argument("--keep-logs", action="store_true", help="keep the temporary run directory (logs/.env)")
     parser.add_argument("--stop", action="store_true", help="stop a previous --keep-alive run and exit")
     parser.add_argument("--timeout", type=float, default=30.0, help="seconds to wait for each port")
@@ -1466,8 +1453,6 @@ def main() -> int:
                 "--approval-gate is the local MIE review; a real NMS owns execution approval. "
                 "Use --mode confirm for the send-time intent review instead."
             )
-        if args.discovery != "registry":
-            parser.error("--nms selects nms discovery; do not pass --discovery")
 
     python = sys.executable
     if not _preflight(python, source_env):
@@ -1477,8 +1462,6 @@ def main() -> int:
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     state = _load_state()
     existing = _state_pids(state)
-    registry_host = _env_str(source_values, "REGISTRY_CENTER_HOST", "127.0.0.1")
-    registry_port = _env_int(source_values, "REGISTRY_CENTER_PORT", DEFAULT_REGISTRY_PORT)
     server_host = _env_str(source_values, "A2AT_SAMPLE_HOST", "127.0.0.1")
     server_port = _env_int(source_values, "A2AT_SAMPLE_PORT", DEFAULT_SERVER_PORT)
     webhook_port = _env_int(source_values, "A2AT_SAMPLE_WEBHOOK_PORT", 9000)
@@ -1571,11 +1554,11 @@ def main() -> int:
         if oss_public_url:
             # Unconditional when present: this key must always override the inherited UI value.
             oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] = oss_public_url
-    reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
+    reserved_ports = {args.ui_port} if args.nms else {server_port}
     if args.ui:
         reserved_ports.add(args.ui_port)
     if args.gateway and args.gateway_port in reserved_ports:
-        parser.error(f"--gateway-port {args.gateway_port} collides with the registry/server/UI port")
+        parser.error(f"--gateway-port {args.gateway_port} collides with the server/UI port")
 
     env_path = _write_run_env(
         source=source_env,
@@ -1587,11 +1570,8 @@ def main() -> int:
         webhook_host=args.webhook_host,
         server_host=server_host,
         server_port=server_port,
-        registry_host=registry_host,
-        registry_port=registry_port,
         ui_port=args.ui_port,
         gateway_port=args.gateway_port,
-        gateway_register=args.gateway_register,
         protocol=args.protocol,
         oss_port=args.oss_port,
         mie_port=args.mie_port,
@@ -1622,12 +1602,12 @@ def main() -> int:
     )
 
     if args.nms:
-        # A real NMS run starts no local server, so the registry/server reuse decision does not
-        # apply. A previous local demo's PID record is left untouched.
+        # A real NMS run starts no local server, so the server reuse decision does not apply.
+        # A previous local demo's PID record is left untouched.
         reuse = REUSE_START
     else:
-        # Drop a stale PID file only when its processes are gone (both ports closed).
-        if existing and not _port_open(registry_port) and not _port_open(server_port):
+        # Drop a stale PID file only when its server process is gone.
+        if existing and not _port_open(server_port):
             PID_FILE.unlink(missing_ok=True)
             state = {}
             existing = []
@@ -1667,7 +1647,7 @@ def main() -> int:
                 f"processes and starting fresh"
             )
             _stop_pids(existing)
-            close_ports = [registry_port, server_port]
+            close_ports = [server_port]
             if args.gateway:
                 close_ports.append(args.gateway_port)
             if not _wait_ports_closed(close_ports):
@@ -1805,8 +1785,6 @@ def main() -> int:
             )
             os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = oss_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
         if not args.nms:
-            if start("registry", REGISTRY_MODULE, registry_port) is None:
-                return 1
             # Reusing a compatible keep-alive server must also reuse its trace token: the UI
             # validates that token, so a fresh one would silently drop every server span.
             recorded_token = str(state.get("trace_token") or "") if reuse == REUSE_REUSE else ""
@@ -1877,7 +1855,6 @@ def main() -> int:
                 GATEWAY_MODULE,
                 args.gateway_port,
                 {
-                    "A2AT_SAMPLE_GATEWAY_REGISTER": "1" if args.gateway_register else "0",
                     "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
                 },
             ) is None:
@@ -2084,7 +2061,7 @@ def main() -> int:
     finally:
         ui_pid = processes["ui"].pid if "ui" in processes else None
         if args.keep_alive:
-            # The UI belongs to this launcher run, not to the long-lived registry/server pair:
+            # The UI belongs to this launcher run, not to the long-lived server:
             # stop it with the launcher and keep only the processes that stay alive in the state.
             if ui_pid is not None:
                 _stop_pids([ui_pid])

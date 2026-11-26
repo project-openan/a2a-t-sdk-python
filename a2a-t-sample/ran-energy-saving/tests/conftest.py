@@ -18,7 +18,7 @@ if str(SAMPLE_ROOT) not in sys.path:
 
 from demo.scenario import LANGUAGE_EN  # noqa: E402
 from shared.config import (  # noqa: E402
-    DISCOVERY_REGISTRY,
+    DISCOVERY_DIRECT,
     MODEL_MODE_OFFLINE,
     SAMPLE_ENV_PREFIXES,
     TRANSPORT_SSE,
@@ -127,7 +127,6 @@ def offline_config() -> SampleConfig:
         language=LANGUAGE_EN,
         host="127.0.0.1",
         port=8000,
-        registry_url="http://127.0.0.1:5001",
         webhook_port=9000,
         webhook_token="demo-webhook-token",
         webhook_idle_timeout=30,
@@ -135,7 +134,7 @@ def offline_config() -> SampleConfig:
         adk_model_name="openai/mass/volcengine/deepseek-v4.1-flash",
         adk_model_api_base="http://127.0.0.1:31943/v1",
         adk_model_api_key="not-needed",
-        discovery=DISCOVERY_REGISTRY,
+        discovery=DISCOVERY_DIRECT,
         transport=TRANSPORT_SSE,
         # Existing tests exercise the protocol directly; the processed intent layer has dedicated
         # tests that opt in explicitly.

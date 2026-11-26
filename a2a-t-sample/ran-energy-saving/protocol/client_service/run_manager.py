@@ -22,8 +22,8 @@ from a2a_t.core.metadata import NegotiationContext
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
 from shared.config import (
+    DISCOVERY_DIRECT,
     DISCOVERY_NMS,
-    DISCOVERY_REGISTRY,
     PRE_SEND_VALIDATION_ALWAYS,
     PRE_SEND_VALIDATION_ON,
     SUPPORTED_INTENT_MODES,
@@ -872,7 +872,7 @@ class RunManager:
         scenario: str,
         mode: str,
         transport: str,
-        discovery: str = DISCOVERY_REGISTRY,
+        discovery: str = DISCOVERY_DIRECT,
         user_request: str | None = None,
         *,
         protocol: str = PROTOCOL_A2A_T,

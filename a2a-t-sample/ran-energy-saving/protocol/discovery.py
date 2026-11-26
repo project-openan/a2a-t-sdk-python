@@ -1,10 +1,9 @@
 """Agent discovery of the RAN energy-saving client.
 
-Two modes (design §7.1):
+Two modes:
 
-* ``registry`` (default): query the registry center by ``(organization, name)`` and use the first
-  HTTP interface of the first returned card;
-* ``direct``: read ``/.well-known/agent-card.json`` from the server base URL.
+* ``direct`` (default): read ``/.well-known/agent-card.json`` from the server base URL;
+* ``nms``: use the static vendor AgentCard of the real NMS A2A surface.
 
 Both modes return a :class:`DiscoveredAgent` carrying the parsed ``AgentCard`` and the endpoint URL
 the plain a2a-sdk client must call.
@@ -22,8 +21,7 @@ from a2a.types import AgentCard
 from a2a.utils.constants import TransportProtocol
 from a2a_t.core.metadata import NEGOTIATION_T_EXTENSION_URI, TASK_T_EXTENSION_URI
 from google.protobuf.json_format import ParseDict, ParseError
-from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS, DISCOVERY_REGISTRY
-from shared.registry_client import query_by_name_org
+from shared.config import DISCOVERY_DIRECT, DISCOVERY_NMS
 
 #: Well-known path of the direct AgentCard endpoint.
 AGENT_CARD_WELL_KNOWN_PATH: Final[str] = "/.well-known/agent-card.json"
@@ -114,44 +112,6 @@ async def fetch_agent_card(
     return parse_agent_card(payload)
 
 
-async def discover_from_registry(
-    *,
-    organization: str,
-    name: str,
-    registry_center_url: str | None = None,
-    env_path: Path | None = None,
-    timeout_seconds: float = 30.0,
-    http_client: Any | None = None,
-) -> DiscoveredAgent:
-    """Discover the agent through the registry center.
-
-    Raises:
-        DiscoveryError: when the registry has no card with a usable HTTP interface.
-    """
-    data = await query_by_name_org(
-        organization=organization,
-        name=name,
-        env_path=env_path,
-        registry_center_url=registry_center_url,
-        timeout_seconds=timeout_seconds,
-        http_client=http_client,
-    )
-    cards = data.get("agentCards") if isinstance(data, Mapping) else None
-    if not isinstance(cards, list):
-        raise DiscoveryError("The registry response carries no agentCards list")
-    interface_errors: list[str] = []
-    for raw_card in cards:
-        if not isinstance(raw_card, Mapping):
-            continue
-        try:
-            card = parse_agent_card(raw_card)
-            return discovered_from_card(card)
-        except DiscoveryError as exc:
-            interface_errors.append(str(exc))
-    detail = "; ".join(interface_errors) if interface_errors else "no agent cards returned"
-    raise DiscoveryError(f"No usable AgentCard for '{organization}/{name}': {detail}")
-
-
 def nms_agent_card(base_url: str, *, name: str = "RAN Energy Saving Agent") -> AgentCard:
     """Build the static AgentCard of a vendor NMS that publishes no ``/.well-known`` card.
 
@@ -208,10 +168,9 @@ def nms_agent_card(base_url: str, *, name: str = "RAN Energy Saving Agent") -> A
 
 async def discover_agent(
     *,
-    discovery: str = DISCOVERY_REGISTRY,
+    discovery: str = DISCOVERY_DIRECT,
     organization: str,
     name: str,
-    registry_center_url: str | None = None,
     direct_base_url: str | None = None,
     nms_a2a_base: str | None = None,
     env_path: Path | None = None,
@@ -221,13 +180,12 @@ async def discover_agent(
     """Discover the server endpoint in the configured mode.
 
     Args:
-        discovery: ``registry`` (default), ``direct``, or ``nms``.
-        organization: Provider organization the registry lookup uses.
-        name: Agent card name the registry lookup uses.
-        registry_center_url: Registry base URL; defaults to the sample configuration.
+        discovery: ``direct`` (default) or ``nms``.
+        organization: Provider organization of the sample AgentCard.
+        name: Agent card name of the sample AgentCard.
         direct_base_url: Server base URL used by the direct mode.
         nms_a2a_base: Full A2A surface of a vendor NMS used by the ``nms`` mode.
-        env_path: Optional ``.env`` path for the registry client.
+        env_path: Optional ``.env`` path (kept for callers that share the config loader).
         timeout_seconds: HTTP timeout.
         http_client: Optional injected HTTP client (tests).
 
@@ -244,13 +202,4 @@ async def discover_agent(
             raise ValueError("Direct discovery requires direct_base_url")
         card = await fetch_agent_card(direct_base_url, timeout_seconds=timeout_seconds, http_client=http_client)
         return discovered_from_card(card)
-    if discovery != DISCOVERY_REGISTRY:
-        raise ValueError(f"Unsupported discovery mode: {discovery}")
-    return await discover_from_registry(
-        organization=organization,
-        name=name,
-        registry_center_url=registry_center_url,
-        env_path=env_path,
-        timeout_seconds=timeout_seconds,
-        http_client=http_client,
-    )
+    raise ValueError(f"Unsupported discovery mode: {discovery}")
