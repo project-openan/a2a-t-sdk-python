@@ -45,7 +45,6 @@ import { createTrace, entryOfRow } from "./trace.js";
 import { createWire } from "./wire.js";
 import { renderIntent, validationBlock } from "./intent.js";
 import {
-  approvalCard,
   decisionCard,
   decisionPayload,
   intentCard,
@@ -288,8 +287,6 @@ const ui = {
   //: Run left behind by a page reload; only an explicit click reattaches to it.
   resumableRunId: null,
   source: null,
-  mieSource: null,
-  mieEnabled: false,
   busy: false,
   tab: "wire",
   wireEntry: null,
@@ -442,7 +439,6 @@ async function loadStartupState() {
   ui.protocol = ui.meta.protocol || ui.meta.defaultProtocol || "a2a-t";
   const bootScenarios = scenariosForProtocol(ui.protocol);
   if (!bootScenarios.includes(ui.selected)) ui.selected = bootScenarios[0] || null;
-  ui.mieEnabled = Boolean(ui.meta.mieEnabled);
   // Browsers restore a checked checkbox across reloads. A restored Loop would auto-start the next
   // scenario as soon as a run finishes, which reads as "the page sent a request by itself"; every
   // reload therefore starts with Loop off and the operator opts in again.
@@ -452,7 +448,6 @@ async function loadStartupState() {
   renderProtocol();
   renderPresets();
   renderBottomCopy();
-  subscribeMie();
   render();
   await offerActiveRunRestore();
 }
@@ -935,8 +930,6 @@ function resetRunState() {
   ui.shadow.protocol = ui.protocol;
   // The UI process knows whether it owns an execution approval gate; the run's own frames may
   // confirm it later. A missing key is not an approval.
-  ui.view.approvalGate = ui.meta?.approvalGate === true;
-  ui.shadow.approvalGate = ui.view.approvalGate;
   ui.frameLog = [];
   ui.seenFrames = new Set();
   ui.lastScene = null;
@@ -1550,51 +1543,6 @@ async function loadWire(runId) {
   }
 }
 
-/** Subscribe to the MIE Agent approval stream of the pure A2A three-hop mode. */
-function subscribeMie() {
-  if (!ui.mieEnabled) return;
-  if (ui.mieSource) ui.mieSource.close();
-  const source = new EventSource("/api/mie/events");
-  ui.mieSource = source;
-  source.onmessage = (event) => {
-    let payload;
-    try {
-      payload = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (payload !== null && typeof payload === "object") handleMieEvent(payload);
-  };
-}
-
-/** Apply one MIE approval event: fill or clear the card; release the held scene on a decision. */
-function handleMieEvent(payload) {
-  if (payload.type === "approval_requested") {
-    // Store the card now, but let the run SSE's approval scene decide when to show it. The MIE
-    // event usually arrives before the OSS relays the wait, and showing it at step 1 would let
-    // the audience approve before the story reaches the approval step.
-    ui.view.mieApproval = { ...payload, requestedAt: new Date().toISOString() };
-    ui.shadow.mieApproval = ui.view.mieApproval;
-    render();
-    return;
-  }
-  if (payload.type === "approval_resolved") {
-    const resolved = {
-      approved: payload.approved === true,
-      reason: payload.reason ?? null,
-    };
-    ui.view.mieResolved = resolved;
-    ui.shadow.mieResolved = resolved;
-    ui.view.mieApproval = null;
-    ui.shadow.mieApproval = null;
-    ui.view.mieWaiting = false;
-    ui.shadow.mieWaiting = false;
-    if (resolved.approved) stage.approvalResolved(ui.copy, ui.view);
-    player.release();
-    render();
-  }
-}
-
 function enqueueFrame(frame) {
   const key = frameKey(frame);
   if (key !== null) {
@@ -1889,14 +1837,8 @@ function renderSteps() {
   const pending = pendingHuman(ui.view);
   const stage = stageOf(ui.view);
   const expectedNegotiation = negotiationExpected(ui.view);
-  const approvalSeen = ui.view.approval !== null || ui.view.approvalState !== null;
   const intentEnabled = ui.meta?.intentReview === true;
   const runProtocol = ui.view.protocol || ui.protocol;
-  // Standard A2A reviews through MIE; the A2A-T extension uses the server gate when it is on.
-  const approvalEnabled =
-    runProtocol === "pure"
-      ? ui.meta?.mieEnabled === true
-      : ui.meta?.approvalGate === true;
   const finished = ui.view.finished;
   const plain = runProtocol === "plain";
   const plainNa = new Set(plain ? ["understand", "intent", "negotiate"] : []);
@@ -1928,8 +1870,7 @@ function renderSteps() {
       state = "skip";
     }
     if (key === "intent" && !intentEnabled) state = "skip";
-    if (key === "approval" && !approvalEnabled) state = "skip";
-    if (key === "approval" && stage === "done" && !approvalSeen) state = "skip";
+    if (key === "approval") state = "skip";
     item.className = state;
     const button = item.querySelector("button");
     const when = button.querySelector("em");
@@ -2044,7 +1985,6 @@ function pendingCard() {
   return (
     intentCard(ui.view, ui.copy) ||
     decisionCard(ui.view, ui.copy) ||
-    approvalCard(ui.view, ui.copy) ||
     validationCard(ui.view, ui.copy)
   );
 }
@@ -2169,7 +2109,6 @@ function appendActionRow(card) {
         submitIntent(option.action);
         return;
       }
-      if (card.type === "approval") submitApproval(option.action === "approve");
     });
     els.choices.append(button);
   }
@@ -2239,71 +2178,6 @@ async function submitIntent(action) {
     const message = error instanceof Error ? error.message : String(error);
     els.sayDetail.append(el("span", "error", `${ui.copy.intentReview.submitFailed} ${message}`));
     renderChoices(card);
-  }
-}
-
-async function submitApproval(approved) {
-  if (ui.submitting) return;
-  ui.submitting = true;
-  const card = approvalCard(ui.view, ui.copy);
-  if (card) renderChoices(card);
-  try {
-    const endpoint =
-      card?.pure && card.taskId
-        ? `/api/mie/approvals/${encodeURIComponent(card.taskId)}`
-        : `/api/runs/${encodeURIComponent(ui.view.runId)}/approvals`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ approved }),
-    });
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      const error = new Error(detail.error || `HTTP ${response.status}`);
-      error.code = typeof detail.code === "string" ? detail.code : "";
-      throw error;
-    }
-    ui.submitting = false;
-    ui.cardError = "";
-    if (card?.pure) {
-      ui.view.mieResolved = { approved, reason: null };
-      ui.shadow.mieResolved = ui.view.mieResolved;
-      ui.view.mieApproval = null;
-      ui.shadow.mieApproval = null;
-      ui.view.mieWaiting = false;
-      ui.shadow.mieWaiting = false;
-      if (approved) stage.approvalResolved(ui.copy, ui.view);
-    } else {
-      ui.view.approvalState = approved ? "approved" : "rejected";
-      // The scene of the next frame is chosen from the shadow state at enqueue time. The server's
-      // "Approved. Applying the plan." frame arrives before its approval-resolved span, so without
-      // this the show would replay "strategy & start" after the MIE review.
-      ui.shadow.approvalState = ui.view.approvalState;
-      if (approved) stage.approvalResolved(ui.copy, ui.view);
-    }
-    player.release();
-    render();
-  } catch (error) {
-    ui.submitting = false;
-    const message = error instanceof Error ? error.message : String(error);
-    const code = error instanceof Error && typeof error.code === "string" ? error.code : "";
-    const localized = code && ui.copy.approval.errors ? ui.copy.approval.errors[code] : "";
-    ui.cardError = localized || `${ui.copy.approval.submitFailed} ${message}`;
-    if (
-      code === "approval_not_supported_in_nms" ||
-      code === "run_not_running" ||
-      code === "approval_not_pending"
-    ) {
-      // No local gate exists or the gate already closed: clear the card instead of trapping the
-      // playback on a button that can never succeed.
-      ui.view.approvalState = null;
-      ui.shadow.approvalState = null;
-      ui.view.approval = null;
-      ui.shadow.approval = null;
-      player.release();
-    }
-    render();
-    if (card) renderChoices(card);
   }
 }
 

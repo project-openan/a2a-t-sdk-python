@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -15,8 +14,6 @@ from shared.config import (
     ADK_OUTPUT_SCHEMA_WITH_TOOLS_FALSE,
     ADK_OUTPUT_SCHEMA_WITH_TOOLS_TRUE,
     ADK_SESSION_RETENTION_DAYS_ENV_KEY,
-    APPROVAL_GATE_ENV_KEY,
-    APPROVAL_TIMEOUT_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
     CLIENT_MIN_THROUGHPUT_ENV_KEY,
@@ -44,13 +41,8 @@ from shared.config import (
     LANGFUSE_UI_BASE_URL_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
-    LONG_TASK_MODE_ENV_KEY,
-    LONG_TASK_SETTLE_ENV_KEY,
     LONG_TASK_TRACKING_ENV_KEY,
     MANUAL_DECISION_TIMEOUT_ENV_KEY,
-    MIE_HOST_ENV_KEY,
-    MIE_PORT_ENV_KEY,
-    MIE_URL_ENV_KEY,
     MODEL_MODE_LIVE,
     MODEL_MODE_OFFLINE,
     NMS_A2A_BASE_ENV_KEY,
@@ -72,21 +64,15 @@ from shared.config import (
     NMS_TOKEN_VALUE_ENV_KEY,
     NMS_VERIFY_TLS_ENV_KEY,
     NMS_WIRE_LOG_ENV_KEY,
-    OSS_HOST_ENV_KEY,
-    OSS_PORT_ENV_KEY,
-    OSS_TASK_DB_ENV_KEY,
     PLANNER_MAX_STEPS_ENV_KEY,
     PLANNER_MODEL_ENV_KEY,
     PLANNER_TIMEOUT_ENV_KEY,
     PROTOCOL_MODE_ENV_KEY,
-    PURE_APPROVAL_GATE_ENV_KEY,
     PURE_FOLLOWUP_ENV_KEY,
     PURE_HOP_DIRECT,
     PURE_HOP_ENV_KEY,
     PURE_HOP_NMS,
-    PURE_HOP_OSS,
     PURE_MESSAGE_MODE_ENV_KEY,
-    RAN_URL_ENV_KEY,
     RUN_DIR_ENV_KEY,
     RUNS_DIR_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
@@ -113,14 +99,11 @@ _ENV_KEYS = (
     HTTP_TIMEOUT_ENV_KEY,
     LLM_TIMEOUT_ENV_KEY,
     LLM_MAX_ATTEMPTS_ENV_KEY,
-    LONG_TASK_MODE_ENV_KEY,
-    LONG_TASK_SETTLE_ENV_KEY,
     LONG_TASK_TRACKING_ENV_KEY,
     TASK_POLL_INTERVAL_ENV_KEY,
     NMS_POLL_AFTER_ENV_KEY,
     NMS_STATE_POLL_ENV_KEY,
     TASK_DB_ENV_KEY,
-    OSS_TASK_DB_ENV_KEY,
     CLIENT_DB_ENV_KEY,
     CLIENT_MEMORY_TURNS_ENV_KEY,
     ADK_SESSION_RETENTION_DAYS_ENV_KEY,
@@ -129,18 +112,9 @@ _ENV_KEYS = (
     GATEWAY_TASK_DB_ENV_KEY,
     SERVER_AUTH_TOKEN_ENV_KEY,
     PROTOCOL_MODE_ENV_KEY,
-    OSS_HOST_ENV_KEY,
-    OSS_PORT_ENV_KEY,
     TRACE_URL_ENV_KEY,
     TRACE_TOKEN_ENV_KEY,
     TRACE_DIR_ENV_KEY,
-    APPROVAL_GATE_ENV_KEY,
-    APPROVAL_TIMEOUT_ENV_KEY,
-    PURE_APPROVAL_GATE_ENV_KEY,
-    MIE_HOST_ENV_KEY,
-    MIE_PORT_ENV_KEY,
-    MIE_URL_ENV_KEY,
-    RAN_URL_ENV_KEY,
     WEBHOOK_PUBLIC_URL_ENV_KEY,
     WEBHOOK_TLS_CERT_ENV_KEY,
     WEBHOOK_TLS_KEY_ENV_KEY,
@@ -230,7 +204,7 @@ def test_topology_and_trace_keys_load_from_the_env_file(tmp_path: Path) -> None:
 
     The launcher writes these keys into the per-run file. The server/OSS entry points used to read
     raw ``os.environ``, so a manually started process silently used the default protocol mode,
-    callback host/port, MIE URL and no trace emitter.
+    callback host/port and no trace emitter.
     """
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -238,18 +212,9 @@ def test_topology_and_trace_keys_load_from_the_env_file(tmp_path: Path) -> None:
             [
                 "A2AT_SAMPLE_MODEL_MODE=offline",
                 f"{PROTOCOL_MODE_ENV_KEY}=both",
-                f"{OSS_HOST_ENV_KEY}=0.0.0.0",
-                f"{OSS_PORT_ENV_KEY}=8011",
                 f"{TRACE_URL_ENV_KEY}=http://127.0.0.1:8080",
                 f"{TRACE_TOKEN_ENV_KEY}=trace-token",
                 f"{TRACE_DIR_ENV_KEY}={tmp_path / 'traces'}",
-                f"{APPROVAL_TIMEOUT_ENV_KEY}=120",
-                f"{MIE_HOST_ENV_KEY}=127.0.0.1",
-                f"{MIE_PORT_ENV_KEY}=8002",
-                f"{MIE_URL_ENV_KEY}=http://127.0.0.1:8002",
-                f"{RAN_URL_ENV_KEY}=http://127.0.0.1:8000",
-                f"{APPROVAL_GATE_ENV_KEY}=1",
-                f"{PURE_APPROVAL_GATE_ENV_KEY}=0",
             ]
         ),
         encoding="utf-8",
@@ -258,18 +223,9 @@ def test_topology_and_trace_keys_load_from_the_env_file(tmp_path: Path) -> None:
     config = load_config(env_path=env_file)
 
     assert config.protocol_mode == "both"
-    assert config.oss_host == "0.0.0.0"
-    assert config.oss_port == 8011
     assert config.trace_url == "http://127.0.0.1:8080"
     assert config.trace_token == "trace-token"
     assert config.trace_dir == str(tmp_path / "traces")
-    assert config.approval_timeout_seconds == 120.0
-    assert config.mie_host == "127.0.0.1"
-    assert config.mie_port == 8002
-    assert config.mie_url == "http://127.0.0.1:8002"
-    assert config.ran_url == "http://127.0.0.1:8000"
-    assert config.approval_gate is True
-    assert config.pure_approval_gate is False
 
 
 def test_an_unsupported_protocol_mode_fails_loudly(tmp_path: Path) -> None:
@@ -294,60 +250,6 @@ def test_task_db_path_is_optional_and_must_be_absolute(tmp_path: Path) -> None:
 
     env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
     assert load_config(env_path=env_file).task_db_path is None
-
-
-def test_oss_task_db_path_is_optional_and_must_be_absolute(tmp_path: Path) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text(f"{OSS_TASK_DB_ENV_KEY}={tmp_path / 'oss-tasks.sqlite3'}\n", encoding="utf-8")
-
-    config = load_config(env_path=env_file)
-
-    assert config.oss_task_db_path == str(tmp_path / "oss-tasks.sqlite3")
-
-    env_file.write_text(f"{OSS_TASK_DB_ENV_KEY}=relative/oss-tasks.sqlite3\n", encoding="utf-8")
-    with pytest.raises(ValueError, match=OSS_TASK_DB_ENV_KEY):
-        load_config(env_path=env_file)
-
-    env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
-    assert load_config(env_path=env_file).oss_task_db_path is None
-
-
-def test_long_task_mode_defaults_and_overrides(tmp_path: Path) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
-    config = load_config(env_path=env_file)
-
-    assert config.long_task_mode == "auto"
-    assert config.long_task_settle_seconds == 5.0
-    assert config.task_poll_interval_seconds == 120.0
-    # The vendor NMS often sends its first status update ~20 s after the reply; a 15 s handoff
-    # dropped that push (and released the webhook subscription before it arrived).
-    assert config.nms_poll_after_silence == 120.0
-    # The vendor NMS counts task polls against the same quota bucket as message:send; the 5 s
-    # cadence exhausted it (docs-local/nms-真机-429问题.md).
-    assert config.nms_state_poll_interval == 15.0
-    assert config.defer_to_tracker is False
-    # Polling a Task the flow left incomplete is opt-in; the default run ends at the flow
-    # boundary instead of sending repeated tasks/get requests to the RAN agent.
-    assert config.long_task_tracking is False
-
-    env_file.write_text(
-        f"{LONG_TASK_MODE_ENV_KEY}=off\n{LONG_TASK_SETTLE_ENV_KEY}=12\n"
-        f"{TASK_POLL_INTERVAL_ENV_KEY}=7\n{NMS_POLL_AFTER_ENV_KEY}=9\n"
-        f"{NMS_STATE_POLL_ENV_KEY}=2\n{LONG_TASK_TRACKING_ENV_KEY}=1\n",
-        encoding="utf-8",
-    )
-    config = load_config(env_path=env_file)
-    assert config.long_task_mode == "off"
-    assert config.long_task_settle_seconds == 12.0
-    assert config.task_poll_interval_seconds == 7.0
-    assert config.nms_poll_after_silence == 9.0
-    assert config.nms_state_poll_interval == 2.0
-    assert config.long_task_tracking is True
-
-    env_file.write_text(f"{LONG_TASK_MODE_ENV_KEY}=nope\n", encoding="utf-8")
-    with pytest.raises(ValueError, match=LONG_TASK_MODE_ENV_KEY):
-        load_config(env_path=env_file)
 
 
 def test_client_db_gateway_and_planner_settings(tmp_path: Path) -> None:
@@ -1183,32 +1085,6 @@ def test_the_nms_discovery_defaults_to_the_direct_hop(tmp_path: Path) -> None:
     )
 
     assert load_config(env_path=env_file).pure_hop == PURE_HOP_NMS
-
-
-def test_the_proxy_hop_with_a_vendor_nms_loads_but_is_deprecated(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The old proxy+NMS topology is explicit only; the local three-hop demo keeps it by default."""
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "A2AT_SAMPLE_DISCOVERY=nms",
-                f"{PURE_HOP_ENV_KEY}={PURE_HOP_OSS}",
-                f"{NMS_A2A_BASE_ENV_KEY}=https://nms.example:31127/a2a/json",
-                f"{NMS_TOKEN_URL_ENV_KEY}=https://nms.example:27417/rest/plat/smapp/v1/sessions",
-                f"{NMS_TOKEN_USER_ENV_KEY}=northbound",
-                f"{NMS_TOKEN_VALUE_ENV_KEY}=secret",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    with caplog.at_level(logging.WARNING, logger="shared.config"):
-        config = load_config(env_path=env_file)
-
-    assert config.pure_hop == PURE_HOP_OSS
-    assert "deprecated" in caplog.text
 
 
 def test_pure_hop_rejects_an_unknown_value(tmp_path: Path) -> None:

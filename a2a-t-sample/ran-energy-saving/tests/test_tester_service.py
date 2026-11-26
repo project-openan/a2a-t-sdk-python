@@ -785,7 +785,6 @@ async def test_an_a2a_item_has_no_sdk_stages(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -810,7 +809,6 @@ def test_a2a_with_an_sdk_only_stop_stage_is_rejected(tmp_path: Path) -> None:
             case_ids=[1],
             protocols=[PROTOCOL_A2A],
             stop_after="validate",
-            approval=None,
             timeout_seconds=2,
         )
 
@@ -820,7 +818,6 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
     manager._catalog.get(1)["runner"] = {
         "scenario": "runner-scenario",
         "language": "zh-CN",
-        "approval": "reject",
         "timeout_seconds": 7,
         "pre_send_validation": "off",
     }
@@ -828,7 +825,6 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch = manager._batches[str(created["batchId"])]
@@ -845,7 +841,6 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
     case = manager._catalog.get(1)
     assert case is not None
     assert manager._resolved_timeout(batch, case) == 7
-    assert manager._resolved_approval(batch, case) == "reject"
 
 
 async def test_live_decision_mode_is_rejected_offline(tmp_path: Path) -> None:
@@ -856,7 +851,6 @@ async def test_live_decision_mode_is_rejected_offline(tmp_path: Path) -> None:
             case_ids=[1],
             protocols=[PROTOCOL_A2A_T],
             stop_after="final",
-            approval=None,
             timeout_seconds=2,
             decision_mode=DECISION_MODE_LIVE,
         )
@@ -868,7 +862,6 @@ async def test_live_decision_mode_uses_auto_for_a2a_t(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
         decision_mode=DECISION_MODE_LIVE,
     )
@@ -1075,29 +1068,6 @@ async def test_an_agent_pure_item_gets_its_client_quality(tmp_path: Path) -> Non
     )[0]
     assert "The region is A2ATestRegion." in expected_section
     assert "Region: A2ATestRegion." not in expected_section
-
-
-def test_an_agent_pure_batch_rejects_the_oss_proxy_hop(tmp_path: Path) -> None:
-    """The OSS proxy is a deprecated hop; it cannot host an agent-authored reply."""
-    manager = _manager(
-        tmp_path, _FakeRuns(_finish), model_mode="live", pure_hop="oss"
-    )
-
-    with pytest.raises(ValueError, match="OSS"):
-        manager.create(
-            case_ids=[51],
-            protocols=[PROTOCOL_A2A],
-            stop_after="final",
-            negotiation_source="agent",
-        )
-    # The script source still runs the recorded dialogue through the proxy.
-    created = manager.create(
-        case_ids=[51],
-        protocols=[PROTOCOL_A2A],
-        stop_after="final",
-        negotiation_source="script",
-    )
-    assert created["batchId"]
 
 
 async def test_an_agent_negotiation_item_gets_its_client_quality(tmp_path: Path) -> None:
@@ -1369,7 +1339,6 @@ async def test_cancel_marks_the_item_cancelled_not_passed(tmp_path: Path) -> Non
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=30,
     )
     batch_id = str(created["batchId"])
@@ -1390,7 +1359,6 @@ async def test_load_restores_the_persisted_stages(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
     batch_id = str(created["batchId"])
@@ -1426,7 +1394,6 @@ async def test_rerun_uses_a_new_run_identity(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
     batch_id = str(created["batchId"])
@@ -1453,7 +1420,6 @@ async def test_rerun_is_rejected_while_running(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=30,
     )
     batch_id = str(created["batchId"])
@@ -1476,7 +1442,6 @@ def test_partial_status_counts_waiting_stages(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
     batch = manager._batches[str(created["batchId"])]
@@ -1495,7 +1460,6 @@ async def test_working_timeout_defaults_to_sixty_seconds(tmp_path: Path) -> None
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
     batch = manager._batches[str(created["batchId"])]
@@ -1511,7 +1475,6 @@ async def test_a_persisted_run_can_still_be_reported_as_error(tmp_path: Path) ->
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
     batch = manager._batches[str(created["batchId"])]
@@ -1537,7 +1500,6 @@ async def test_a_negotiation_cases_task_t_is_recorded_not_asserted(tmp_path: Pat
         case_ids=[32],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=5,
     )
     await manager.start(str(created["batchId"]))
@@ -1609,7 +1571,6 @@ async def test_an_a2a_t_modify_continues_the_task_it_just_created(tmp_path: Path
         case_ids=[13],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1644,7 +1605,6 @@ async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
         case_ids=[13],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
         decision_mode=DECISION_MODE_LIVE,
     )
@@ -1669,7 +1629,6 @@ async def test_a_negotiation_case_without_a_parsed_reply_never_starts_a_run(
         case_ids=[32],
         protocols=[PROTOCOL_A2A_T],
         stop_after="negotiate",
-        approval=None,
         timeout_seconds=2,
         decision_mode="scripted",
     )
@@ -1698,7 +1657,6 @@ async def test_a_negotiating_baseline_is_recorded_as_failed_with_its_run(tmp_pat
         case_ids=[13],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1724,7 +1682,6 @@ async def test_a_pure_modify_continues_the_outer_task_it_just_created(tmp_path: 
         case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1767,7 +1724,6 @@ async def test_a_proxy_baseline_that_failed_downstream_never_becomes_the_modify_
         case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1793,7 +1749,6 @@ async def test_a_direct_pure_modify_continues_the_vendor_task(tmp_path: Path) ->
         case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1819,7 +1774,6 @@ async def test_a_proxy_pure_modify_still_waits_for_the_outer_working_state(tmp_p
         case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1840,7 +1794,6 @@ async def test_a_pure_modify_refuses_a_terminal_baseline_task(tmp_path: Path) ->
         case_ids=[13],
         protocols=[PROTOCOL_A2A],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -1988,7 +1941,6 @@ async def test_a_validate_only_batch_freezes_the_case_reference_and_intent(
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2014,7 +1966,6 @@ async def test_a_full_run_records_the_trace_id_and_answer(tmp_path: Path) -> Non
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2044,7 +1995,6 @@ async def test_a_full_flow_item_gets_its_task_t_comparison(tmp_path: Path) -> No
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     await manager.start(str(created["batchId"]))
@@ -2078,7 +2028,6 @@ async def test_a_full_flow_item_gets_its_validation_stage(tmp_path: Path) -> Non
         case_ids=[51],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     await manager.start(str(created["batchId"]))
@@ -2103,7 +2052,6 @@ async def test_a_full_flow_task_t_mismatch_fails_the_task_t_stage(tmp_path: Path
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     await manager.start(str(created["batchId"]))
@@ -2138,7 +2086,6 @@ async def _run_item_with_server_intent(
         case_ids=[1],
         protocols=[protocol],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2224,7 +2171,7 @@ async def test_an_unfinished_flow_reason_is_visible_in_the_item(tmp_path: Path) 
 
     manager = _manager(tmp_path, _FakeRuns(builder))
     created = manager.create(
-        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="final", approval=None
+        case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="final"
     )
     batch_id = str(created["batchId"])
     await manager.start(batch_id)
@@ -2252,7 +2199,7 @@ async def test_a_run_exception_is_visible_on_the_item_and_not_hidden_as_waiting(
 
     manager = _manager(tmp_path, _FakeRuns(builder))
     created = manager.create(
-        case_ids=[1], protocols=[PROTOCOL_A2A], stop_after="accepted", approval=None
+        case_ids=[1], protocols=[PROTOCOL_A2A], stop_after="accepted"
     )
     batch_id = str(created["batchId"])
     await manager.start(batch_id)
@@ -2456,7 +2403,6 @@ async def test_an_assertion_off_intent_makes_no_judge_call(tmp_path: Path) -> No
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2484,7 +2430,6 @@ async def test_the_intent_verdict_is_persisted_in_the_snapshot(tmp_path: Path) -
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2530,7 +2475,6 @@ async def test_the_item_snapshot_carries_the_langfuse_trace_url(tmp_path: Path) 
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2554,7 +2498,6 @@ async def test_the_langfuse_url_is_recovered_from_the_live_run_after_the_evidenc
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2576,7 +2519,6 @@ async def test_a_working_item_releases_its_remote_task_after_the_evidence(
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="working",
-        approval=None,
         timeout_seconds=1,
     )
     batch_id = str(created["batchId"])
@@ -2597,7 +2539,6 @@ async def test_keep_tasks_leaves_the_remote_task_running(tmp_path: Path) -> None
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="working",
-        approval=None,
         timeout_seconds=1,
         keep_tasks=True,
     )
@@ -2628,7 +2569,6 @@ async def test_shutdown_releases_the_runs_of_finished_batches(tmp_path: Path) ->
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=1,
     )
     batch = manager._batches[str(created["batchId"])]
@@ -2647,7 +2587,6 @@ def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=None,
     )
 
@@ -2661,7 +2600,6 @@ def test_the_default_decision_mode_stays_scripted_offline(tmp_path: Path) -> Non
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=None,
     )
 
@@ -2674,7 +2612,6 @@ async def test_a_rerun_clears_the_previous_arbitration_evidence(tmp_path: Path) 
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=None,
     )
     batch_id = str(created["batchId"])
@@ -2779,7 +2716,6 @@ async def test_the_sdk_stages_build_their_client_from_the_ui_env_path(
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -2796,7 +2732,6 @@ async def test_a_blocked_case_with_a_followup_records_the_interception(tmp_path:
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -2838,7 +2773,6 @@ async def test_a_blocked_case_runs_the_original_and_corrects_inside_the_run(
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -2894,7 +2828,6 @@ async def test_a_blocked_modify_runs_the_original_then_corrects_to_the_followup(
         case_ids=[63],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -2920,7 +2853,6 @@ async def test_a_blocked_case_without_a_followup_keeps_the_original_flow(tmp_pat
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -2942,7 +2874,6 @@ async def test_a_followup_that_is_still_blocked_fails_the_item(tmp_path: Path) -
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -2972,7 +2903,6 @@ async def test_a_full_flow_followup_that_is_still_blocked_says_so(tmp_path: Path
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3001,7 +2931,6 @@ async def test_an_interception_that_did_not_fire_skips_the_followup(tmp_path: Pa
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3042,7 +2971,6 @@ async def test_a_full_flow_case_whose_interception_did_not_fire_dispatches_the_o
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3090,7 +3018,6 @@ async def test_a_rerun_after_a_process_restart_rebuilds_the_correction(tmp_path:
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
     await first.start(str(created["batchId"]))
@@ -3132,7 +3059,6 @@ async def test_a_full_flow_blocked_modify_that_did_not_fire_falls_back_to_the_or
         case_ids=[63],
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3161,7 +3087,6 @@ async def test_a_pure_a2a_item_ignores_a_followup(tmp_path: Path) -> None:
         case_ids=[22],
         protocols=[PROTOCOL_A2A],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3181,7 +3106,6 @@ async def test_an_unblocked_case_ignores_a_followup(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3200,7 +3124,6 @@ async def test_load_restores_the_interception_record(tmp_path: Path) -> None:
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
     batch_id = str(created["batchId"])
@@ -3230,7 +3153,6 @@ async def test_a_case_file_followup_is_used_without_test_injection(tmp_path: Pat
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3308,7 +3230,6 @@ def test_a_paired_batch_runs_blocked_cases_under_both_protocols(tmp_path: Path) 
         case_ids=[1, 22],
         protocols=[PROTOCOL_A2A_T, PROTOCOL_A2A],
         stop_after="send",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -3330,7 +3251,6 @@ def test_a_single_protocol_batch_keeps_blocked_cases(tmp_path: Path) -> None:
         case_ids=[22],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        approval=None,
         timeout_seconds=2,
     )
 
@@ -4186,7 +4106,6 @@ def _negotiation_batch(item: CaseItem) -> _Batch:
         case_ids=[item.case_id],
         protocols=[PROTOCOL_A2A_T],
         stop_after="negotiate",
-        approval=None,
         timeout_seconds=1.0,
         items=[item],
     )
@@ -4308,7 +4227,6 @@ async def _run_final(tmp_path: Path, run: RunState) -> StageResult:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=1.0,
         items=[item],
     )

@@ -15,7 +15,6 @@ from typing import Any
 import demo.run_demo as run_demo
 import pytest
 from dotenv import dotenv_values
-from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.run_constants import (
     PROTOCOL_A2A_T,
     PROTOCOL_MODE_BOTH,
@@ -52,10 +51,6 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     assert client_db.is_absolute()
     assert client_db == run_demo.CLIENT_DB_PATH
     assert client_db.name == "client-state.sqlite3"
-    oss_db = Path(str(values["A2AT_SAMPLE_OSS_TASK_DB"]))
-    assert oss_db.is_absolute()
-    assert oss_db == run_demo.OSS_TASK_DB_PATH
-    assert oss_db.name == "oss-task-status.sqlite3"
     gateway_db = Path(str(values["A2AT_SAMPLE_GATEWAY_TASK_DB"]))
     assert gateway_db.is_absolute()
     assert gateway_db == run_demo.GATEWAY_TASK_DB_PATH
@@ -81,7 +76,6 @@ def test_write_run_env_carries_the_pure_message_mode_override(
         server_port=8000,
         ui_port=8081,
         protocol="both",
-        oss_port=8011,
         pure_message_mode="stream",
     )
 
@@ -106,14 +100,12 @@ def test_write_run_env_keeps_nms_discovery_for_pure_nms(monkeypatch: pytest.Monk
         server_port=8000,
         ui_port=8081,
         protocol="pure",
-        oss_port=8011,
     )
 
     values = dotenv_values(env_path)
     assert values["A2AT_SAMPLE_DISCOVERY"] == "nms"
     assert values["A2AT_SAMPLE_TRANSPORT"] == "webhook"
     assert values["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:8000"
-    assert values["A2AT_SAMPLE_OSS_PORT"] == "8011"
 
 
 def test_run_state_and_data_directories_are_configurable(tmp_path: Path) -> None:
@@ -245,8 +237,6 @@ def test_state_round_trip_records_the_run_metadata(monkeypatch: pytest.MonkeyPat
         "trace_url": "http://127.0.0.1:8080",
         "ui_port": 8080,
         "gateway_port": None,
-        "approval_gate": False,
-        "approval_timeout": DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     }
     assert run_demo._load_pids() == [11, 12]
 
@@ -460,13 +450,11 @@ def test_web_serve_parser_accepts_the_launcher_arguments(tmp_path: Path) -> None
             "sse",
             "--server-url",
             "http://127.0.0.1:8000",
-            "--approval-gate",
         ]
     )
 
     assert args.env_file == tmp_path / ".env"
     assert args.port == 8080
-    assert args.approval_gate is True
 
 
 def test_trace_summary_reports_llm_and_tool_counts() -> None:
@@ -699,13 +687,8 @@ def _launch_both_nms(
     source_lines: list[str],
     configure: Callable[[pytest.MonkeyPatch], None] | None = None,
     extra_args: list[str] | None = None,
-    pure_hop: str | None = "oss",
 ) -> tuple[int, list[dict[str, object]], list[int]]:
-    """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out.
-
-    ``pure_hop`` defaults to the explicit deprecated proxy so the OSS-specific assertions keep
-    their subject; pass ``None`` to exercise the deployment default (direct NMS hop).
-    """
+    """Run ``main`` for ``--protocol both --nms`` with every child process stubbed out."""
     env_file = tmp_path / "source.env"
     env_file.write_text("\n".join(source_lines), encoding="utf-8")
     run_dir = tmp_path / "run"
@@ -727,9 +710,6 @@ def _launch_both_nms(
         "--ui",
         "--ui-port",
         "18080",
-        "--oss-port",
-        "18011",
-        *(("--pure-hop", pure_hop) if pure_hop else ()),
         *(extra_args or []),
     ])
     monkeypatch.setattr(run_demo, "_preflight", lambda *_: True)
@@ -748,220 +728,12 @@ def _launch_both_nms(
 
 
 def _both_nms_source(*extra: str, oss_port: int = 9001) -> list[str]:
+    del oss_port
     return [
         "A2AT_SAMPLE_WEBHOOK_PORT=9000",
         "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
         *extra,
-        f"A2AT_SAMPLE_OSS_WEBHOOK_PORT={oss_port}",
-        f"A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:{oss_port}/webhook",
     ]
-
-
-def test_both_nms_defaults_the_oss_webhook_port_to_the_next_port(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The OSS Agent gets its own receiver; the launcher must not read a missing CLI attribute."""
-    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, _both_nms_source())
-
-    assert code == 0
-    assert len(warmups) == 1
-    modules = [str(call["command"][2]) for call in started]
-    oss = started[modules.index("protocol.oss_agent")]["env"]
-    assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9001"
-    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://nms.example:9001/webhook"
-
-
-def test_both_nms_honours_the_oss_webhook_port_override(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    code, started, _ = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source(oss_port=9101)
-    )
-
-    assert code == 0
-    modules = [str(call["command"][2]) for call in started]
-    oss = started[modules.index("protocol.oss_agent")]["env"]
-    assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9101"
-    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://nms.example:9101/webhook"
-
-
-def test_both_nms_uses_the_oss_public_url_not_the_inherited_ui_url(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Process env wins over the run .env, so the OSS must receive an explicit override."""
-    monkeypatch.setenv(
-        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL", "https://inherited.example:9000/webhook"
-    )
-
-    code, started, _ = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source(oss_port=9005)
-    )
-
-    assert code == 0
-    modules = [str(call["command"][2]) for call in started]
-    oss = started[modules.index("protocol.oss_agent")]["env"]
-    assert oss["A2AT_SAMPLE_WEBHOOK_PORT"] == "9005"
-    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://nms.example:9005/webhook"
-
-
-def test_both_nms_rejects_an_oss_public_url_with_a_different_port(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A bind port and the registered callback must not silently disagree."""
-    source = [
-        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
-        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PORT=9005",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:9001/webhook",
-    ]
-
-    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, source)
-
-    assert code == 2
-    assert started == []
-    assert warmups == []
-
-
-def test_both_nms_allows_a_gateway_port_mismatch_when_explicitly_enabled(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    source = [
-        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
-        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PORT=9005",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://gateway.example:443/webhook",
-        "A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1",
-    ]
-
-    code, started, _ = _launch_both_nms(monkeypatch, tmp_path, source)
-
-    assert code == 0
-    modules = [str(call["command"][2]) for call in started]
-    oss = started[modules.index("protocol.oss_agent")]["env"]
-    assert oss["A2AT_SAMPLE_WEBHOOK_PUBLIC_URL"] == "https://gateway.example:443/webhook"
-
-
-def test_both_nms_restarts_a_recorded_oss_holding_its_port(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A stale OSS keeps the old callback config; it must be restarted, not reused."""
-    stopped: list[int] = []
-
-    def configure(monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            run_demo, "_port_open", lambda port, *a, **k: port == 18011
-        )
-        monkeypatch.setattr(
-            run_demo, "_listener_pids", lambda port: [4242] if port == 18011 else []
-        )
-        monkeypatch.setattr(
-            run_demo,
-            "_process_command_line",
-            lambda pid: "python -m protocol.oss_agent" if pid == 4242 else "",
-        )
-        monkeypatch.setattr(
-            run_demo, "_stop_pids", lambda pids: stopped.extend(pids) or len(pids)
-        )
-        monkeypatch.setattr(run_demo, "_wait_ports_closed", lambda *a, **k: True)
-
-    code, started, _ = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source(), configure=configure
-    )
-
-    assert code == 0
-    assert 4242 in stopped
-    modules = [str(call["command"][2]) for call in started]
-    assert "protocol.oss_agent" in modules
-
-
-def test_both_nms_rejects_a_missing_oss_public_url_before_warming_the_model(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A configuration error must not spend a live model call first."""
-    source = [
-        "A2AT_SAMPLE_WEBHOOK_PORT=9000",
-        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:9000/webhook",
-    ]
-
-    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, source)
-
-    assert code == 2
-    assert started == []
-    assert warmups == []
-
-
-def test_both_nms_rejects_an_oss_port_that_matches_the_ui_port(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    code, started, warmups = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source(oss_port=9000)
-    )
-
-    assert code == 2
-    assert started == []
-    assert warmups == []
-
-
-def test_both_nms_rejects_an_oss_webhook_port_that_matches_the_ui_port(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    code, started, warmups = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source(oss_port=18080)
-    )
-
-    assert code == 2
-    assert started == []
-    assert warmups == []
-
-
-def test_both_nms_rejects_a_base_webhook_port_that_matches_the_oss_port(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    source = [
-        "A2AT_SAMPLE_WEBHOOK_PORT=18011",
-        "A2AT_SAMPLE_WEBHOOK_PUBLIC_URL=https://nms.example:18011/webhook",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PORT=18012",
-        "A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL=https://nms.example:18012/webhook",
-    ]
-
-    code, started, warmups = _launch_both_nms(monkeypatch, tmp_path, source)
-
-    assert code == 2
-    assert started == []
-    assert warmups == []
-
-
-def test_both_nms_pins_the_topology_env_of_the_ui_and_oss(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A sourced source .env must not redirect the children's transport or direct endpoint.
-
-    ``shared.config`` prefers the process environment over the per-run .env, so a launch shell
-    that exported ``A2AT_SAMPLE_TRANSPORT=sse`` or a stale direct URL would otherwise make the
-    OSS Agent or the page use a different hop while the launcher selected the vendor NMS.
-    """
-
-    def configure(mp: pytest.MonkeyPatch) -> None:
-        # A sourced .env exports these two; ``--discovery`` is validated separately and already
-        # fails fast when a shell export contradicts ``--nms``.
-        mp.setenv("A2AT_SAMPLE_TRANSPORT", "sse")
-        mp.setenv("A2AT_SAMPLE_DIRECT_SERVER_URL", "http://127.0.0.1:8000")
-
-    code, started, _ = _launch_both_nms(
-        monkeypatch, tmp_path, _both_nms_source(), configure=configure
-    )
-
-    assert code == 0
-    modules = [str(call["command"][2]) for call in started]
-    ui = started[modules.index("demo.web.serve")]["env"]
-    oss = started[modules.index("protocol.oss_agent")]["env"]
-    # The UI keeps the deployment discovery and the OSS endpoint, not the stale export.
-    assert ui["A2AT_SAMPLE_DISCOVERY"] == "nms"
-    assert ui["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "http://127.0.0.1:18011"
-    # The OSS always takes the NMS hop in a real --nms launch.
-    assert oss["A2AT_SAMPLE_DISCOVERY"] == "nms"
-    assert oss["A2AT_SAMPLE_TRANSPORT"] == "webhook"
-    assert oss["A2AT_SAMPLE_RAN_URL"] == "http://127.0.0.1:8000"
 
 
 def test_pure_hop_nms_skips_the_oss_and_points_the_ui_at_the_nms(
@@ -979,7 +751,6 @@ def test_pure_hop_nms_skips_the_oss_and_points_the_ui_at_the_nms(
         tmp_path,
         _both_nms_source(),
         configure=configure,
-        pure_hop="nms",
     )
 
     assert code == 0
@@ -990,24 +761,6 @@ def test_pure_hop_nms_skips_the_oss_and_points_the_ui_at_the_nms(
     assert ui["A2AT_SAMPLE_PURE_HOP"] == "nms"
     assert ui["A2AT_SAMPLE_DIRECT_SERVER_URL"] == "https://nms.example/a2a/json"
     assert "--discovery" not in started[modules.index("demo.web.serve")]["command"]
-
-
-def test_pure_hop_oss_keeps_the_proxy_topology(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The default hop is unchanged: the OSS Agent still owns the standard-A2A downstream."""
-    code, started, _ = _launch_both_nms(
-        monkeypatch,
-        tmp_path,
-        _both_nms_source(),
-        pure_hop="oss",
-    )
-
-    assert code == 0
-    modules = [str(call["command"][2]) for call in started]
-    assert "protocol.oss_agent" in modules
-    ui = started[modules.index("demo.web.serve")]["env"]
-    assert ui["A2AT_SAMPLE_PURE_HOP"] == "oss"
 
 
 def test_both_nms_defaults_to_the_direct_hop_without_the_oss_callback(
@@ -1026,7 +779,7 @@ def test_both_nms_defaults_to_the_direct_hop_without_the_oss_callback(
     ]
 
     code, started, _ = _launch_both_nms(
-        monkeypatch, tmp_path, source, configure=configure, pure_hop=None
+        monkeypatch, tmp_path, source, configure=configure
     )
 
     assert code == 0
@@ -1049,7 +802,7 @@ def test_local_both_defaults_to_the_direct_ran_hop(
 
     def configure(mp: pytest.MonkeyPatch) -> None:
         local = _resolved_config()
-        local.discovery = "registry"
+        local.discovery = "direct"
         local.transport = "sse"
         local.pure_hop = "direct"
         local.nms_region = None
@@ -1068,8 +821,6 @@ def test_local_both_defaults_to_the_direct_ran_hop(
         "--ui",
         "--ui-port",
         "18080",
-        "--oss-port",
-        "18011",
     ])
     monkeypatch.setattr(run_demo, "_preflight", lambda *_: True)
     monkeypatch.setattr(run_demo, "_warm_live_model", lambda _config: None)

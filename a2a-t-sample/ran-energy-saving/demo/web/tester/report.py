@@ -242,7 +242,6 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     for key, value in summary_map.items():
         summary.append([key, value])
     summary.append(["stopAfter", batch.get("stopAfter", "")])
-    summary.append(["approval", batch.get("approval", "")])
     summary.append(["decisionMode", batch.get("decisionMode", "")])
     summary.append(["keepTasks", batch.get("keepTasks", "")])
     summary.append(["concurrency", batch.get("concurrency", 1)])

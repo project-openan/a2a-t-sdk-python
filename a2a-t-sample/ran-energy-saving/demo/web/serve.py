@@ -15,7 +15,6 @@ import os
 import socket
 from pathlib import Path
 
-from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from shared.run_constants import (
     BRAND_ORANGE,
     DEMO_PROTOCOLS,
@@ -62,9 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(SUPPORTED_BRANDS),
         help="presentation color theme (default: orange)",
     )
-    parser.add_argument("--server-url", default="", help="A2A server base URL used by the MIE approval")
-    parser.add_argument("--approval-gate", action="store_true")
-    parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT_SECONDS)
+    parser.add_argument("--server-url", default="", help="A2A server base URL used for run forwarding")
     parser.add_argument("--allow-insecure-bind", action="store_true")
     parser.add_argument(
         "--protocol",
@@ -80,7 +77,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "A2AT_SAMPLE_PURE_HOP (nms vendor direct by default, oss proxy only if set)"
         ),
     )
-    parser.add_argument("--mie-url", default=None)
     return parser
 
 
@@ -96,12 +92,9 @@ def run_ui(
     brand: str = BRAND_ORANGE,
     host: str = "127.0.0.1",
     server_url: str = "",
-    approval_gate: bool = False,
-    approval_timeout: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     allow_insecure_bind: bool = False,
     protocol: str = PROTOCOL_MODE_BOTH,
     nms: bool = False,
-    mie_url: str | None = None,
 ) -> int:
     """Serve the Web UI until interrupted, returning a process exit code."""
     protocol = normalize_protocol_name(protocol)
@@ -134,13 +127,10 @@ def run_ui(
             ui_mode=ui_mode,
             default_brand=brand,
             server_url=server_url or None,
-            approval_gate=approval_gate,
-            approval_timeout_seconds=approval_timeout,
             allow_insecure_bind=allow_insecure_bind,
             protocol=default_protocol,
             protocols=protocols,
             nms_enabled=nms,
-            mie_url=mie_url,
             # The server trace emitter flushes in batches; aggregate the persisted metrics after
             # the same short window the SSE stream uses to forward its last spans.
             metrics_grace_seconds=2.0,
@@ -154,7 +144,7 @@ def run_ui(
         f"(language={config.language}, model_mode={config.model_mode} [{config.model_label}], "
         f"provider={config.adk_model_provider}, "
         f"defaults: scenario={scenario}, mode={mode}, transport={transport}, "
-        f"protocols={','.join(protocols)}, approval_gate={approval_gate}, "
+        f"protocols={','.join(protocols)}, "
         f"server trace ingestion: {'enabled' if trace_enabled else 'disabled (no local token)'})"
     )
     print(f"[ui] tester console on http://{host}:{ui_port}/tester")
@@ -183,10 +173,6 @@ def run_ui(
 def main(argv: list[str] | None = None) -> int:
     """Parse the launcher arguments and serve the UI."""
     args = _build_parser().parse_args(argv)
-    if args.nms and args.approval_gate:
-        _build_parser().error(
-            "--approval-gate is the local MIE review; a real NMS owns execution approval."
-        )
     return run_ui(
         env_path=args.env_file,
         ui_port=args.port,
@@ -198,12 +184,9 @@ def main(argv: list[str] | None = None) -> int:
         ui_mode=args.ui_mode,
         brand=args.brand,
         server_url=args.server_url,
-        approval_gate=args.approval_gate,
-        approval_timeout=args.approval_timeout,
         allow_insecure_bind=args.allow_insecure_bind,
         protocol=args.protocol,
         nms=args.nms,
-        mie_url=args.mie_url,
     )
 
 

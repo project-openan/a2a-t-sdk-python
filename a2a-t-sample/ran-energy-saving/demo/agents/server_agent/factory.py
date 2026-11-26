@@ -31,7 +31,6 @@ def build_server_agent(
     task_prompt: str,
     negotiation_context: Mapping[str, object] | None,
     model: BaseChatModel | None = None,
-    approval_gate: Any | None = None,
     operation: str = "Create",
     existing_plan: Mapping[str, object] | None = None,
 ) -> ServerAgentSpec:
@@ -42,7 +41,7 @@ def build_server_agent(
         ran_data.restore_plan(existing_plan)
     resolved = config or load_config()
     guard = PlanGuard()
-    tools = build_execution_tools(guard, approval_gate=approval_gate)
+    tools = build_execution_tools(guard)
     plan_id = str(existing_plan.get("plan_id") or "") if existing_plan is not None else ""
     planner_model = (
         model
@@ -86,8 +85,7 @@ def server_agent_factory(
         *,
         task_prompt: str,
         negotiation_context: Mapping[str, object] | None,
-        approval_gate: Any | None = None,
-        operation: str = "Create",
+            operation: str = "Create",
         existing_plan: Mapping[str, object] | None = None,
     ) -> ServerAgentSpec:
         model = model_factory() if model_factory is not None else None
@@ -96,7 +94,6 @@ def server_agent_factory(
             task_prompt=task_prompt,
             negotiation_context=negotiation_context,
             model=model,
-            approval_gate=approval_gate,
             operation=operation,
             existing_plan=existing_plan,
         )

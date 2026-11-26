@@ -31,7 +31,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
-import httpx
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
 from eval.osp.client_quality import ClientQualityObservation, judge_client_quality
 from eval.osp.compare import (
@@ -75,7 +74,6 @@ from shared.config import (
     DISCOVERY_NMS,
     MODEL_MODE_LIVE,
     MODEL_MODE_OFFLINE,
-    PURE_HOP_OSS,
 )
 from shared.models import NegotiationDecision
 from shared.run_constants import (
@@ -498,7 +496,6 @@ class _Batch:
     case_ids: list[int]
     protocols: list[str]
     stop_after: str
-    approval: str | None
     timeout_seconds: float | None
     items: list[CaseItem]
     #: Cases dropped because a paired batch cannot compare them (a blocked case sends a different
@@ -632,7 +629,6 @@ class EvalBatchManager:
         case_ids: Sequence[int],
         protocols: Sequence[str],
         stop_after: str,
-        approval: str | None = None,
         timeout_seconds: float | None = None,
         working_timeout_seconds: float | None = None,
         decision_mode: str | None = None,
@@ -646,8 +642,8 @@ class EvalBatchManager:
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols.
 
-        ``approval``/``timeout_seconds``/``working_timeout_seconds`` may be ``None``: the batch then
-        uses each case's own ``runner`` block (or the process defaults for a scratch request).
+        ``timeout_seconds``/``working_timeout_seconds`` may be ``None``: the batch then uses each
+        case's own ``runner`` block (or the process defaults for a scratch request).
         ``decision_mode`` defaults to the process mode: live for an online model, scripted offline.
         ``keep_tasks`` keeps every Task alive after its item ends (long-task verification); by
         default each item releases its remote Task once its evidence is collected.
@@ -659,7 +655,6 @@ class EvalBatchManager:
         """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
-        resolved_approval = _validate_approval(approval)
         resolved_concurrency = validate_concurrency(concurrency)
         resolved_rounds = validate_rounds(rounds)
         if resolved_rounds > DEFAULT_ROUNDS and keep_tasks:
@@ -681,7 +676,6 @@ class EvalBatchManager:
             raise ValueError(
                 "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
             )
-        self._validate_pure_hop(resolved_negotiation_source, selected_protocols)
         items: list[CaseItem] = []
         # Round-major expansion: the first round keeps the exact order a single-pass batch has.
         for round_index in range(1, resolved_rounds + 1):
@@ -710,7 +704,6 @@ class EvalBatchManager:
             case_ids=list(case_ids),
             protocols=selected_protocols,
             stop_after=stop_after,
-            approval=resolved_approval,
             timeout_seconds=_positive_or_none(timeout_seconds),
             working_timeout_seconds=_positive_or_none(working_timeout_seconds),
             decision_mode=resolved_decision_mode,
@@ -737,7 +730,6 @@ class EvalBatchManager:
         *,
         user_input: str,
         protocol: str,
-        approval: str = "approve",
         timeout_seconds: float | None = 300.0,
         decision_mode: str | None = None,
         negotiation_source: str | None = None,
@@ -750,7 +742,6 @@ class EvalBatchManager:
             raise ValueError("临时请求不能为空。")
         if protocol not in {PROTOCOL_A2A_T, PROTOCOL_A2A}:
             raise ValueError(f"unknown protocol {protocol!r}")
-        resolved_approval = _validate_approval(approval) or "approve"
         resolved_decision_mode = self._validate_decision_mode(
             decision_mode or default_decision_mode(self._model_mode)
         )
@@ -761,7 +752,6 @@ class EvalBatchManager:
         resolved_negotiation_source = self._validate_negotiation_source(
             negotiation_source or default_source, resolved_decision_mode
         )
-        self._validate_pure_hop(resolved_negotiation_source, [protocol])
         principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
         item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
@@ -770,7 +760,6 @@ class EvalBatchManager:
             case_ids=[0],
             protocols=[protocol],
             stop_after="accepted",
-            approval=resolved_approval,
             timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
             decision_mode=resolved_decision_mode,
             negotiation_source=resolved_negotiation_source,
@@ -806,24 +795,6 @@ class EvalBatchManager:
             if decision_mode is not None and decision_mode != DECISION_MODE_LIVE:
                 raise ValueError("agent 协商答复需要 live 决策模式。")
         return negotiation_source
-
-    def _validate_pure_hop(
-        self, negotiation_source: str, protocols: Sequence[str]
-    ) -> None:
-        """Refuse an agent-authored A2A reply behind the deprecated OSS proxy hop.
-
-        The agent reply must be the client's own decision. Behind the proxy the recorded answer is
-        relayed by the OSS Agent, so the run would measure the proxy rather than the client. The
-        proxy hop is kept only for the recorded dialogue and is slated for removal.
-        """
-        if (
-            negotiation_source == NEGOTIATION_SOURCE_AGENT
-            and PROTOCOL_A2A in protocols
-            and self._pure_hop == PURE_HOP_OSS
-        ):
-            raise ValueError(
-                "纯 A2A 的 OSS 代理 hop 不支持 agent 协商答复；请改用直连 RAN Agent 或直连 NMS。"
-            )
 
     def _load_principles(self, version: str | None) -> NegotiationPrinciples:
         """Load the shared principles frozen for one batch."""
@@ -981,7 +952,6 @@ class EvalBatchManager:
             case_ids=batch.case_ids,
             protocols=batch.protocols,
             stop_after=batch.stop_after,
-            approval=batch.approval,
             timeout_seconds=batch.timeout_seconds,
             working_timeout_seconds=batch.working_timeout_seconds,
             decision_mode=batch.decision_mode,
@@ -1449,7 +1419,6 @@ class EvalBatchManager:
         scenario = str(runner.get("scenario") or "night")
         language = runner.get("language")
         resolved_language = language if isinstance(language, str) and language else None
-        resolved_approval = self._resolved_approval(batch, case)
         resolved_timeout = self._resolved_timeout(batch, case)
         target_task_id: str | None = None
         target_context_id: str | None = None
@@ -1571,10 +1540,6 @@ class EvalBatchManager:
             # The cancel arrived while the run was being created; stop it before observing it,
             # otherwise its Task would keep running and the item would wait for the full timeout.
             await self._runs.cancel(run.run_id)
-        approval_task = asyncio.create_task(
-            self._answer_approval_gate(resolved_approval, item.protocol, run),
-            name=f"tester-approval-{run.run_id}",
-        )
         try:
             await self._wait_for_stage(
                 run,
@@ -1586,8 +1551,6 @@ class EvalBatchManager:
                 working_timeout_seconds=self._resolved_working_timeout(batch),
             )
         finally:
-            approval_task.cancel()
-            await asyncio.gather(approval_task, return_exceptions=True)
             # The run's own pre-send gate is the interception segment of a blocked case. Read it
             # before the evidence collection so the export names the case the run actually
             # reached: the replacement's expectations on a hit, the original's on a miss.
@@ -1760,13 +1723,6 @@ class EvalBatchManager:
         if protocol == PROTOCOL_A2A_T and batch.decision_mode != DECISION_MODE_LIVE:
             return MODE_SCRIPTED
         return MODE_AUTO
-
-    @staticmethod
-    def _resolved_approval(batch: _Batch, case: Mapping[str, Any] | None = None) -> str:
-        """Return the approval behaviour of one item: batch override, else case runner."""
-        if batch.approval is not None:
-            return batch.approval
-        return str(_case_runner(case).get("approval") or "approve")
 
     @staticmethod
     def _resolved_timeout(batch: _Batch, case: Mapping[str, Any] | None = None) -> float:
@@ -3007,68 +2963,6 @@ class EvalBatchManager:
         return CASE_PASSED
 
     # ------------------------------------------------------------------
-    # Approval automation
-    # ------------------------------------------------------------------
-
-    async def _answer_approval_gate(self, approval: str, protocol: str, run: RunState) -> None:
-        """Auto-answer the A2A-T server approval gate; ``auto`` waits for the timeout.
-
-        MIE approval is out of scope for the tester; only the A2A-T server gate is handled.
-        """
-        if approval == "auto":
-            return
-        if protocol != PROTOCOL_A2A_T or not self._server_url:
-            return
-        await self._watch_server_gate(run, approval == "approve")
-
-    async def _watch_server_gate(self, run: RunState, approved: bool) -> None:
-        snapshot, queue = run.subscribe()
-        handled: set[str] = set()
-        headers = {"authorization": f"Bearer {self._server_auth_token}"} if self._server_auth_token else {}
-        try:
-            for message in snapshot:
-                await self._handle_server_gate(message, run, approved, handled, headers)
-            while not run.finished():
-                try:
-                    message = await asyncio.wait_for(queue.get(), timeout=0.5)
-                except TimeoutError:
-                    continue
-                await self._handle_server_gate(message, run, approved, handled, headers)
-        finally:
-            run.unsubscribe(queue)
-
-    async def _handle_server_gate(
-        self,
-        message: dict[str, object],
-        run: RunState,
-        approved: bool,
-        handled: set[str],
-        headers: Mapping[str, str],
-    ) -> None:
-        if message.get("type") != "trace":
-            return
-        span = message.get("span")
-        detail = span.get("detail") if isinstance(span, Mapping) else None
-        if not isinstance(span, Mapping) or not isinstance(detail, Mapping):
-            return
-        if span.get("kind") != "approval" or detail.get("approvalState") != "requested":
-            return
-        marker = str(span.get("spanId") or message.get("seq") or "")
-        if marker in handled:
-            return
-        handled.add(marker)
-        try:
-            async with httpx.AsyncClient(trust_env=False, timeout=10.0) as client:
-                response = await client.post(
-                    f"{self._server_url}/approvals",
-                    json={"runId": run.run_id, "approved": approved},
-                    headers=dict(headers),
-                )
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            _LOGGER.warning("tester approval forward failed: %s", exc)
-
-    # ------------------------------------------------------------------
     # Persistence and snapshots
     # ------------------------------------------------------------------
 
@@ -3156,20 +3050,11 @@ class EvalBatchManager:
             else:
                 loaded_version = loaded_principles.version
                 loaded_text = loaded_principles.text
-        loaded_protocols = [str(value) for value in document.get("protocols", [])]
-        if (
-            loaded_source == NEGOTIATION_SOURCE_AGENT
-            and PROTOCOL_A2A in loaded_protocols
-            and self._pure_hop == PURE_HOP_OSS
-        ):
-            # A batch persisted for the deprecated proxy hop cannot author an agent reply here.
-            loaded_source = NEGOTIATION_SOURCE_SCRIPT
         batch = _Batch(
             batch_id=str(document.get("batchId") or batch_id),
             case_ids=[int(value) for value in document.get("caseIds", []) if isinstance(value, int)],
             protocols=[str(value) for value in document.get("protocols", [])],
             stop_after=str(document.get("stopAfter") or "accepted"),
-            approval=document.get("approval") if isinstance(document.get("approval"), str) else None,
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
             decision_mode=loaded_decision_mode,
@@ -3241,7 +3126,6 @@ class EvalBatchManager:
             "excludedCaseIds": list(batch.excluded_case_ids),
             "protocols": list(batch.protocols),
             "stopAfter": batch.stop_after,
-            "approval": batch.approval,
             "timeoutSeconds": batch.timeout_seconds,
             "workingTimeoutSeconds": batch.working_timeout_seconds,
             "decisionMode": batch.decision_mode,
@@ -3285,8 +3169,7 @@ class EvalBatchManager:
             "transport": batch.transport,
             "discovery": batch.discovery,
             "resolvedRunner": {
-                "approval": batch.approval,
-                "timeoutSeconds": batch.timeout_seconds,
+                    "timeoutSeconds": batch.timeout_seconds,
                 "workingTimeoutSeconds": batch.working_timeout_seconds,
             },
             "ownerId": batch.owner_id,
@@ -4163,15 +4046,6 @@ def _clamp_rounds(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return DEFAULT_ROUNDS
     return min(MAX_ROUNDS, max(DEFAULT_ROUNDS, value))
-
-
-def _validate_approval(approval: str | None) -> str | None:
-    """Validate one optional batch approval value."""
-    if approval is None:
-        return None
-    if approval not in {"approve", "reject", "auto"}:
-        raise ValueError(f"unknown approval {approval!r}")
-    return approval
 
 
 def _positive_or_none(value: float | None) -> float | None:

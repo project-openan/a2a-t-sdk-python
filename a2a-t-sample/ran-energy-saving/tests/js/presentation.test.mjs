@@ -41,7 +41,6 @@ import { createPlayer } from "../../demo/web/presentation/js/player.js";
 import { entryOfRow, rowKey } from "../../demo/web/presentation/js/trace.js";
 import { parseIntent, plainSentence } from "../../demo/web/presentation/js/intent.js";
 import {
-  approvalCard,
   decisionCard,
   decisionPayload,
   intentCard,
@@ -636,124 +635,6 @@ const negotiableCard = intentCard(negotiable, copy);
 assert.ok(negotiableCard);
 assert.equal(negotiableCard.validation.verdict, "negotiable");
 
-// --- Approval gate ------------------------------------------------------
-
-const approval = createState();
-applyFrame(approval, {
-  type: "run_started",
-  runId: "r7",
-  scenario: "information",
-  mode: "confirm",
-  approvalGate: true,
-});
-applyFrame(approval, status(1, "TASK_STATE_SUBMITTED"));
-applyFrame(approval, status(2, "TASK_STATE_WORKING"));
-applyFrame(approval, status(3, "TASK_STATE_INPUT_REQUIRED"));
-assert.equal(approval.approvalState, "waiting");
-assert.equal(pendingHuman(approval), "approval");
-const approvalModel = approvalCard(approval, copy);
-assert.ok(approvalModel);
-// Review is one step: approve or reject, with the commands visible immediately.
-assert.deepEqual(
-  approvalModel.options.map((option) => option.action),
-  ["approve", "reject"],
-);
-assert.ok(approvalModel.mml.text.includes("SET ENERGYSAVING"));
-
-applyFrame(approval, {
-  type: "trace",
-  event: {
-    seq: 4,
-    kind: "approval",
-    title: "Approval requested",
-    startedAt: new Date().toISOString(),
-    detail: {
-      cellId: "cell-001",
-      window: "00:00~06:00",
-      rate: "30%",
-      approvalState: "requested",
-      timeoutSeconds: 120,
-    },
-  },
-});
-assert.equal(approval.approval.cellId, "cell-001");
-assert.equal(approvalCard(approval, copy).text.includes("cell-001"), true);
-
-// The status text names the plan even when the approval span has not arrived yet.
-const namedApproval = createState();
-applyFrame(namedApproval, {
-  type: "run_started",
-  runId: "r70",
-  scenario: "night",
-  mode: "confirm",
-  approvalGate: true,
-});
-applyFrame(
-  namedApproval,
-  event({
-    seq: 1,
-    entryType: "event",
-    kind: "status",
-    phase: "execution",
-    state: "TASK_STATE_INPUT_REQUIRED",
-    summary:
-      "Waiting for the engineer's approval before applying the plan: cell-002, 23:00~24:00, 20%.",
-  }),
-);
-assert.equal(namedApproval.approval.cellId, "cell-002");
-assert.equal(namedApproval.approval.window, "23:00~24:00");
-assert.equal(approvalCard(namedApproval, copy).mml.text.includes("cell-002"), true);
-assert.equal(approvalCard(namedApproval, copy).options.length, 2);
-
-applyFrame(approval, status(5, "TASK_STATE_WORKING"));
-assert.equal(approval.approvalState, "approved");
-assert.equal(approval.mmlSent, true);
-assert.equal(pendingHuman(approval), null);
-
-// A late approval-requested span (server spans arrive in batches) must not reopen the gate.
-applyFrame(approval, {
-  type: "trace",
-  event: {
-    seq: 6,
-    kind: "approval",
-    title: "Approval requested",
-    detail: { cellId: "cell-001", approvalState: "requested", timeoutSeconds: 120 },
-  },
-});
-assert.equal(approval.approvalState, "approved");
-assert.equal(approvalCard(approval, copy), null);
-
-// A gate still marked waiting when the run ends must not keep the card on screen.
-const timedOut = createState();
-applyFrame(timedOut, {
-  type: "run_started",
-  runId: "r71",
-  scenario: "night",
-  mode: "confirm",
-  approvalGate: true,
-});
-applyFrame(timedOut, status(1, "TASK_STATE_INPUT_REQUIRED"));
-assert.ok(approvalCard(timedOut, copy));
-applyFrame(timedOut, finished("task_rejected", null, "approval timeout"));
-assert.equal(timedOut.approvalState, "rejected");
-assert.equal(approvalCard(timedOut, copy), null);
-
-// A bare INPUT_REQUIRED without an approval gate is evidence, not an approval: a --nms run has no
-// local /approvals route, so the page must not hold on a card nobody can submit.
-const noGate = createState();
-applyFrame(noGate, { type: "run_started", runId: "r72", scenario: "night", mode: "confirm" });
-applyFrame(noGate, status(1, "TASK_STATE_INPUT_REQUIRED", { state: "TASK_STATE_INPUT_REQUIRED" }));
-assert.equal(noGate.approvalState, null);
-assert.equal(pendingHuman(noGate), null);
-assert.equal(approvalCard(noGate, copy), null);
-assert.equal(
-  sceneFor(
-    { type: "event", event: { kind: "status", state: "TASK_STATE_INPUT_REQUIRED" } },
-    noGate,
-  ).hold,
-  false,
-);
-
 // The vendor hands a Negotiation-T proposal back inside INPUT_REQUIRED. The backend marks the
 // entry; the page must treat it as a negotiation turn, never as the MIE review.
 const negotiationStatus = createState();
@@ -780,7 +661,6 @@ assert.equal(negotiationStatus.negotiation.at(-1).round, 1);
 assert.equal(negotiationStatus.negotiation.at(-1).maxRounds, 5);
 assert.equal(negotiationTurn(negotiationStatus.trace.at(-1).entry).performative, "PROPOSE");
 assert.equal(pendingHuman(negotiationStatus), null);
-assert.equal(approvalCard(negotiationStatus, copy), null);
 assert.equal(sceneFor({ type: "event", event: negotiationStatus.trace.at(-1).entry }, negotiationStatus).key, "propose");
 assert.equal(sceneFor({ type: "event", event: negotiationStatus.trace.at(-1).entry }, negotiationStatus).hold, false);
 
@@ -1563,46 +1443,6 @@ assert.equal(sceneFor(answer, pureView).key, "decision");
 applyFrame(pureView, answer);
 assert.equal(pureView.negotiation.at(-1).side, "oss");
 
-const pureApproval = event({
-  seq: 4,
-  entryType: "event",
-  kind: "status",
-  phase: "approval",
-  state: "TASK_STATE_WORKING",
-  summary: "RAN Agent is waiting for the MIE Agent's approval.",
-  detail: {
-    hop: "ran->mie",
-    pure: {
-      kind: "approval",
-      phase: "approval",
-      plan: { cellId: "cell-001", window: "00:00~06:00", rate: "30%" },
-    },
-  },
-});
-const approvalScene = sceneFor(pureApproval, pureView);
-assert.equal(approvalScene.key, "approval-pure");
-assert.equal(approvalScene.hold, true);
-applyFrame(pureView, pureApproval);
-assert.equal(pureView.mieWaiting, true);
-assert.equal(pendingHuman(pureView), "approval");
-assert.equal(approvalCard(pureView, pureCopy), null);
-
-pureView.mieApproval = {
-  taskId: "approval-1",
-  plan: { cellId: "cell-001", window: "00:00~06:00", rate: "30%" },
-  timeoutSeconds: 240,
-  requestedAt: new Date().toISOString(),
-};
-const mieCard = approvalCard(pureView, pureCopy);
-assert.ok(mieCard);
-assert.equal(mieCard.pure, true);
-assert.equal(mieCard.taskId, "approval-1");
-
-pureView.mieApproval = null;
-pureView.mieResolved = { approved: true, reason: null };
-assert.equal(pendingHuman(pureView), null);
-assert.equal(approvalCard(pureView, pureCopy), null);
-assert.equal(sceneFor(pureApproval, pureView).key, "trace");
 
 // Pure statuses use their own phase vocabulary: the outer OSS lifecycle and RAN progress after
 // the decision are evidence, not a rewind to the strategy step.
@@ -1695,7 +1535,7 @@ resolvedGatePlayer.enqueue({
   step: 8,
   duration: 0,
   hold: true,
-  frame: pureApproval,
+  frame: answer,
 });
 assert.equal(gateMeta.hold, false);
 assert.equal(resolvedGatePlayer.status().hold, false);
@@ -1713,7 +1553,7 @@ openGatePlayer.enqueue({
   step: 8,
   duration: 0,
   hold: true,
-  frame: pureApproval,
+  frame: answer,
 });
 assert.equal(openGatePlayer.status().hold, true);
 

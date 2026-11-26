@@ -145,23 +145,11 @@ async def test_tool_guard_accepts_the_full_sequence() -> None:
 
 
 async def test_tool_guard_allows_one_apply_per_task() -> None:
-    """A live planner cannot open a second approval gate by exploring another plan."""
+    """A live planner cannot apply a second plan by exploring another candidate."""
     ran_data.reset()
     try:
         guard = PlanGuard()
-        gates: list[tuple[str, str, str]] = []
-
-        async def approval_gate(
-            cell_id: str,
-            window: str,
-            target_rate: str,
-            evaluation: dict[str, object] | None,
-        ) -> bool:
-            del evaluation
-            gates.append((cell_id, window, target_rate))
-            return True
-
-        tools = {tool.name: tool for tool in build_execution_tools(guard, approval_gate=approval_gate)}
+        tools = {tool.name: tool for tool in build_execution_tools(guard)}
         for call, args in (
             ("get_cell_energy_profile", {"cell_id": "cell-001", "date": ran_data.dataset_date()}),
             ("evaluate_energy_saving_plan", {"cell_id": "cell-001", "window": "00:00~06:00", "target_rate": "30"}),
@@ -169,10 +157,8 @@ async def test_tool_guard_allows_one_apply_per_task() -> None:
         ):
             result = tool_result_from_text(await tools[call].ainvoke(args))
             assert result["ok"] is True
-        assert len(gates) == 1
-
         # The planner re-reads the same cell and evaluates a second candidate. Applying it must be
-        # rejected before the human gate; the first plan is still the one to report.
+        # rejected; the first plan is still the one to report.
         for call, args in (
             ("get_cell_energy_profile", {"cell_id": "cell-001", "date": ran_data.dataset_date()}),
             ("evaluate_energy_saving_plan", {"cell_id": "cell-001", "window": "00:00~06:00", "target_rate": "25"}),
@@ -185,7 +171,6 @@ async def test_tool_guard_allows_one_apply_per_task() -> None:
         )
         assert second["ok"] is False
         assert second["error_code"] == "tool_order_violation"
-        assert len(gates) == 1
     finally:
         ran_data.reset()
 

@@ -80,12 +80,7 @@ from shared.trace_propagation import TracePropagationMiddleware
 from shared.traced_llm import register_traced_providers
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
 
-from protocol.approval_gate import ApprovalRegistry
-from protocol.mie_client import MIEApprovalClient
 from protocol.negotiation_policy import NegotiationState, PolicyDecision
 from protocol.plain_a2a import PlainTaskHandler, ProtocolDispatchHandler, is_plain_request
 from protocol.pre_task_negotiation import PreTaskNegotiationHandler, TaskTPrecheck
@@ -245,7 +240,6 @@ def build_rest_app(
     task_db_path: str | None = None,
     trace_emitter: HttpTraceEmitter | FileTraceEmitter | None = None,
     auth_token: str = "",
-    approval_registry: ApprovalRegistry | None = None,
 ) -> Starlette:
     """Build the Starlette app with the AgentCard routes and the A2A REST routes.
 
@@ -261,7 +255,6 @@ def build_rest_app(
         trace_emitter: optional Run Explorer span emitter.
         auth_token: bearer token every A2A route requires; the AgentCard and health routes stay
             public so discovery and probes work.
-        approval_registry: optional human approval gate resolved by ``POST /approvals``.
     """
     resolved_task_store: TaskStore = task_store if task_store is not None else InMemoryTaskStore()
     push_config_store = InMemoryPushNotificationConfigStore()
@@ -284,48 +277,9 @@ def build_rest_app(
         push_sender=push_sender,
     )
 
-    async def approve(request: Request) -> Response:
-        """Resolve one pending human approval of the change gate."""
-        if approval_registry is None:
-            return JSONResponse(
-                {"error": "The approval gate is disabled.", "code": "approval_gate_disabled"},
-                status_code=404,
-            )
-        try:
-            body = await request.json()
-        except ValueError:
-            return JSONResponse(
-                {"error": "The body must be a JSON object.", "code": "body_not_object"},
-                status_code=400,
-            )
-        if not isinstance(body, dict):
-            return JSONResponse(
-                {"error": "The body must be a JSON object.", "code": "body_not_object"},
-                status_code=400,
-            )
-        run_id = body.get("runId")
-        approved = body.get("approved")
-        if not isinstance(run_id, str) or not run_id.strip():
-            return JSONResponse(
-                {"error": "The runId field must be a non-empty string.", "code": "run_id_invalid"},
-                status_code=400,
-            )
-        if not isinstance(approved, bool):
-            return JSONResponse(
-                {"error": "The approved field must be a boolean.", "code": "approved_invalid"},
-                status_code=400,
-            )
-        if not approval_registry.resolve(run_id.strip(), approved):
-            return JSONResponse(
-                {"error": "No approval is pending for this run.", "code": "approval_not_pending"},
-                status_code=409,
-            )
-        return JSONResponse({"resolved": True, "approved": approved})
-
     routes = [
         *create_agent_card_routes(agent_card),
         *create_rest_routes(request_handler),
-        Route("/approvals", approve, methods=["POST"]),
     ]
     app = Starlette(
         routes=routes,
@@ -372,11 +326,6 @@ def build_server_runtime(
     install_offline_provider: Callable[[], None] | None = None,
     protocol_mode: str = PROTOCOL_A2A_T,
     pure_policy: PureTargetPolicy | None = None,
-    mie_url: str | None = None,
-    mie_client: MIEApprovalClient | None = None,
-    approval_gate: bool | None = None,
-    pure_approval_gate: bool | None = None,
-    approval_timeout_seconds: float | None = None,
 ) -> ServerRuntime:
     """Assemble the full server runtime.
 
@@ -396,15 +345,6 @@ def build_server_runtime(
             both forms in one agent, deciding per request from the Task-T extension.
         pure_policy: business policy of the pure target negotiation; when omitted, a policy with
             no configured baseline target is used (tests may inject one).
-        mie_url: MIE Agent base URL of the pure approval hop; defaults to
-            ``A2AT_SAMPLE_MIE_URL`` or ``http://127.0.0.1:8002``.
-        mie_client: optional pre-built MIE approval client (tests).
-        approval_gate: override of the ``A2AT_SAMPLE_APPROVAL_GATE`` switch (tests); ``None``
-            keeps the environment-driven behavior.
-        pure_approval_gate: whether a standard A2A request waits for the MIE approval. Defaults to
-            the local approval switch, but the single agent sets it independently so A2A-T and
-            standard A2A can enable different gates in one process.
-        approval_timeout_seconds: override of the approval timeout (tests).
 
     Returns:
         The assembled runtime, including the Starlette app.
@@ -461,29 +401,6 @@ def build_server_runtime(
         pre_task_handler = ProtocolDispatchHandler(negotiation_handler, pure_handler)
     else:
         pre_task_handler = ProtocolDispatchHandler(negotiation_handler, PlainTaskHandler(logger=resolved_logger))
-    if approval_gate is None:
-        approval_enabled = resolved_config.approval_gate
-    else:
-        approval_enabled = approval_gate
-    approval_timeout = (
-        approval_timeout_seconds
-        if approval_timeout_seconds is not None
-        else resolved_config.approval_timeout_seconds
-    )
-    approval_registry = ApprovalRegistry() if approval_enabled else None
-    pure_enabled = protocol_mode in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH)
-    if pure_approval_gate is None:
-        configured_pure_gate = resolved_config.pure_approval_gate
-        pure_gate_enabled = configured_pure_gate if configured_pure_gate is not None else approval_enabled
-    else:
-        pure_gate_enabled = pure_approval_gate
-    if pure_enabled and pure_gate_enabled and mie_client is None:
-        resolved_mie_url = (mie_url or resolved_config.mie_url).strip()
-        if resolved_mie_url:
-            mie_client = MIEApprovalClient(
-                base_url=resolved_mie_url,
-                timeout_seconds=resolved_config.http_timeout_seconds,
-            )
     pure_for_executor: bool | PureResolver = (
         is_plain_request if protocol_mode == PROTOCOL_MODE_BOTH else protocol_mode == PROTOCOL_PURE
     )
@@ -491,10 +408,7 @@ def build_server_runtime(
         handler=pre_task_handler,
         agent_factory=agent_factory,
         config=resolved_config,
-        approval_registry=approval_registry,
-        approval_timeout_seconds=approval_timeout,
         pure=pure_for_executor,
-        mie_client=mie_client,
     )
     task_store: TaskStore = (
         SqliteTaskStore(resolved_config.task_db_path) if resolved_config.task_db_path else InMemoryTaskStore()
@@ -512,14 +426,11 @@ def build_server_runtime(
         task_db_path=resolved_config.task_db_path,
         trace_emitter=trace_emitter,
         auth_token=resolved_config.server_auth_token,
-        approval_registry=approval_registry,
     )
     app.state.config = resolved_config
     app.state.prompt_server = prompt_server
     app.state.pre_task_handler = pre_task_handler
     app.state.trace_emitter = trace_emitter
-    app.state.approval_registry = approval_registry
-    app.state.mie_client = mie_client
     return ServerRuntime(
         config=resolved_config,
         agent_card=agent_card,
@@ -543,11 +454,6 @@ def build_server_app(
     install_offline_provider: Callable[[], None] | None = None,
     protocol_mode: str = PROTOCOL_A2A_T,
     pure_policy: PureTargetPolicy | None = None,
-    mie_url: str | None = None,
-    mie_client: MIEApprovalClient | None = None,
-    approval_gate: bool | None = None,
-    pure_approval_gate: bool | None = None,
-    approval_timeout_seconds: float | None = None,
 ) -> Starlette:
     """Build only the Starlette app (see :func:`build_server_runtime` for the full runtime)."""
     return build_server_runtime(
@@ -560,11 +466,6 @@ def build_server_app(
         install_offline_provider=install_offline_provider,
         protocol_mode=protocol_mode,
         pure_policy=pure_policy,
-        mie_url=mie_url,
-        mie_client=mie_client,
-        approval_gate=approval_gate,
-        pure_approval_gate=pure_approval_gate,
-        approval_timeout_seconds=approval_timeout_seconds,
     ).app
 
 

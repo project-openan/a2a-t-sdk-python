@@ -1,4 +1,4 @@
-/** The three human moments of the demo: intent review, negotiation decision and MML review. */
+/** The human moments of the demo: intent review, validation and the negotiation decision. */
 
 import { format } from "../copy.js";
 
@@ -87,71 +87,6 @@ function activeDecision(state) {
 function prefillFromProposal(content) {
   const segments = String(content || "").match(/\{[^{}]*\d+\s*Mbps[^{}]*\}/gi) || [];
   return segments.length > 0 ? segments.join(", ") : String(content || "").trim();
-}
-
-/** Build approval 2 (the MIE MML review), or ``null`` when no review is pending. */
-export function approvalCard(state, copy) {
-  if (
-    state.protocol === "pure" &&
-    state.mieWaiting &&
-    state.mieApproval !== null &&
-    state.mieResolved === null &&
-    !state.finished &&
-    state.status === "running"
-  ) {
-    const approval = isObject(state.mieApproval) ? state.mieApproval : {};
-    const plan = isObject(approval.plan) ? approval.plan : {};
-    const cell = plan.cellId || "—";
-    const window = plan.window || "—";
-    const rate = plan.rate || "—";
-    return {
-      type: "approval",
-      pure: true,
-      taskId: approval.taskId || null,
-      kicker: copy.pure?.mieKicker || copy.approval.kicker,
-      title: copy.pure?.mieTitle || copy.approval.title,
-      text: format(copy.approval.detail, { cell, window, rate }),
-      detail: copy.pure?.mieWait || copy.approval.waiting,
-      mml: null,
-      policy: copy.pure?.mieNote || copy.approval.note,
-      options: [
-        { action: "approve", label: copy.approval.approve, primary: true },
-        { action: "reject", label: copy.approval.reject, danger: true },
-      ],
-    };
-  }
-  // No local approval gate means no card: a --nms run has no /approvals route, and a bare
-  // INPUT_REQUIRED status is not an approval. The server approval span sets the gate when it is
-  // real, so a split deployment still shows the card.
-  if (state.approvalGate !== true) return null;
-  // A gate that is still marked waiting when the run has already ended must not keep the page
-  // stuck on the card: the ending card has to take over.
-  if (state.approvalState !== "waiting" || state.finished || state.status !== "running") return null;
-  const approval = state.approval || {};
-  const cell = approval.cellId || "—";
-  const window = approval.window || "—";
-  const rate = approval.rate || "—";
-  const detail = approval.generic
-    ? copy.approval.waiting
-    : format(copy.approval.detail, { cell, window, rate });
-  return {
-    type: "approval",
-    kicker: copy.approval.kicker,
-    title: copy.approval.title,
-    text: detail,
-    detail: null,
-    // Review is one step: the command stays visible on one line; the policy note is already a
-    // stage bubble, so the card stays compact enough to keep the whole stage on screen.
-    mml: {
-      label: copy.approval.sample,
-      text: copy.approval.mml(cell, window, String(rate).replace("%", "")),
-    },
-    policy: null,
-    options: [
-      { action: "approve", label: copy.approval.approve, primary: true },
-      { action: "reject", label: copy.approval.reject, danger: true },
-    ],
-  };
 }
 
 /** Build the decision payload of one Send / Reject / Abort click. */

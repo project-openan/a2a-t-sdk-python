@@ -2310,7 +2310,6 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
         protocol=PROTOCOL_A2A_T,
         protocols=(PROTOCOL_A2A_T, "pure"),
         nms_enabled=False,
-        mie_url="http://127.0.0.1:8002",
         finished_grace_seconds=0.0,
     )
     transport = httpx.ASGITransport(app=app)
@@ -2336,7 +2335,6 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
             "discovery": "direct",
             "transport": "sse",
         }
-        assert meta["mieEnabled"] is True
 
         extension = await http_client.post("/api/runs", json={"scenario": "night", "mode": "auto", "protocol": "a2a-t"})
         assert extension.status_code == 202

@@ -9,7 +9,6 @@ cannot observe each other's profile/evaluation/apply state.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,12 +24,6 @@ from demo.agents.server_agent.tools import (
 
 #: Structured error code of a tool called out of order.
 TOOL_ORDER_VIOLATION: str = "tool_order_violation"
-
-#: Structured error returned when the engineer rejects a plan at the approval gate.
-APPROVAL_DENIED: str = "approval_denied"
-
-#: Gate signature: cell, window, rate, evaluation -> approved?
-ApprovalGate = Callable[[str, str, str, Mapping[str, object] | None], Awaitable[bool]]
 
 #: Report tool name.
 REPORT_TOOL_NAME: str = "generate_energy_saving_report"
@@ -90,17 +83,11 @@ def _rate_key(value: object) -> str:
         return text
 
 
-def build_execution_tools(
-    guard: PlanGuard,
-    *,
-    approval_gate: ApprovalGate | None = None,
-) -> list[BaseTool]:
+def build_execution_tools(guard: PlanGuard) -> list[BaseTool]:
     """Build the four guarded RAN NMS tools of one execution.
 
     Args:
         guard: per-execution order state.
-        approval_gate: optional async human gate called before a plan is applied. A rejection
-            returns the structured ``approval_denied`` error and writes nothing.
 
     Returns:
         The tools in the order the planner is expected to call them.
@@ -154,14 +141,13 @@ def build_execution_tools(
     async def apply_energy_saving_plan_tool(cell_id: str, window: str, target_rate: str) -> str:
         """Apply a feasible energy-saving plan and return its plan_id.
 
-        Requires the same plan to have been evaluated successfully first, and, when the deployment
-        configures a human gate, the engineer's approval before anything is written.
+        Requires the same plan to have been evaluated successfully first.
         """
         guard.record("apply_energy_saving_plan")
         if guard.applied_any:
             # A live planner sometimes explores several candidates and tries to apply another
-            # plan after the first one. That would open a second approval gate and delay the
-            # report; the task contract is one applied plan followed by its report.
+            # plan after the first one; the task contract is one applied plan followed by its
+            # report.
             return _violation(
                 "apply_energy_saving_plan",
                 "A plan is already applied in this task; generate its report instead.",
@@ -176,19 +162,6 @@ def build_execution_tools(
                 window=str(window),
                 target_rate=str(target_rate),
             )
-        if approval_gate is not None:
-            approved = await approval_gate(cell_id, window, target_rate, evaluation)
-            if not approved:
-                return _json(
-                    {
-                        "ok": False,
-                        "error_code": APPROVAL_DENIED,
-                        "message": "The engineer did not approve the change; nothing was applied.",
-                        "cell_id": str(cell_id),
-                        "window": str(window),
-                        "target_rate": str(target_rate),
-                    }
-                )
         result = apply_energy_saving_plan(cell_id, window, target_rate)
         if result.get("ok") is True:
             guard.applied = result
@@ -205,8 +178,7 @@ def build_execution_tools(
     ) -> str:
         """Update an existing energy-saving plan in place and return its plan_id.
 
-        Requires the same cell/window/rate to have been evaluated successfully first, and, when the
-        deployment configures a human gate, the engineer's approval before anything is written.
+        Requires the same cell/window/rate to have been evaluated successfully first.
         """
         guard.record("modify_energy_saving_plan")
         if guard.applied_any:
@@ -230,20 +202,6 @@ def build_execution_tools(
                 window=str(window),
                 target_rate=str(target_rate),
             )
-        if approval_gate is not None:
-            approved = await approval_gate(cell_id, window, target_rate, evaluation)
-            if not approved:
-                return _json(
-                    {
-                        "ok": False,
-                        "error_code": APPROVAL_DENIED,
-                        "message": "The engineer did not approve the change; nothing was modified.",
-                        "plan_id": str(plan_id),
-                        "cell_id": str(cell_id),
-                        "window": str(window),
-                        "target_rate": str(target_rate),
-                    }
-                )
         result = modify_energy_saving_plan(plan_id, cell_id, window, target_rate)
         if result.get("ok") is True:
             guard.applied = result
@@ -288,8 +246,6 @@ def tool_result_from_text(text: Any) -> dict[str, object]:
 
 
 __all__ = [
-    "APPROVAL_DENIED",
-    "ApprovalGate",
     "PlanGuard",
     "REPORT_TOOL_NAME",
     "TOOL_ORDER_VIOLATION",

@@ -126,14 +126,12 @@ def build_tester_routes(
                 "protocols": [PROTOCOL_A2A_T, PROTOCOL_A2A],
                 "stopAfter": list(ALL_STAGES),
                 "stageOrder": list(ALL_STAGES),
-                "approvals": ["approve", "reject", "auto"],
                 "decisionModes": list(DECISION_MODES),
                 "negotiationSources": list(NEGOTIATION_SOURCES),
                 "transport": defaults.get("transport", "sse"),
                 "discovery": defaults.get("discovery", "direct"),
                 "defaults": {
                     "stopAfter": "accepted",
-                    "approval": None,
                     "timeoutSeconds": None,
                     "workingTimeoutSeconds": DEFAULT_WORKING_TIMEOUT_SECONDS,
                     "decisionMode": default_decision_mode(model_mode),
@@ -197,7 +195,6 @@ def build_tester_routes(
                 # pushes it minutes later), so waiting for it only turns a completed negotiation
                 # into a timeout. A caller that wants the final state asks for it explicitly.
                 stop_after=str(body.get("stopAfter") or "accepted"),
-                approval=_optional_str(body.get("approval")),
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
@@ -220,7 +217,6 @@ def build_tester_routes(
             snapshot = batches.create_scratch(
                 user_input=str(body.get("userInput") or ""),
                 protocol=str(body.get("protocol") or PROTOCOL_A2A_T),
-                approval=_optional_str(body.get("approval")) or "approve",
                 timeout_seconds=_optional_float(body.get("timeoutSeconds")),
                 decision_mode=_optional_str(body.get("decisionMode")),
                 negotiation_source=_optional_str(body.get("negotiationSource")),

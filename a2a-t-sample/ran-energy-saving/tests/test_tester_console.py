@@ -239,7 +239,6 @@ async def test_creating_a_batch_expands_each_case_by_protocol(client: httpx.Asyn
             "caseIds": [1, 2],
             "protocols": ["a2a-t", "a2a"],
             "stopAfter": "final",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -265,7 +264,6 @@ async def test_the_sdk_stage_batch_passes_with_the_fake_client(client: httpx.Asy
             "caseIds": [1],
             "protocols": ["a2a-t"],
             "stopAfter": "validate",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -287,7 +285,6 @@ async def test_the_full_flow_asserts_send_negotiate_and_final(client: httpx.Asyn
             "caseIds": [1],
             "protocols": ["a2a-t"],
             "stopAfter": "final",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -313,7 +310,6 @@ async def test_the_trace_tab_reads_the_tester_run_timeline(
             "caseIds": [1],
             "protocols": ["a2a-t"],
             "stopAfter": "final",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -339,7 +335,6 @@ async def test_a2a_rejects_a_sdk_only_stop_stage(client: httpx.AsyncClient) -> N
             "caseIds": [1],
             "protocols": ["a2a"],
             "stopAfter": "validate",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -408,7 +403,6 @@ async def test_rerun_is_rejected_while_the_batch_is_running(
                 "caseIds": [1],
                 "protocols": ["a2a-t"],
                 "stopAfter": "final",
-                "approval": "approve",
                 "timeoutSeconds": 60,
             },
         )
@@ -440,7 +434,6 @@ async def test_a_scratch_request_runs_without_expectations(client: httpx.AsyncCl
         json={
             "userInput": "Create an energy saving task for A2ATestRegion.",
             "protocol": "a2a-t",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -475,7 +468,6 @@ async def test_retry_rebuilds_only_the_failed_items(
                 "caseIds": [1, 2],
                 "protocols": ["a2a-t"],
                 "stopAfter": "validate",
-                "approval": "approve",
                 "timeoutSeconds": 60,
             },
         )
@@ -496,7 +488,6 @@ async def test_the_batch_exports_json_and_xlsx(client: httpx.AsyncClient) -> Non
             "caseIds": [1],
             "protocols": ["a2a-t"],
             "stopAfter": "validate",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -526,7 +517,6 @@ async def _create_tester_batch(
             "caseIds": list(case_ids),
             "protocols": list(protocols),
             "stopAfter": stop_after,
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -586,7 +576,6 @@ async def test_a_scratch_batch_belongs_to_the_browser_that_created_it(
         json={
             "userInput": "Create an energy saving task for A2ATestRegion.",
             "protocol": "a2a-t",
-            "approval": "approve",
             "timeoutSeconds": 60,
         },
     )
@@ -769,7 +758,6 @@ async def test_meta_exposes_the_acceptance_stage_model_and_transport(
         assert stage in stage_order
     assert stage_order.index("accepted") < stage_order.index("working") < stage_order.index("final")
     assert meta["defaults"]["stopAfter"] == "accepted"
-    assert meta["defaults"]["approval"] is None
     assert meta["defaults"]["decisionMode"] == "scripted"
     assert meta["decisionModes"] == ["scripted", "live"]
     assert meta["transport"] in {"sse", "webhook"}
@@ -820,7 +808,6 @@ def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
         "config-working-timeout",
     ):
         assert re.search(rf'id="{element_id}"', page), element_id
-    assert "不自动答复" in page
 
 
 def test_the_catalog_offers_a_case_detail_without_running_it() -> None:

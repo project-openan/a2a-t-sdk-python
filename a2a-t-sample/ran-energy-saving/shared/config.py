@@ -70,9 +70,8 @@ SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWU
 #: Task; ``oss`` keeps the deprecated proxy topology (UI -> OSS Agent -> downstream) as an
 #: explicit opt-in. The hop is deployment-level and validated at startup.
 PURE_HOP_DIRECT = "direct"
-PURE_HOP_OSS = "oss"
 PURE_HOP_NMS = "nms"
-SUPPORTED_PURE_HOPS = (PURE_HOP_DIRECT, PURE_HOP_OSS, PURE_HOP_NMS)
+SUPPORTED_PURE_HOPS = (PURE_HOP_DIRECT, PURE_HOP_NMS)
 DEFAULT_PURE_HOP = PURE_HOP_DIRECT
 
 #: RPC method of a pure A2A request. ``auto`` follows the peer AgentCard: a peer that advertises
@@ -140,11 +139,8 @@ MANUAL_DECISION_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_MANUAL_DECISION_TIMEOUT_SECONDS"
 #: Budget of the advisory decision recommendation before the page opens the manual surface.
 DECISION_RECOMMENDATION_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_DECISION_RECOMMENDATION_TIMEOUT_SECONDS"
 TASK_DB_ENV_KEY = "A2AT_SAMPLE_TASK_DB"
-OSS_TASK_DB_ENV_KEY = "A2AT_SAMPLE_OSS_TASK_DB"
 #: Long-running OSS task tracking: ``auto`` enables it for the real NMS webhook hop.
-LONG_TASK_MODE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_MODE"
 #: Seconds the OSS keeps the initial synchronous stream before handing the task to the pump.
-LONG_TASK_SETTLE_ENV_KEY = "A2AT_SAMPLE_LONG_TASK_SETTLE_SECONDS"
 #: UI poll interval while a long-running downstream Task is tracked.
 TASK_POLL_INTERVAL_ENV_KEY = "A2AT_SAMPLE_TASK_POLL_INTERVAL_SECONDS"
 #: Silence after which the NMS transport hands a non-terminal Task to background tracking.
@@ -168,21 +164,11 @@ SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
 #: per-run ``.env``; manual starts must read the same file instead of only ``os.environ``.
 PROTOCOL_MODE_ENV_KEY = "A2AT_SAMPLE_PROTOCOL_MODE"
 #: OSS Agent bind/advertised address.
-OSS_HOST_ENV_KEY = "A2AT_SAMPLE_OSS_HOST"
-OSS_PORT_ENV_KEY = "A2AT_SAMPLE_OSS_PORT"
 #: Cross-process trace emitter of the server/OSS hops. The launcher owns these values per run.
 TRACE_URL_ENV_KEY = "A2AT_SAMPLE_TRACE_URL"
 TRACE_TOKEN_ENV_KEY = "A2AT_SAMPLE_TRACE_TOKEN"
 TRACE_DIR_ENV_KEY = "A2AT_SAMPLE_TRACE_DIR"
-#: Approval gate switches and the MIE endpoint.
-APPROVAL_GATE_ENV_KEY = "A2AT_SAMPLE_APPROVAL_GATE"
-PURE_APPROVAL_GATE_ENV_KEY = "A2AT_SAMPLE_PURE_APPROVAL_GATE"
-APPROVAL_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_APPROVAL_TIMEOUT_SECONDS"
-MIE_HOST_ENV_KEY = "A2AT_SAMPLE_MIE_HOST"
-MIE_PORT_ENV_KEY = "A2AT_SAMPLE_MIE_PORT"
-MIE_URL_ENV_KEY = "A2AT_SAMPLE_MIE_URL"
 #: Local RAN Agent endpoint used by the OSS hop in the three-hop topology.
-RAN_URL_ENV_KEY = "A2AT_SAMPLE_RAN_URL"
 #: Days a terminal downstream binding (and its outer Task) is kept before cleanup.
 TASK_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_TASK_RETENTION_DAYS"
 
@@ -251,14 +237,6 @@ JUDGE_MAX_TOKENS_ENV_KEY = "A2AT_OSP_JUDGE_MAX_TOKENS"
 #: Defaults matching ``env.example``.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
-DEFAULT_OSS_PORT = 8001
-DEFAULT_MIE_HOST = "127.0.0.1"
-DEFAULT_MIE_PORT = 8002
-DEFAULT_MIE_URL = f"http://{DEFAULT_MIE_HOST}:{DEFAULT_MIE_PORT}"
-DEFAULT_RAN_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
-#: Default approval wait. Mirrors ``protocol.approval_gate.DEFAULT_APPROVAL_TIMEOUT_SECONDS``;
-#: shared config cannot import a protocol module.
-DEFAULT_APPROVAL_TIMEOUT_SECONDS = 86_400.0
 #: Terminal long-task bindings are kept this long for post-mortem and then deleted.
 DEFAULT_TASK_RETENTION_DAYS = 7
 DEFAULT_WEBHOOK_PORT = 9000
@@ -275,16 +253,10 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 300.0
 DEFAULT_WEBHOOK_IDLE_TIMEOUT = int(DEFAULT_HTTP_TIMEOUT_SECONDS)
 
 #: Long-running task tracking of the OSS hop.
-LONG_TASK_MODE_AUTO = "auto"
-LONG_TASK_MODE_ON = "on"
-LONG_TASK_MODE_OFF = "off"
-SUPPORTED_LONG_TASK_MODES = (LONG_TASK_MODE_AUTO, LONG_TASK_MODE_ON, LONG_TASK_MODE_OFF)
-DEFAULT_LONG_TASK_MODE = LONG_TASK_MODE_AUTO
 #: Settle window of a NON-STREAMING NMS call (``message:send``): after it the OSS stops waiting and
 #: hands the subscription to the background pump. A streaming caller (``message:stream``) has no
 #: deadline: the Task stays in the foreground until the vendor asks a question, reaches a terminal
 #: state, or the caller disconnects. This value is not a task lifetime.
-DEFAULT_LONG_TASK_SETTLE_SECONDS = 5.0
 #: How often the Web UI polls the remote Task while a days-long run is still executing with no
 #: page watching. Two minutes is enough to reattach safely: the run is kept alive by its own
 #: tracker (or by NMS pushes), and every poll is charged to the same quota bucket as the sends.
@@ -646,9 +618,7 @@ class SampleConfig:
         trace_span_level: Langfuse export detail (``full`` / ``phase`` / ``minimal``); the Web UI
             timeline is unaffected.
         http_timeout_seconds: Client HTTP budget of one A2A request, in seconds.
-        long_task_mode: OSS long-task tracking (``auto`` / ``on`` / ``off``). ``auto`` enables it
             for the real NMS webhook hop when the OSS Task database is configured.
-        long_task_settle_seconds: Settle window of a non-streaming NMS call after the NMS accepts
             the task, before the OSS hands it to the background pump. A streaming caller ignores it.
         long_task_tracking: Whether a client run keeps polling a Task the flow left incomplete
             (``A2AT_SAMPLE_LONG_TASK_TRACKING``). Off by default: the run then ends as
@@ -665,7 +635,6 @@ class SampleConfig:
         llm_max_attempts: Live SDK LLM attempt limit per retryable step.
         task_db_path: Absolute SQLite path of the persisted A2A Task store; ``None`` keeps the
             in-memory store (tests and ephemeral runs).
-        oss_task_db_path: Absolute SQLite path of the OSS Agent Task store and its downstream
             bindings; ``None`` keeps the OSS Task state in memory.
         client_db_path: Absolute SQLite path of the client conversation/run store; ``None`` keeps
             the client state in memory only.
@@ -690,19 +659,9 @@ class SampleConfig:
             requires on every route except its AgentCard and health endpoints; empty keeps the
             server open (loopback-only deployments).
         protocol_mode: server-side mode of the single-agent server (``a2a-t`` / ``a2a`` / ``both``).
-        oss_host: bind/advertised host of the OSS Agent.
-        oss_port: bind/advertised port of the OSS Agent.
         trace_url: cross-process trace endpoint of the server/OSS hop; empty disables HTTP tracing.
         trace_token: token the UI trace endpoint validates; empty disables authenticated tracing.
         trace_dir: CLI fallback: write ``<dir>/<runId>/server-trace.jsonl`` instead of HTTP.
-        approval_gate: whether the A2A-T extension waits for the MIE approval by default.
-        pure_approval_gate: whether a standard A2A request waits for the MIE approval by default;
-            ``None`` follows ``approval_gate``.
-        approval_timeout_seconds: how long one approval waits before it times out.
-        mie_host: bind/advertised host of the MIE approval agent.
-        mie_port: bind/advertised port of the MIE approval agent.
-        mie_url: base URL the RAN server uses to reach the MIE approval agent.
-        ran_url: local RAN Agent base URL used by the OSS hop in the three-hop topology.
         task_retention_days: days a terminal downstream binding is kept before cleanup.
         nms_a2a_base: full A2A surface URL of a vendor NMS (``.../a2a/json``); required by the
             ``nms`` discovery mode and used as the static AgentCard interface.
@@ -775,8 +734,6 @@ class SampleConfig:
     webhook_tls_key: str = ""
     webhook_auth_credentials: str = ""
     http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS
-    long_task_mode: str = DEFAULT_LONG_TASK_MODE
-    long_task_settle_seconds: float = DEFAULT_LONG_TASK_SETTLE_SECONDS
     long_task_tracking: bool = False
     task_poll_interval_seconds: float = DEFAULT_TASK_POLL_INTERVAL_SECONDS
     nms_poll_after_silence: float = DEFAULT_NMS_POLL_AFTER_SECONDS
@@ -787,7 +744,6 @@ class SampleConfig:
     manual_decision_timeout_seconds: float = DEFAULT_MANUAL_DECISION_TIMEOUT_SECONDS
     decision_recommendation_timeout_seconds: float = DEFAULT_DECISION_RECOMMENDATION_TIMEOUT_SECONDS
     task_db_path: str | None = None
-    oss_task_db_path: str | None = None
     client_db_path: str | None = None
     client_memory_turns: int = DEFAULT_CLIENT_MEMORY_TURNS
     adk_session_retention_days: int = DEFAULT_ADK_SESSION_RETENTION_DAYS
@@ -804,18 +760,9 @@ class SampleConfig:
     auth_token: str = ""
     server_auth_token: str = ""
     protocol_mode: str = PROTOCOL_A2A_T
-    oss_host: str = DEFAULT_HOST
-    oss_port: int = DEFAULT_OSS_PORT
     trace_url: str = ""
     trace_token: str = ""
     trace_dir: str = ""
-    approval_gate: bool = False
-    pure_approval_gate: bool | None = None
-    approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS
-    mie_host: str = DEFAULT_MIE_HOST
-    mie_port: int = DEFAULT_MIE_PORT
-    mie_url: str = DEFAULT_MIE_URL
-    ran_url: str = DEFAULT_RAN_URL
     task_retention_days: int = DEFAULT_TASK_RETENTION_DAYS
     nms_a2a_base: str = ""
     nms_token_url: str = ""
@@ -912,17 +859,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
             f"{PURE_HOP_ENV_KEY}=direct is the local RAN Agent hop and cannot be combined with "
             f"{DISCOVERY_ENV_KEY}=nms; omit the key to call the vendor directly"
         )
-    if pure_hop == PURE_HOP_OSS and discovery == DISCOVERY_NMS:
-        # The proxy combined with a real NMS is the topology that produced the outer Task,
-        # downstream binding and baseline races. Keep it available for explicitly reproducing the
-        # old demo, but never select it by default.
-        _LOGGER.warning(
-            "%s=oss with %s=nms keeps the deprecated OSS proxy in front of the vendor NMS; "
-            "use the direct hop (omit the key) for vendor acceptance",
-            PURE_HOP_ENV_KEY,
-            DISCOVERY_ENV_KEY,
-        )
-
     transport = _env_value(values, TRANSPORT_ENV_KEY, TRANSPORT_SSE)
     if transport not in SUPPORTED_TRANSPORTS:
         raise ValueError(f"Unsupported {TRANSPORT_ENV_KEY}: {transport}; expected one of {SUPPORTED_TRANSPORTS}")
@@ -959,13 +895,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         raise ValueError(
             f"Unsupported {PRE_SEND_VALIDATION_ENV_KEY}: {pre_send_validation}; "
             f"expected one of {SUPPORTED_PRE_SEND_VALIDATION}"
-        )
-
-    long_task_mode = _env_value(values, LONG_TASK_MODE_ENV_KEY, DEFAULT_LONG_TASK_MODE).strip().lower()
-    if long_task_mode not in SUPPORTED_LONG_TASK_MODES:
-        raise ValueError(
-            f"Unsupported {LONG_TASK_MODE_ENV_KEY}: {long_task_mode}; "
-            f"expected one of {SUPPORTED_LONG_TASK_MODES}"
         )
 
     nms_host = _env_value(values, NMS_HOST_ENV_KEY, "").strip()
@@ -1062,10 +991,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         pre_send_validation=pre_send_validation,
         trace_span_level=trace_span_level,
         http_timeout_seconds=_positive_seconds(values, HTTP_TIMEOUT_ENV_KEY, DEFAULT_HTTP_TIMEOUT_SECONDS),
-        long_task_mode=long_task_mode,
-        long_task_settle_seconds=_positive_seconds(
-            values, LONG_TASK_SETTLE_ENV_KEY, DEFAULT_LONG_TASK_SETTLE_SECONDS
-        ),
         long_task_tracking=_env_bool(values, LONG_TASK_TRACKING_ENV_KEY, False),
         task_poll_interval_seconds=_positive_seconds(
             values, TASK_POLL_INTERVAL_ENV_KEY, DEFAULT_TASK_POLL_INTERVAL_SECONDS
@@ -1081,7 +1006,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         manual_decision_timeout_seconds=manual_decision_timeout,
         decision_recommendation_timeout_seconds=decision_recommendation_timeout,
         task_db_path=_optional_absolute_path(values, TASK_DB_ENV_KEY),
-        oss_task_db_path=_optional_absolute_path(values, OSS_TASK_DB_ENV_KEY),
         client_db_path=_optional_absolute_path(values, CLIENT_DB_ENV_KEY),
         client_memory_turns=_non_negative_int(values, CLIENT_MEMORY_TURNS_ENV_KEY, DEFAULT_CLIENT_MEMORY_TURNS),
         adk_session_retention_days=_positive_int(
@@ -1100,20 +1024,9 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         auth_token=_env_value(values, AUTH_TOKEN_ENV_KEY, "").strip(),
         server_auth_token=_env_value(values, SERVER_AUTH_TOKEN_ENV_KEY, "").strip(),
         protocol_mode=protocol_mode,
-        oss_host=_env_value(values, OSS_HOST_ENV_KEY, DEFAULT_HOST),
-        oss_port=_env_int(values, OSS_PORT_ENV_KEY, DEFAULT_OSS_PORT),
         trace_url=_env_value(values, TRACE_URL_ENV_KEY, "").strip(),
         trace_token=_env_value(values, TRACE_TOKEN_ENV_KEY, "").strip(),
         trace_dir=_env_value(values, TRACE_DIR_ENV_KEY, "").strip(),
-        approval_gate=_env_bool(values, APPROVAL_GATE_ENV_KEY, False),
-        pure_approval_gate=_env_optional_bool(values, PURE_APPROVAL_GATE_ENV_KEY),
-        approval_timeout_seconds=_positive_seconds(
-            values, APPROVAL_TIMEOUT_ENV_KEY, DEFAULT_APPROVAL_TIMEOUT_SECONDS
-        ),
-        mie_host=_env_value(values, MIE_HOST_ENV_KEY, DEFAULT_MIE_HOST),
-        mie_port=_env_int(values, MIE_PORT_ENV_KEY, DEFAULT_MIE_PORT),
-        mie_url=_env_value(values, MIE_URL_ENV_KEY, DEFAULT_MIE_URL).strip(),
-        ran_url=_env_value(values, RAN_URL_ENV_KEY, DEFAULT_RAN_URL).strip(),
         task_retention_days=_positive_int(
             values, TASK_RETENTION_DAYS_ENV_KEY, DEFAULT_TASK_RETENTION_DAYS
         ),

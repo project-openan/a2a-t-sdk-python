@@ -126,7 +126,6 @@ async function loadMeta() {
     stopAfter.append(option);
   }
   stopAfter.value = meta?.defaults?.stopAfter || "accepted";
-  $("config-approval").value = meta?.defaults?.approval || "";
   $("config-timeout").value = meta?.defaults?.timeoutSeconds ?? "";
   $("config-working-timeout").value = meta?.defaults?.workingTimeoutSeconds ?? "";
   const concurrency = $("config-concurrency");
@@ -308,7 +307,6 @@ async function startBatch() {
       caseIds,
       protocols,
       stopAfter: $("config-stop-after").value,
-      approval: $("config-approval").value || null,
       decisionMode: $("config-decision").value,
       negotiationSource: $("config-negotiation-source").value,
       timeoutSeconds: $("config-timeout").value === "" ? null : Number($("config-timeout").value),
@@ -342,7 +340,6 @@ async function startScratch() {
     const created = await postJson("/api/tester/scratch", {
       userInput,
       protocol: $("scratch-protocol").value,
-      approval: $("scratch-approval").value,
       decisionMode: $("scratch-decision").value,
       negotiationSource: $("scratch-negotiation-source").value,
       timeoutSeconds: Number($("scratch-timeout").value) || 300,

@@ -103,9 +103,6 @@ def running_server(
     *,
     protocol_mode: str = "a2a-t",
     pure_policy: Any | None = None,
-    mie_url: str | None = None,
-    approval_gate: bool | None = None,
-    approval_timeout_seconds: float | None = None,
 ) -> Generator[ServerRuntime, None, None]:
     """Run one real server in a background thread and stop it afterwards.
 
@@ -122,9 +119,6 @@ def running_server(
         config=config,
         protocol_mode=protocol_mode,
         pure_policy=pure_policy,
-        mie_url=mie_url,
-        approval_gate=approval_gate,
-        approval_timeout_seconds=approval_timeout_seconds,
     )
     uvicorn_server = uvicorn.Server(
         uvicorn.Config(

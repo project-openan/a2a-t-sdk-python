@@ -29,7 +29,6 @@ import json
 import logging
 import os
 import re
-import ssl
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -38,10 +37,8 @@ from pathlib import Path
 from typing import Any, Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import httpx
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from eval.osp.catalog import CaseCatalog
-from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
     STATUS_RUNNING,
@@ -113,7 +110,6 @@ from starlette.responses import (
     HTMLResponse,
     JSONResponse,
     Response,
-    StreamingResponse,
 )
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
@@ -178,108 +174,6 @@ def _resolve_default(
     if value not in allowed:
         raise ValueError(f"Unsupported default {label}: {value}; expected one of {allowed}")
     return value
-
-
-#: Seconds one forwarded approval request may take before the page is told the result is unknown.
-APPROVAL_FORWARD_TIMEOUT_SECONDS: Final[float] = 10.0
-
-
-def _approval_forward_client(*, verify_tls: bool = True) -> httpx.AsyncClient:
-    """Build the HTTP client that forwards one local approval decision."""
-    return httpx.AsyncClient(trust_env=False, timeout=APPROVAL_FORWARD_TIMEOUT_SECONDS, verify=verify_tls)
-
-
-def _targets_the_nms(server_url: str | None, config: SampleConfig) -> bool:
-    """Whether a configured server URL is the vendor NMS rather than a local A2A server."""
-    if not server_url:
-        return False
-    base = (config.nms_a2a_base or "").rstrip("/")
-    return bool(base) and server_url.rstrip("/") == base
-
-
-def _is_tls_failure(exc: BaseException) -> bool:
-    """Whether an HTTP error was caused by certificate verification (walk the cause chain)."""
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, ssl.SSLError):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
-
-async def forward_approval_decision(
-    server_url: str,
-    *,
-    run_id: str,
-    approved: bool,
-    headers: Mapping[str, str],
-    verify_tls: bool,
-    timeout: float = APPROVAL_FORWARD_TIMEOUT_SECONDS,
-) -> tuple[int, dict[str, object]]:
-    """Forward one approval decision and classify every failure instead of "unreachable".
-
-    Returns:
-        ``(status_code, body)`` for the page. Only a 2xx from the target is an acceptance: a
-        redirect means the POST was not applied, so it must not read as success.
-    """
-    try:
-        async with httpx.AsyncClient(trust_env=False, timeout=timeout, verify=verify_tls) as client:
-            forwarded = await client.post(
-                f"{server_url.rstrip('/')}/approvals",
-                json={"runId": run_id, "approved": approved},
-                headers=dict(headers),
-            )
-    except httpx.TimeoutException as exc:
-        _LOGGER.warning("approval forward timed out: %s", exc)
-        return 504, {
-            "error": "The approval request timed out; the outcome is unknown. Refresh the run status.",
-            "code": "approval_timeout",
-        }
-    except httpx.InvalidURL as exc:
-        _LOGGER.warning("approval forward target is invalid: %s", exc)
-        return 500, {
-            "error": "The configured approval target is not a valid URL.",
-            "code": "approval_target_invalid",
-        }
-    except httpx.HTTPError as exc:
-        _LOGGER.warning("approval forward failed: %s", exc)
-        if _is_tls_failure(exc):
-            return 502, {
-                "error": f"The approval target's TLS certificate was not accepted: {exc}",
-                "code": "approval_tls_error",
-            }
-        return 502, {
-            "error": f"The approval target could not be reached: {exc}",
-            "code": "approval_connect_failed",
-        }
-    payload = await _forward_json_or_empty(forwarded)
-    if 300 <= forwarded.status_code < 400:
-        return 502, {
-            "error": "The approval target redirected the request; nothing was applied.",
-            "code": "approval_target_rejected",
-        }
-    if forwarded.status_code == 404:
-        return 404, {
-            "error": "The approval target has no /approvals route.",
-            "code": "approval_target_not_found",
-        }
-    if forwarded.status_code >= 400:
-        code = payload.get("code")
-        if not isinstance(code, str) or not code:
-            payload["code"] = "approval_target_rejected"
-        return forwarded.status_code, payload
-    return 200, {"accepted": True, "runId": run_id, "approved": approved}
-
-
-async def _forward_json_or_empty(response: httpx.Response) -> dict[str, object]:
-    """Return one forwarded JSON object, or an empty mapping."""
-    try:
-        value = response.json()
-    except ValueError:
-        return {}
-    return dict(value) if isinstance(value, dict) else {}
 
 
 async def _pure_run_mapping(client_store: ClientStore | None) -> dict[str, tuple[str, str]]:
@@ -351,14 +245,11 @@ def create_app(
     ui_mode: str = WEB_UI_PRESENTATION,
     default_brand: str = BRAND_ORANGE,
     server_url: str | None = None,
-    approval_gate: bool = False,
-    approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     allow_insecure_bind: bool = False,
     intent_review: bool | None = None,
     protocol: str = PROTOCOL_A2A_T,
     protocols: tuple[str, ...] | None = None,
     nms_enabled: bool | None = None,
-    mie_url: str | None = None,
     tester_prompt_client: Any | None = None,
 ) -> Starlette:
     """Build the Starlette application of the Web UI.
@@ -389,9 +280,7 @@ def create_app(
             Explorer); both serve the same API and event stream.
         default_brand: presentation color theme (``orange`` or ``huawei``); the page can switch it
             at runtime and remembers the choice in local storage.
-        server_url: base URL of the A2A server, used by the presentation's approval route.
-        approval_gate: whether the server pauses before applying a plan.
-        approval_timeout_seconds: approval window reported to the page.
+        server_url: base URL of the A2A server.
         allow_insecure_bind: explicit opt-in for a trusted-LAN bind without ``A2AT_SAMPLE_AUTH_TOKEN``;
             only the Web UI exposes this, never the A2A server.
         intent_review: whether confirm mode waits for approval 1; defaults to true only for the
@@ -402,7 +291,6 @@ def create_app(
         nms_enabled: whether the deployment talks to the vendor NMS; when ``None``, the process
             discovery mode decides. It selects each protocol's default hop (A2A-T direct to the
             NMS, standard A2A through the OSS Agent).
-        mie_url: MIE Agent base URL; when set, the UI proxies its approval SSE/POST routes.
         tester_prompt_client: optional SDK prompt client injected into the tester's SDK stages
             (tests use a fake; production builds the real client lazily).
 
@@ -645,7 +533,6 @@ def create_app(
                 "pureScenarios": list(PURE_PROTOCOL_SCENARIOS),
                 "plainScenarios": list(PLAIN_PROTOCOL_SCENARIOS),
                 "defaultProtocol": resolved_protocol,
-                "mieEnabled": bool(mie_url) and PROTOCOL_PURE in advertised_protocols,
                 "transports": list(SUPPORTED_TRANSPORTS),
                 "discoveries": list(SUPPORTED_DISCOVERY_MODES),
                 "defaultScenario": resolved_default_scenario,
@@ -659,9 +546,6 @@ def create_app(
                 "brands": list(SUPPORTED_BRANDS),
                 "decisionMode": resolved_default_mode,
                 "intentReview": resolved_intent_review and resolved_default_mode == "confirm",
-                # The vendor NMS has no local approval route: never advertise a gate it cannot serve.
-                "approvalGate": approval_gate and not resolved_nms,
-                "approvalTimeoutSeconds": approval_timeout_seconds,
                 "metricsEnabled": config.client_db_path is not None,
                 # The UI must keep its stream open at least as long as the backend grace window,
                 # otherwise the server's last trace batch is posted to a closed subscriber.
@@ -1530,132 +1414,6 @@ def create_app(
             )
         return JSONResponse({"accepted": True, "runId": run.run_id})
 
-    async def submit_approval(request: Request) -> Response:
-        """Forward the engineer's change approval to the NMS approval gate."""
-        run = manager.get(request.path_params["run_id"])
-        if run is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        try:
-            body = await request.json()
-        except ValueError:
-            return JSONResponse(
-                {"error": "The body must be a JSON object.", "code": "body_not_object"},
-                status_code=400,
-            )
-        if not isinstance(body, dict) or not isinstance(body.get("approved"), bool):
-            return JSONResponse(
-                {
-                    "error": "The approved field must be a boolean.",
-                    "code": "approved_invalid",
-                },
-                status_code=400,
-            )
-        # A real NMS owns execution approval and exposes no /approvals route. Refuse before any
-        # network call so the page gets a truthful reason instead of a 404/TLS "unreachable".
-        if resolved_nms or _targets_the_nms(server_url, config):
-            return JSONResponse(
-                {
-                    "error": (
-                        "This run talks to the vendor NMS, which owns execution approval and has "
-                        "no local /approvals route. Nothing was sent."
-                    ),
-                    "code": "approval_not_supported_in_nms",
-                },
-                status_code=409,
-            )
-        # The page's gate flag only controls whether it expects the MIE card. Forward whenever the
-        # server URL is configured: a Web UI started separately from the A2A server must still be
-        # able to resolve a gate the server is actually holding.
-        if not server_url:
-            return JSONResponse(
-                {
-                    "error": "This Web UI has no A2A server URL to forward the approval to.",
-                    "code": "approval_forward_unconfigured",
-                },
-                status_code=404,
-            )
-        if run.status != STATUS_RUNNING:
-            return JSONResponse(
-                {"error": "The run is not running.", "code": "run_not_running"},
-                status_code=409,
-            )
-        headers = {}
-        if config.server_auth_token:
-            headers["authorization"] = f"Bearer {config.server_auth_token}"
-        status_code, payload = await forward_approval_decision(
-            server_url,
-            run_id=run.run_id,
-            approved=body["approved"],
-            headers=headers,
-            verify_tls=config.nms_verify_tls,
-        )
-        return JSONResponse(payload, status_code=status_code)
-
-    async def _json_or_empty(response: httpx.Response) -> dict[str, object]:
-        """Return one forwarded JSON object, or an empty mapping."""
-        try:
-            value = response.json()
-        except ValueError:
-            return {}
-        return dict(value) if isinstance(value, dict) else {}
-
-    async def mie_events(request: Request) -> Response:
-        """Proxy the MIE Agent approval SSE stream to the browser."""
-        del request
-        if not mie_url:
-            return JSONResponse(
-                {"error": "The MIE Agent is not configured.", "code": "mie_disabled"},
-                status_code=404,
-            )
-
-        async def stream() -> AsyncIterator[bytes]:
-            try:
-                async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
-                    async with client.stream("GET", f"{mie_url.rstrip('/')}/approvals/events") as response:
-                        response.raise_for_status()
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
-            except httpx.HTTPError as exc:
-                _LOGGER.warning("MIE event proxy stopped: %s", exc)
-                return
-
-        return StreamingResponse(stream(), media_type="text/event-stream")
-
-    async def mie_decide(request: Request) -> Response:
-        """Forward one engineer decision to the MIE Agent."""
-        if not mie_url:
-            return JSONResponse(
-                {"error": "The MIE Agent is not configured.", "code": "mie_disabled"},
-                status_code=404,
-            )
-        try:
-            body = await request.json()
-        except ValueError:
-            return JSONResponse(
-                {"error": "The body must be a JSON object.", "code": "body_not_object"},
-                status_code=400,
-            )
-        if not isinstance(body, dict) or not isinstance(body.get("approved"), bool):
-            return JSONResponse(
-                {"error": "The approved field must be a boolean.", "code": "approved_invalid"},
-                status_code=400,
-            )
-        task_id = request.path_params["task_id"]
-        try:
-            async with httpx.AsyncClient(trust_env=False, timeout=10.0) as client:
-                forwarded = await client.post(
-                    f"{mie_url.rstrip('/')}/approvals/{task_id}",
-                    json={"approved": body["approved"]},
-                )
-        except httpx.HTTPError as exc:
-            _LOGGER.warning("MIE approval forward failed: %s", exc)
-            return JSONResponse(
-                {"error": "The MIE Agent is unreachable.", "code": "mie_unreachable"},
-                status_code=502,
-            )
-        payload = await _json_or_empty(forwarded)
-        return JSONResponse(payload, status_code=forwarded.status_code)
-
     async def _stored_transcript(request: Request, field_name: str) -> str | None:
         """Read one transcript path persisted with a finished run."""
         path = config.client_db_path
@@ -1839,9 +1597,6 @@ def create_app(
             Route("/api/runs/{run_id}/decisions", submit_decision, methods=["POST"]),
             Route("/api/runs/{run_id}/decisions/parse", parse_decision, methods=["POST"]),
             Route("/api/runs/{run_id}/intent", submit_intent, methods=["POST"]),
-            Route("/api/runs/{run_id}/approvals", submit_approval, methods=["POST"]),
-            Route("/api/mie/events", mie_events),
-            Route("/api/mie/approvals/{task_id}", mie_decide, methods=["POST"]),
             Route("/api/runs/{run_id}/transcript.json", transcript_json),
             Route("/api/runs/{run_id}/transcript.md", transcript_markdown),
             Route("/api/runs/{run_id}/trace", ingest_trace, methods=["POST"]),

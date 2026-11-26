@@ -165,12 +165,10 @@ async def test_meta_reports_the_presentation_mode_and_the_seven_scenarios(
     assert all(meta["scenarioRequests"][name] for name in meta["scenarios"])
     assert meta["decisionMode"] == "auto"
     assert meta["intentReview"] is False
-    assert meta["approvalGate"] is False
-    assert meta["approvalTimeoutSeconds"] == 86400.0
     assert "confirm" in meta["modes"]
 
 
-async def test_pure_meta_exposes_its_scenarios_and_mie(
+async def test_pure_meta_exposes_its_scenarios(
     offline_config: SampleConfig,
     tmp_path: Path,
 ) -> None:
@@ -178,7 +176,6 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
         offline_config,
         runs_dir=tmp_path,
         protocol="pure",
-        mie_url="http://127.0.0.1:8002",
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -199,7 +196,6 @@ async def test_pure_meta_exposes_its_scenarios_and_mie(
         "outage",
     ]
     assert meta["pureScenarios"] == meta["scenarios"]
-    assert meta["mieEnabled"] is True
     assert 'id="protocol-switch"' in page
 
 
@@ -545,25 +541,6 @@ def test_presentation_sources_never_build_payloads_with_innerhtml() -> None:
         assert "innerHTML" not in source, name
         assert "outerHTML" not in source, name
         assert "insertAdjacentHTML" not in source, name
-
-
-async def test_meta_reports_the_approval_gate(
-    offline_config: SampleConfig,
-    tmp_path: Path,
-) -> None:
-    app = create_app(
-        offline_config,
-        runs_dir=tmp_path,
-        approval_gate=True,
-        server_url="http://127.0.0.1:9",
-        approval_timeout_seconds=90.0,
-    )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
-        meta = (await http_client.get("/api/meta")).json()
-
-    assert meta["approvalGate"] is True
-    assert meta["approvalTimeoutSeconds"] == 90.0
 
 
 def test_non_loopback_bind_needs_the_insecure_opt_in(
