@@ -232,16 +232,6 @@ NMS_REQUEST_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_REQUEST_TIMEOUT_SECONDS"
 NMS_SEND_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_NMS_SEND_TIMEOUT_SECONDS"
 #: Region the vendor NMS serves. When set, ``--nms`` overrides the scenario region with it.
 NMS_REGION_ENV_KEY = "A2AT_SAMPLE_NMS_REGION"
-#: Whether the A2A-T hop targets the local simulator. The tester records (instead of asserting)
-#: the pure-A2A dialogue, whose round count the simulator does not reproduce.
-NMS_SIM_ENV_KEY = "A2AT_SAMPLE_NMS_SIM"
-#: Plain-A2A question style of the simulator: ``issue`` (historical) or ``confirm`` (the vendor's
-#: fixed "Not feasible, please confirm" dialogue). The tester asserts the OSP round count only in
-#: ``confirm`` mode.
-NMS_SIM_PURE_QUESTION_ENV_KEY = "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"
-NMS_SIM_PURE_QUESTION_ISSUE = "issue"
-NMS_SIM_PURE_QUESTION_CONFIRM = "confirm"
-SUPPORTED_NMS_SIM_PURE_QUESTIONS = (NMS_SIM_PURE_QUESTION_ISSUE, NMS_SIM_PURE_QUESTION_CONFIRM)
 #: Comma-separated site names the vendor NMS serves. ``--nms`` overrides the scenario site list.
 NMS_SITES_ENV_KEY = "A2AT_SAMPLE_NMS_SITES"
 #: Whether the raw NMS exchange is written to ``runs/<runId>/wire.jsonl``.
@@ -609,18 +599,6 @@ def _nms_sites(values: dict[str, str | None], default: tuple[str, ...]) -> tuple
     return tuple(item.strip() for item in raw_value.split(",") if item.strip())
 
 
-def _pure_question(values: dict[str, str | None]) -> str:
-    """Resolve the simulator's plain-A2A question style and reject an unknown value."""
-    raw_value = _env_value(values, NMS_SIM_PURE_QUESTION_ENV_KEY, NMS_SIM_PURE_QUESTION_ISSUE)
-    value = raw_value.strip().lower()
-    if value not in SUPPORTED_NMS_SIM_PURE_QUESTIONS:
-        raise ValueError(
-            f"Unsupported {NMS_SIM_PURE_QUESTION_ENV_KEY}: {raw_value}; "
-            f"expected one of {SUPPORTED_NMS_SIM_PURE_QUESTIONS}"
-        )
-    return value
-
-
 def _webhook_auth_credentials(values: dict[str, str | None]) -> str:
     """Resolve the receiver's Basic-auth credentials (``user:password``), empty when unset."""
     raw_value = _env_value(values, WEBHOOK_AUTH_CREDENTIALS_ENV_KEY, "")
@@ -862,9 +840,6 @@ class SampleConfig:
     nms_poll_interval: float = DEFAULT_NMS_POLL_INTERVAL_SECONDS
     nms_region: str = ""
     nms_sites: tuple[str, ...] = ()
-    #: ``True`` when the A2A-T hop is the local simulator (``--nms-sim``), not a vendor NMS.
-    nms_sim: bool = False
-    nms_sim_pure_question: str = NMS_SIM_PURE_QUESTION_ISSUE
     nms_wire_log: bool = True
     planner_model: str = ""
     planner_api_base: str = ""
@@ -1168,8 +1143,6 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         nms_send_timeout=_positive_seconds(values, NMS_SEND_TIMEOUT_ENV_KEY, DEFAULT_NMS_SEND_TIMEOUT_SECONDS),
         nms_region=_env_value(values, NMS_REGION_ENV_KEY, "").strip(),
         nms_sites=_nms_sites(values, ()),
-        nms_sim=_env_bool(values, NMS_SIM_ENV_KEY, False),
-        nms_sim_pure_question=_pure_question(values),
         nms_wire_log=_env_bool(values, NMS_WIRE_LOG_ENV_KEY, True),
         planner_model=_env_value(values, PLANNER_MODEL_ENV_KEY, planner_model_default),
         planner_api_base=_env_value(values, PLANNER_API_BASE_ENV_KEY, adk_model_api_base),

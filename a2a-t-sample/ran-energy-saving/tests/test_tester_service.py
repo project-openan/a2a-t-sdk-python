@@ -295,8 +295,6 @@ def _manager(
     runs: _FakeRuns,
     *,
     model_mode: str = "offline",
-    nms_sim: bool = False,
-    nms_sim_pure_question: str = "issue",
     protocol_defaults: dict[str, dict[str, str]] | None = None,
     judge: Any | None = None,
     model_label: str = "",
@@ -313,8 +311,6 @@ def _manager(
         server_url=None,
         server_auth_token=None,
         runs_dir=tmp_path,
-        nms_sim=nms_sim,
-        nms_sim_pure_question=nms_sim_pure_question,
         language="en-US",
         model_mode=model_mode,
         model_label=model_label,
@@ -624,69 +620,6 @@ async def test_negotiation_without_expected_rounds_ends_on_an_unexpected_proposa
     elapsed = time.monotonic() - started
 
     assert elapsed < 1.0
-
-
-async def test_pure_replay_mode_asserts_the_osp_round_count(tmp_path: Path) -> None:
-    """With the vendor dialog replay, one recorded proposal is the case's expected round."""
-    manager = _manager(
-        tmp_path, _FakeRuns(_finish), nms_sim=True, nms_sim_pure_question="confirm"
-    )
-    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
-    run.status = "running"
-    run.proposals.append(SimpleNamespace(kind="feasibility"))  # type: ignore[arg-type]
-    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
-    batch = _Batch(
-        batch_id="batch",
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A],
-        stop_after="negotiate",
-        approval=None,
-        timeout_seconds=1.0,
-        items=[item],
-        decision_mode=DECISION_MODE_LIVE,
-    )
-
-    await manager._wait_for_stage(
-        run,
-        item,
-        batch,
-        ("negotiate",),
-        case=CASES[1],
-        timeout_seconds=1.0,
-        working_timeout_seconds=1.0,
-    )
-
-    assert item.stages["negotiate"].status == STAGE_PASSED
-
-
-async def test_pure_issue_mode_still_records_the_round_count(tmp_path: Path) -> None:
-    """The historical issue renderer cannot reproduce the workbook dialogue, so it only records."""
-    manager = _manager(tmp_path, _FakeRuns(_finish), nms_sim=True)
-    run = RunState(run_id="run", scenario="night", mode=MODE_SCRIPTED, transport="sse")
-    run.status = "running"
-    run.proposals.append(SimpleNamespace(kind="feasibility"))  # type: ignore[arg-type]
-    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
-    batch = _Batch(
-        batch_id="batch",
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A],
-        stop_after="negotiate",
-        approval=None,
-        timeout_seconds=1.0,
-        items=[item],
-    )
-
-    await manager._wait_for_stage(
-        run,
-        item,
-        batch,
-        ("negotiate",),
-        case=CASES[1],
-        timeout_seconds=1.0,
-        working_timeout_seconds=1.0,
-    )
-
-    assert item.stages["negotiate"].status == STAGE_RECORDED
 
 
 async def test_accepted_fails_fast_when_the_run_ended_before_sending(tmp_path: Path) -> None:
@@ -1615,32 +1548,12 @@ async def test_a_negotiation_cases_task_t_is_recorded_not_asserted(tmp_path: Pat
     assert "协商后" in stages["task_t"]["message"]
 
 
-def test_the_modify_baseline_uses_the_configured_region_and_window(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``Region A`` is not served; the baseline must name the NMS region and its exact window."""
-    from demo.web.tester.service import _baseline_request
-
-    monkeypatch.setenv("A2AT_SAMPLE_NMS_REGION", "OtherRegion")
-    monkeypatch.setenv("A2AT_SAMPLE_NMS_SIM_WINDOW", "08:00~10:00")
-
-    request = _baseline_request()
-
-    assert "OtherRegion" in request
-    assert "10Mbps from 08:00 to 10:00" in request
-    assert "Region A" not in request
-    # The served window replaces the day plan instead of being inserted next to it: two segments
-    # covering the same hours would describe an ambiguous prior task.
-    assert "07:00 to 18:00" not in request
-
-
 def test_the_modify_baseline_is_a_one_day_region_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The default fixture covers the day so a Modify's "keep the rest unchanged" has a rest."""
     from demo.web.tester.service import _baseline_request
 
-    monkeypatch.delenv("A2AT_SAMPLE_NMS_SIM_WINDOW", raising=False)
     monkeypatch.setenv("A2AT_SAMPLE_NMS_REGION", "OtherRegion")
 
     request = _baseline_request()
@@ -2205,7 +2118,6 @@ async def _run_item_with_server_intent(
     tmp_path: Path,
     payload: Mapping[str, object] | None,
     *,
-    nms_sim: bool = False,
     protocol: str = PROTOCOL_A2A_T,
     protocol_defaults: dict[str, dict[str, str]] | None = None,
     judge: Any | None = None,
@@ -2219,7 +2131,6 @@ async def _run_item_with_server_intent(
     manager = _manager(
         tmp_path,
         _FakeRuns(builder),
-        nms_sim=nms_sim,
         protocol_defaults=protocol_defaults,
         judge=judge,
     )
@@ -2365,21 +2276,6 @@ async def test_a_downstream_that_returns_no_payload_records_the_intent_stage(
     assert item.status == "passed"
 
 
-async def test_the_simulator_payload_is_recorded_not_judged(tmp_path: Path) -> None:
-    """The simulator answers a reduced key set; comparing it would be a false failure."""
-    item = await _run_item_with_server_intent(
-        tmp_path,
-        {"Operation type": "Create", "Energy saving region": "A2ATestRegion"},
-        nms_sim=True,
-    )
-
-    assert item.stages["intent"].status == STAGE_RECORDED
-    assert item.server_intent == {
-        "Operation type": "Create",
-        "Energy saving region": "A2ATestRegion",
-    }
-
-
 async def test_a_direct_pure_a2a_run_judges_the_vendor_intent(tmp_path: Path) -> None:
     item = await _run_item_with_server_intent(
         tmp_path,
@@ -2424,20 +2320,6 @@ async def test_a_proxy_pure_a2a_intent_is_recorded_not_judged(tmp_path: Path) ->
     stage = item.stages["intent"]
     assert stage.status == STAGE_RECORDED
     assert stage.diffs
-
-
-async def test_a_pure_a2a_sim_intent_is_recorded_not_judged(tmp_path: Path) -> None:
-    payload = dict(CASES[1]["expect"]["intent"])
-    payload["Energy saving region"] = "OtherRegion"
-    item = await _run_item_with_server_intent(
-        tmp_path,
-        payload,
-        protocol=PROTOCOL_A2A,
-        protocol_defaults=DIRECT_PURE_DEFAULTS,
-        nms_sim=True,
-    )
-
-    assert item.stages["intent"].status == STAGE_RECORDED
 
 
 async def test_exact_and_normalized_intents_pass_with_no_intent_judge_call(

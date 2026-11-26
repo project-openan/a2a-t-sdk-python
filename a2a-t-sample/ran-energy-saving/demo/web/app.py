@@ -41,9 +41,6 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from eval.osp.catalog import CaseCatalog
-from langfuse_export.config import Config as LangfuseConfig
-from langfuse_export.config import ConfigError as LangfuseConfigError
-from langfuse_export.config import load_config as load_langfuse_config
 from protocol.approval_gate import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
@@ -128,8 +125,6 @@ from demo.scenario import (
     resolve_example_request,
     resolve_modify_request,
 )
-from demo.web.annotate import build_annotate_routes
-from demo.web.annotate.overlay import confirmed_overlay, overlay_token
 from demo.web.nms_tasks import (
     ACTIVE_STATES,
     MODIFIABLE_STATES,
@@ -140,8 +135,6 @@ from demo.web.nms_tasks import (
     list_modifiable_tasks,
     read_task,
 )
-from demo.web.observe.routes import build_observe_routes
-from demo.web.review import build_review_routes
 from demo.web.runs_console import build_run_console_routes
 from demo.web.tester import build_tester_routes
 from demo.web.wire_records import read_wire_records
@@ -156,9 +149,6 @@ STATIC_DIR: Final[Path] = Path(__file__).resolve().parent / "static"
 
 #: Static directory of the presentation page served to an audience.
 PRESENTATION_DIR: Final[Path] = Path(__file__).resolve().parent / "presentation"
-
-#: Static directory of the protocol comparison (`/comparison`) page.
-COMPARISON_DIR: Final[Path] = Path(__file__).resolve().parent / "comparison"
 
 #: Web UI variants: the audience-facing presentation and the technical Run Explorer.
 WEB_UI_PRESENTATION: Final[str] = "presentation"
@@ -488,9 +478,7 @@ def create_app(
     protocol_defaults: dict[str, dict[str, str]] = {
         PROTOCOL_A2A_T: {
             "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_REGISTRY,
-            # The launcher pins the NMS transport: the real vendor needs webhook, the local
-            # simulator uses SSE. Taking it from the resolved default keeps `--nms-sim --ui`
-            # from sending `message:send` to a simulator that only serves `message:stream`.
+            # The launcher pins the NMS transport: a real vendor run uses webhook.
             "transport": resolved_default_transport,
         },
         PROTOCOL_PURE: {
@@ -553,14 +541,8 @@ def create_app(
     # Install the run-id router before any run is built. Uvicorn also runs the lifespan, but the
     # ASGI test client may not, and an in-process server already emits on its own thread.
     set_global_sink(manager.route_external_span)
-    # One catalog instance is shared by the tester, the annotation console and the review console.
-    # The confirmed annotation values are read from their database by case id, so a confirmation
-    # takes effect without an export; the annotation console reloads this catalog after a save.
-    annotation_store_path = resolved_runs_dir / "annotations" / "annotations.sqlite3"
-    case_catalog = CaseCatalog(
-        annotation_overlay=lambda: confirmed_overlay(annotation_store_path),
-        annotation_token=lambda: overlay_token(annotation_store_path),
-    )
+    # One catalog instance is shared by the tester console.
+    case_catalog = CaseCatalog()
     # The independent decision-quality judge is a separate model; an unconfigured process passes
     # None and the appendix records every semantic check as unjudged.
     tester_judge = build_judge_client(config) if config.judge_configured else None
@@ -574,8 +556,6 @@ def create_app(
         server_auth_token=config.server_auth_token,
         runs_dir=resolved_runs_dir,
         nms_enabled=resolved_nms,
-        nms_sim=config.nms_sim,
-        nms_sim_pure_question=config.nms_sim_pure_question,
         language=config.language,
         model_mode=config.model_mode,
         model_label=config.model_label,
@@ -598,38 +578,6 @@ def create_app(
         language=config.language,
         run_dir=Path(config.run_dir) if config.run_dir else None,
     )
-    observe_routes = build_observe_routes(
-        config=config,
-        runs_dir=resolved_runs_dir,
-        env_path=env_path,
-        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
-    )
-    annotate_routes = build_annotate_routes(
-        catalog=case_catalog,
-        runs_dir=resolved_runs_dir,
-        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
-    )
-    # The review console fetches Langfuse traces with the same credentials the client uses. The
-    # sample's `.env` is above the runs directory, so passing the loaded config avoids making the
-    # console rediscover it (``langfuse_export`` only reads the cwd).
-    trace_config: LangfuseConfig | None = None
-    if config.langfuse_public_key and config.langfuse_secret_key:
-        try:
-            trace_config = load_langfuse_config(
-                host=config.langfuse_base_url,
-                public_key=config.langfuse_public_key,
-                secret_key=config.langfuse_secret_key,
-            )
-        except LangfuseConfigError as exc:
-            _LOGGER.warning("review trace fetch disabled: %s", exc)
-            trace_config = None
-    review_routes = build_review_routes(
-        catalog=case_catalog,
-        runs_dir=resolved_runs_dir,
-        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
-        trace_config=trace_config,
-    )
-
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
         del app
@@ -1065,11 +1013,6 @@ def create_app(
             media_type="text/csv",
             headers={"Content-Disposition": 'attachment; filename="run-metrics.csv"'},
         )
-
-    async def comparison_page(request: Request) -> Response:
-        """Serve the protocol comparison page."""
-        del request
-        return FileResponse(COMPARISON_DIR / "index.html")
 
     async def start_run(request: Request) -> Response:
         try:
@@ -1890,7 +1833,6 @@ def create_app(
             Route("/api/metrics/runs", metrics_runs),
             Route("/api/metrics/summary", metrics_summary),
             Route("/api/metrics/export.csv", metrics_csv),
-            Route("/comparison", comparison_page),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", run_status),
             Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
@@ -1908,9 +1850,6 @@ def create_app(
             Route("/api/runs/{run_id}/spans/{span_id}", run_span),
             *tester_routes,
             *run_console_routes,
-            *observe_routes,
-            *annotate_routes,
-            *review_routes,
             Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
         ],
         lifespan=lifespan,

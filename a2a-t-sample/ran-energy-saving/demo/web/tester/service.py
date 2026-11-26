@@ -238,11 +238,6 @@ _NEGOTIATED_TASK_T_MESSAGE: Final[str] = (
     "期望 Task-T 是协商后的结果；SDK runner 只看到初始请求，因此只记录。"
 )
 
-#: Message of a pure-A2A negotiation stage run against the simulator.
-_SIM_PURE_NEGOTIATION_MESSAGE: Final[str] = (
-    "模拟器不重现厂商纯 A2A 对话轮次；真实轮次需在真机验证，因此只记录。"
-)
-
 #: Message of a negotiation stage whose kind or message contradicts the case.
 _NEGOTIATE_FAILED_MESSAGE: Final[str] = "协商类型或报文与预期不一致。"
 
@@ -264,11 +259,6 @@ _VENDOR_DEFECT_MARKER: Final[str] = "NMS 侧 bug"
 #: Message of the intent stage when the downstream accepts a Task without returning its reading.
 _NO_SERVER_INTENT_MESSAGE: Final[str] = (
     "下游的 TASK_STATE_SUBMITTED 报文没有结构化意图，意图阶段只记录。"
-)
-
-#: Message of the intent stage against the simulator: its payload key set is not the vendor's.
-_SIM_SERVER_INTENT_MESSAGE: Final[str] = (
-    "模拟器返回的意图键集与厂商不同，只记录，不据此判定。"
 )
 
 #: Message of the intent stage on a pure-A2A proxy hop: the OSS Agent owns the outer Task and
@@ -356,16 +346,6 @@ DEFAULT_WORKING_TIMEOUT_SECONDS: Final[float] = 60.0
 #: Grace after a stop-after stage before the run is cancelled.
 _CANCEL_GRACE_SECONDS: Final[float] = 1.0
 
-#: How long the pure-A2A negotiate stage waits for the simulator's generic question before it is
-#: recorded. The vendor dialogue and round count come from the OSP P column and cannot be
-#: reproduced against nms-sim, so waiting for the workbook's round count would only stall the batch.
-_SIM_PURE_SETTLE_SECONDS: Final[float] = 30.0
-#: Grace before reading the round count in replay mode: the wait returns as soon as the expected
-#: number arrives, and a spurious extra round would otherwise race the assertion.
-_SIM_PURE_ROUND_SETTLE_SECONDS: Final[float] = 0.5
-#: The answer the tester gives the baseline Create's single confirmation round. The paired Create
-#: is complete, so a plain acknowledgement is enough.
-_SIM_PURE_BASELINE_ANSWER: Final[str] = "Confirmed. Proceed with the request as stated."
 
 
 def _now_iso() -> str:
@@ -589,8 +569,6 @@ class EvalBatchManager:
         server_auth_token: str | None,
         runs_dir: Path | None = None,
         nms: bool = False,
-        nms_sim: bool = False,
-        nms_sim_pure_question: str = "issue",
         language: str = "",
         model_mode: str = "",
         model_label: str = "",
@@ -608,10 +586,6 @@ class EvalBatchManager:
         self._server_auth_token = server_auth_token
         self._history_dir = (Path(runs_dir) / "tester") if runs_dir is not None else None
         self._nms = nms
-        self._nms_sim = nms_sim
-        #: ``confirm`` replays the vendor's fixed plain-A2A dialogue, so the OSP round count is
-        #: assertable; ``issue`` renders the historical business issue and is only recorded.
-        self._nms_sim_pure_question = nms_sim_pure_question
         self._language = language
         self._model_mode = model_mode
         self._model_label = model_label
@@ -643,10 +617,6 @@ class EvalBatchManager:
         #: Bounds the ``run_case`` threads across every concurrent batch of the process.
         self._sdk_slots = asyncio.Semaphore(MAX_CONCURRENCY)
         self._batches: dict[str, _Batch] = {}
-
-    def _replays_pure_dialogue(self) -> bool:
-        """Return whether the simulator replays the vendor's plain-A2A confirmation dialogue."""
-        return self._nms_sim and self._nms_sim_pure_question == "confirm"
 
     # ------------------------------------------------------------------
     # Catalog and batch lifecycle
@@ -1853,14 +1823,6 @@ class EvalBatchManager:
                 "caseId": item.case_id,
             },
             scripted_decisions=(),
-            # In the vendor-dialogue replay the simulator asks one confirmation question on every
-            # new Create, including the paired baseline. Without an answer the baseline would wait
-            # for a human and the Modify would never start.
-            pure_answers=(
-                (_SIM_PURE_BASELINE_ANSWER,)
-                if protocol == PROTOCOL_PURE and self._replays_pure_dialogue()
-                else None
-            ),
             # Only the A2A-T flow has a Task-T pre-send gate; the pure hop sends raw text.
             validate_before_send=protocol == RUNTIME_A2A_T,
             # The paired Create follows the same reply source and frozen principles as the batch.
@@ -2022,19 +1984,7 @@ class EvalBatchManager:
 
         started = time.monotonic()
         if "negotiate" in stages:
-            sim_pure = item.protocol == PROTOCOL_A2A and self._nms_sim
-            replay = sim_pure and self._replays_pure_dialogue()
-            await self._wait_for_negotiation(
-                run,
-                expected_rounds if replay or not sim_pure else 0,
-                timeout_seconds
-                if replay
-                else min(timeout_seconds, _SIM_PURE_SETTLE_SECONDS)
-                if sim_pure
-                else timeout_seconds,
-            )
-            if replay:
-                await asyncio.sleep(_SIM_PURE_ROUND_SETTLE_SECONDS)
+            await self._wait_for_negotiation(run, expected_rounds, timeout_seconds)
             actual_rounds = len(run.proposals)
             actual_kinds = [proposal.kind for proposal in run.proposals]
             rounds_ok = actual_rounds == expected_rounds
@@ -2105,12 +2055,6 @@ class EvalBatchManager:
                 negotiate_result = _apply_assertion(
                     case, item.protocol, "negotiation", negotiate_result
                 )
-            if sim_pure and not replay:
-                # The historical simulator asks a generic plain-A2A question; the vendor's
-                # dialogue and round count come from the OSP P column and cannot be reproduced
-                # offline unless ``PURE_QUESTION=confirm`` selects the replay dialogue.
-                negotiate_result.status = STAGE_RECORDED
-                negotiate_result.message = _SIM_PURE_NEGOTIATION_MESSAGE
             item.stages["negotiate"] = negotiate_result
             if batch.stop_after == "negotiate":
                 return
@@ -2617,10 +2561,6 @@ class EvalBatchManager:
             if has_expected
             else []
         )
-        if self._nms_sim:
-            stage.status = STAGE_RECORDED
-            stage.message = _SIM_SERVER_INTENT_MESSAGE
-            return
         if item.protocol == PROTOCOL_A2A and run.discovery != DISCOVERY_NMS:
             # The OSS proxy owns a different business-intent payload; judge only a direct vendor
             # payload so a proxy hop never turns a case red on a key set it cannot reproduce.
@@ -3319,7 +3259,6 @@ class EvalBatchManager:
                     "transport": batch.transport,
                     "discovery": batch.discovery,
                     "nms": self._nms,
-                    "nmsSim": self._nms_sim,
                 },
                 "negotiationModel": self._model_label,
                 "judgeModel": self._judge_model_label,
@@ -3334,7 +3273,6 @@ class EvalBatchManager:
             "modelLabel": self._model_label,
             "modelMode": self._model_mode,
             "nms": self._nms,
-            "nmsSim": self._nms_sim,
             "keepTasks": batch.keep_tasks,
             "concurrency": batch.concurrency,
             "rounds": batch.rounds,
@@ -3714,16 +3652,7 @@ def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
         except Exception:  # noqa: BLE001 - the baseline falls back to the test region
             region = ""
     region = region or BASELINE_REGION
-    window = os.environ.get("A2AT_SAMPLE_NMS_SIM_WINDOW", "").strip() or BASELINE_WINDOW
-    # A single-segment plan when the served window differs, otherwise the day plan would carry two
-    # overlapping segments for the same hours. Prose again: the scripted provider must not rewrite
-    # the canned Task Context.
-    if window == BASELINE_WINDOW:
-        schedule = BASELINE_SCHEDULE
-    else:
-        start, end = (part.strip() for part in window.replace("~", "-").split("-", 1))
-        schedule = f"guarantee 10Mbps from {start} to {end}"
-    return BASELINE_REQUEST.replace(BASELINE_REGION, region).replace(BASELINE_SCHEDULE, schedule)
+    return BASELINE_REQUEST.replace(BASELINE_REGION, region)
 
 
 def _case_baseline_request(case: Mapping[str, Any] | None) -> str | None:
@@ -3849,8 +3778,7 @@ def _baseline_failure_message(protocol: str, state: str | None, discovery: str =
         f"Modify 基线任务的纯 A2A 外层 Task 未停留在 WORKING 或下游绑定未建立"
         f"（当前 {state or '未观察到状态'}）；外层 WORKING 只代表 OSS Agent 已受理，"
         "下游 Create 仍可能失败（例如 Running task limit）。纯 A2A 只能续传真实存在且非终态的 "
-        "Task，请清空 NMS 任务池后重试，或使用 --nms-sim + "
-        "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1。"
+        "Task，请清空 NMS 任务池后重试。"
     )
 
 

@@ -2354,31 +2354,6 @@ async def test_one_ui_derives_each_request_forms_hop_from_the_protocol(
     ]
 
 
-async def test_nms_simulator_keeps_the_sse_transport_in_the_meta_defaults(
-    tmp_path: Path,
-    offline_config: SampleConfig,
-) -> None:
-    """`--nms-sim` serves SSE only; the page must not default A2A-T to webhook."""
-    app = create_app(
-        replace(offline_config, discovery=DISCOVERY_NMS, transport="sse"),
-        runs_dir=tmp_path,
-        runtime_factory=lambda *args, **kwargs: FakeRuntime(),  # type: ignore[arg-type,return-value]
-        protocol=PROTOCOL_A2A_T,
-        protocols=(PROTOCOL_A2A_T,),
-        nms_enabled=True,
-        default_transport="sse",
-        finished_grace_seconds=0.0,
-    )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
-        meta = (await http_client.get("/api/meta")).json()
-
-    assert meta["protocolDefaults"]["a2a-t"] == {
-        "discovery": "nms",
-        "transport": "sse",
-    }
-
-
 async def test_a_direct_pure_hop_is_published_in_the_meta_defaults(
     tmp_path: Path,
     offline_config: SampleConfig,
@@ -2641,41 +2616,3 @@ async def test_cancel_nms_task_endpoint_requires_nms_discovery(
 
     assert response.status_code == 400
     assert response.json()["code"] == "nms_discovery_required"
-
-async def test_the_annotation_console_is_served(client: httpx.AsyncClient) -> None:
-    """The console page and its API are wired into the real app, not only into its own router."""
-    page = await client.get("/annotate")
-    script = await client.get("/annotate/main.js")
-    meta = await client.get("/api/annotate/meta")
-    cases = await client.get("/api/annotate/cases")
-
-    assert page.status_code == 200
-    assert "预期标注" in page.text
-    assert script.status_code == 200
-    assert meta.json()["dimensions"] == ["slot_errors", "messages"]
-    assert cases.json()["cases"], "the catalog must project its expectation space"
-
-
-async def test_the_review_console_is_served(client: httpx.AsyncClient) -> None:
-    """The acceptance console page and its API are wired into the real app."""
-    page = await client.get("/review")
-    script = await client.get("/review/main.js")
-    meta = await client.get("/api/review/meta")
-    cases = await client.get("/api/review/cases")
-    batches = await client.get("/api/review/batches")
-
-    assert page.status_code == 200
-    assert "验收审核" in page.text
-    assert 'id="view-round"' in page.text
-    assert 'id="batch-list"' in page.text
-    assert script.status_code == 200
-    assert "filterBatches" in script.text
-    assert meta.json()["decisions"] == [
-        "pending",
-        "accepted",
-        "defect",
-        "known_issue",
-        "recheck",
-    ]
-    assert cases.json()["cases"], "the catalog must project its review space"
-    assert isinstance(batches.json()["batches"], list)

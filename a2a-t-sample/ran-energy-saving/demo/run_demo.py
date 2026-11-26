@@ -215,53 +215,6 @@ def _env_truthy(values: dict[str, str], key: str) -> bool:
     return _env_str(values, key, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _nms_sim_settings(values: dict[str, str], port: int) -> dict[str, str]:
-    """Return the simulator child environment.
-
-    Every switch is resolved here (shell environment, then the source ``.env``, then the default)
-    so the per-run file can omit it without the simulator silently falling back to a different
-    carrier or business constraint. The simulator does not read dotenv itself.
-    """
-    return {
-        "A2AT_SAMPLE_NMS_SIM_HOST": "127.0.0.1",
-        "A2AT_SAMPLE_NMS_SIM_PORT": str(port),
-        "A2AT_SAMPLE_NMS_SIM_FIDELITY": _env_str(values, "A2AT_SAMPLE_NMS_SIM_FIDELITY", "strict"),
-        "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING": _env_str(values, "A2AT_SAMPLE_NMS_SIM_HOLD_WORKING", "0"),
-        "A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED", "0"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_REGION": _env_str(values, "A2AT_SAMPLE_NMS_SIM_REGION", "A2ATestRegion"),
-        "A2AT_SAMPLE_NMS_SIM_WINDOW": _env_str(values, "A2AT_SAMPLE_NMS_SIM_WINDOW", "00:00-06:00"),
-        "A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_MAX_SAVING_RATE", "35"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_SITES": _env_str(values, "A2AT_SAMPLE_NMS_SIM_SITES", ""),
-        "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_CARRIER": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_CARRIER", "task"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS", "information,target,feasibility"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS": _env_str(values, "A2AT_SAMPLE_NMS_SIM_MAX_ROUNDS", "5"),
-        "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE": _env_str(values, "A2AT_SAMPLE_NMS_SIM_TASK_SHAPE", "standard"),
-        "A2AT_SAMPLE_NMS_SIM_PURE_FAILURE": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_PURE_FAILURE", "completed"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_WINDOW_POLICY", "exact"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_RATE_POLICY": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_RATE_POLICY", "required"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_LONG_OUTAGE_FEASIBILITY", "0"
-        ),
-        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION": _env_str(
-            values, "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION", "issue"
-        ),
-    }
-
-
 def _callback_url_port_error(
     key: str,
     url: str,
@@ -1245,8 +1198,8 @@ def _build_parser(
         default=None,
         choices=list(SUPPORTED_TRANSPORTS),
         help=(
-            "event transport (default: sse for the local demo and NMS simulator; webhook for a "
-            "real --nms run, which uses message:send + push notifications)"
+            "event transport (default: sse for the local demo; webhook for a real --nms run, "
+            "which uses message:send + push notifications)"
         ),
     )
     parser.add_argument(
@@ -1291,20 +1244,6 @@ def _build_parser(
             "connect the client to a real vendor NMS: skip the local registry, RAN server, "
             "MIE and OSS processes and use A2AT_SAMPLE_NMS_* from the source .env"
         ),
-    )
-    parser.add_argument(
-        "--nms-sim",
-        action="store_true",
-        help=(
-            "with --nms, start the local NMS simulator and point the client at it instead of "
-            "the values in the source .env"
-        ),
-    )
-    parser.add_argument(
-        "--nms-sim-port",
-        type=int,
-        default=18080,
-        help="bind port of the local NMS simulator (default: 18080)",
     )
     parser.add_argument(
         "--language",
@@ -1454,7 +1393,7 @@ def main() -> int:
             print(f"[run_demo] {env_error}")
             return 2
     if args.transport is None:
-        args.transport = "sse" if args.nms_sim or not args.nms else "webhook"
+        args.transport = "sse" if not args.nms else "webhook"
     if args.pure_message_mode:
         # A CLI choice beats a sourced .env in every child: the launcher environment is inherited
         # and ``shared.config`` reads it before the per-run file.
@@ -1515,13 +1454,10 @@ def main() -> int:
             parser.error(f"--protocol a2a supports only {', '.join(PURE_PROTOCOL_SCENARIOS)}")
         if args.gateway:
             parser.error("--gateway is not supported with --protocol a2a")
-    if args.nms_sim and not args.nms:
-        parser.error("--nms-sim requires --nms")
     if args.nms:
-        if not args.nms_sim and args.transport != "webhook":
+        if args.transport != "webhook":
             parser.error(
-                "a real --nms run requires --transport webhook (message:send + push notifications); "
-                "use --nms-sim for the local SSE simulator"
+                "a real --nms run requires --transport webhook (message:send + push notifications)"
             )
         if args.gateway:
             parser.error("--nms is not supported with --gateway")
@@ -1601,7 +1537,7 @@ def main() -> int:
         oss_webhook_port = _env_int(
             source_values, "A2AT_SAMPLE_OSS_WEBHOOK_PORT", webhook_port + 1
         )
-        real_nms = not args.nms_sim
+        real_nms = True
         if real_nms:
             for label, other_port in (
                 ("A2AT_SAMPLE_WEBHOOK_PORT", webhook_port),
@@ -1638,48 +1574,8 @@ def main() -> int:
     reserved_ports = {args.ui_port} if args.nms else {registry_port, server_port}
     if args.ui:
         reserved_ports.add(args.ui_port)
-    if args.nms_sim:
-        reserved_ports.add(args.nms_sim_port)
-        # The simulator is its own process on its own port; it cannot share with any process this
-        # launcher starts (the UI, the OSS hop or either callback receiver).
-        sim_conflicts = [
-            (label, other)
-            for label, other in (
-                ("--ui-port", args.ui_port if args.ui else None),
-                ("--oss-port", args.oss_port if args.protocol in (PROTOCOL_PURE, PROTOCOL_MODE_BOTH) else None),
-                ("A2AT_SAMPLE_WEBHOOK_PORT", webhook_port if args.transport == "webhook" else None),
-                (
-                    "A2AT_SAMPLE_OSS_WEBHOOK_PORT",
-                    int(oss_webhook_env["A2AT_SAMPLE_WEBHOOK_PORT"])
-                    if oss_webhook_env.get("A2AT_SAMPLE_WEBHOOK_PORT")
-                    else None,
-                ),
-            )
-            if other is not None and other == args.nms_sim_port
-        ]
-        if sim_conflicts:
-            labels = ", ".join(label for label, _ in sim_conflicts)
-            parser.error(f"--nms-sim-port {args.nms_sim_port} collides with {labels}")
     if args.gateway and args.gateway_port in reserved_ports:
         parser.error(f"--gateway-port {args.gateway_port} collides with the registry/server/UI port")
-
-    sim_settings: dict[str, str] = {}
-    nms_overrides: dict[str, str] = {}
-    if args.nms_sim:
-        sim_settings = _nms_sim_settings(source_values, args.nms_sim_port)
-        nms_overrides = {
-            "A2AT_SAMPLE_NMS_HOST": "127.0.0.1",
-            "A2AT_SAMPLE_NMS_SCHEME": "http",
-            "A2AT_SAMPLE_NMS_A2A_PORT": str(args.nms_sim_port),
-            "A2AT_SAMPLE_NMS_TOKEN_PORT": str(args.nms_sim_port),
-            "A2AT_SAMPLE_NMS_TOKEN_USER": "snbitestDefaultNorth",
-            "A2AT_SAMPLE_NMS_TOKEN_VALUE": "Changeme_123",
-            "A2AT_SAMPLE_NMS_VERIFY_TLS": "false",
-            "A2AT_SAMPLE_NMS_REGION": sim_settings["A2AT_SAMPLE_NMS_SIM_REGION"],
-            "A2AT_SAMPLE_NMS_SITES": sim_settings["A2AT_SAMPLE_NMS_SIM_SITES"]
-            or "NRES_XCS_6102937,NES_27A_321071,LTE_26441_LNR_OCL,LNR_KPI_7745",
-            "A2AT_SAMPLE_NMS_WIRE_LOG": "1",
-        }
 
     env_path = _write_run_env(
         source=source_env,
@@ -1702,7 +1598,6 @@ def main() -> int:
         intent_mode=args.intent_mode,
         pure_message_mode=args.pure_message_mode,
         pure_hop=args.pure_hop,
-        extra=nms_overrides,
     )
 
     from shared.config import load_config
@@ -1909,16 +1804,6 @@ def main() -> int:
                 trace_token=recorded_token or None,
             )
             os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = oss_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
-        if args.nms_sim:
-            print(
-                f"[nms-sim] transport={args.transport}, "
-                f"carrier={sim_settings['A2AT_SAMPLE_NMS_SIM_NEGOTIATION_CARRIER']}, "
-                f"kinds={sim_settings['A2AT_SAMPLE_NMS_SIM_NEGOTIATION_KINDS']}, "
-                f"region={sim_settings['A2AT_SAMPLE_NMS_SIM_REGION']}, "
-                f"window={sim_settings['A2AT_SAMPLE_NMS_SIM_WINDOW']}"
-            )
-            if start("nms-sim", "demo.nms_sim.main", args.nms_sim_port, sim_settings) is None:
-                return 1
         if not args.nms:
             if start("registry", REGISTRY_MODULE, registry_port) is None:
                 return 1
@@ -1972,8 +1857,7 @@ def main() -> int:
                         if args.intent_mode
                         else {}
                     ),
-                    **nms_overrides,
-                    **oss_trace_env,
+                        **oss_trace_env,
                     **oss_webhook_env,
                 }
                 if (
@@ -2018,16 +1902,6 @@ def main() -> int:
                     if args.intent_mode
                     else {}
                 ),
-                **(
-                    {
-                        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION": sim_settings[
-                            "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"
-                        ]
-                    }
-                    if args.nms_sim
-                    else {}
-                ),
-                **nms_overrides,
                 **oss_trace_env,
                 **oss_webhook_env,
             }
@@ -2064,7 +1938,6 @@ def main() -> int:
                     else f"http://{server_host}:"
                     f"{args.oss_port if pure_stack and uses_oss_proxy else server_port}"
                 ),
-                "A2AT_SAMPLE_NMS_SIM": "1" if args.nms_sim else "0",
                 # CLI values must win over an exported shell value; shared.config prefers the
                 # process environment over RUN_DIR/.env, so an un-pinned CLI flag silently loses.
                 "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
@@ -2078,16 +1951,6 @@ def main() -> int:
                     if args.webhook_host
                     else {}
                 ),
-                **(
-                    {
-                        "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION": sim_settings[
-                            "A2AT_SAMPLE_NMS_SIM_PURE_QUESTION"
-                        ]
-                    }
-                    if args.nms_sim
-                    else {}
-                ),
-                **nms_overrides,
             }
             pure_nms = args.nms and args.protocol == "pure"
             if pure_direct:

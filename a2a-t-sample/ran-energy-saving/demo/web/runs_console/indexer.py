@@ -25,8 +25,6 @@ PROCESS_LOG_NAMES: Final[tuple[str, ...]] = (
     "server",
     "oss",
     "gateway",
-    "mie",
-    "nms-sim",
     "registry",
 )
 

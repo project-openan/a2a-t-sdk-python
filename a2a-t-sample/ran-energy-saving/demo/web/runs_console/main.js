@@ -435,7 +435,6 @@ function renderSummary() {
   for (const [label, href] of [
     ["transcript.json", `${consoleBase}/transcript.json`],
     ["transcript.md", `${consoleBase}/transcript.md`],
-    ["Langfuse 导出", "/observe"],
   ]) {
     const link = el("a", "", label);
     link.href = href;

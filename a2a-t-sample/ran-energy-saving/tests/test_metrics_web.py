@@ -49,9 +49,7 @@ def _metrics(run_id: str, *, protocol: str, scenario: str, tokens: int | None) -
     }
 
 
-async def test_metrics_api_and_comparison_page(
-    offline_config: SampleConfig, tmp_path: Path
-) -> None:
+async def test_metrics_api(offline_config: SampleConfig, tmp_path: Path) -> None:
     db_path = tmp_path / "client.sqlite3"
     store = SqliteClientStore(db_path)
     await store.save_run_metrics(
@@ -101,7 +99,3 @@ async def test_metrics_api_and_comparison_page(
         assert csv_response.status_code == 200
         assert "runId,protocol,scenario" in csv_response.text
         assert "run-pure" in csv_response.text
-
-        page = await client.get("/comparison")
-        assert page.status_code == 200
-        assert "协议对比" in page.text
