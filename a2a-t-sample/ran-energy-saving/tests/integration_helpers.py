@@ -30,7 +30,6 @@ from demo.composition import (
     build_demo_negotiation_policy,
     build_demo_runtime,
     build_demo_task_t_precheck,
-    install_offline_provider,
 )
 from demo.scenario import LANGUAGE_EN, ExpectedStep
 from protocol.client_flow import ClientFlowResult, ClientTransport
@@ -40,7 +39,7 @@ from protocol.messages import is_negotiation_message, metadata_to_dict, parse_ne
 from protocol.server_app import ServerRuntime, build_server_runtime
 from shared.config import (
     DISCOVERY_DIRECT,
-    MODEL_MODE_OFFLINE,
+    MODEL_MODE_LIVE,
     TRANSPORT_SSE,
     SampleConfig,
 )
@@ -71,7 +70,7 @@ def offline_direct_config(
 ) -> SampleConfig:
     """Build one offline, direct-discovery configuration bound to ``port``."""
     return SampleConfig(
-        model_mode=MODEL_MODE_OFFLINE,
+        model_mode=MODEL_MODE_LIVE,
         language=LANGUAGE_EN,
         host="127.0.0.1",
         port=port,
@@ -115,7 +114,6 @@ def running_server(
         agent_factory=build_server_agent,
         policy=build_demo_negotiation_policy(),
         precheck=build_demo_task_t_precheck(),
-        install_offline_provider=install_offline_provider,
         config=config,
         protocol_mode=protocol_mode,
         pure_policy=pure_policy,

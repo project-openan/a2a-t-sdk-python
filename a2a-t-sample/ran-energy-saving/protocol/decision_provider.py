@@ -7,7 +7,6 @@ integration modes of the design:
 
 * :class:`AdkDecisionProvider` runs the ``agents.client_agent`` ADK agent (the default, automatic
   mode);
-* :class:`ScriptedDecisionProvider` replays the offline scenario decisions;
 * :class:`ManualDecisionProvider` waits for a decision submitted by the Web UI.
 
 Every provider is asynchronous. The flow calls ``respond`` once per inbound proposal and uses the
@@ -20,7 +19,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,12 +110,6 @@ class DecisionTimeoutError(Exception):
             f"no operator decision within {window_seconds:g}s (round {round_number}); "
             f"window {expired_windows} expired"
         )
-
-#: Decision returned by the offline ADK provider when the model output cannot be parsed.
-OFFLINE_FALLBACK_DECISION = NegotiationDecision(
-    action="accept",
-    rationale="The offline model returned no parseable decision; the proposal is accepted.",
-)
 
 #: Corrective user turn sent once when a live model answers with prose instead of a decision.
 DECISION_RETRY_PROMPT = (
@@ -498,8 +491,7 @@ class AdkDecisionProvider:
     is configured and in memory otherwise; a durable session stays as an audit record for the
     configured retention window (see :func:`sweep_stale_sessions`). The structured
     ``NegotiationDecision`` is read from the final event's ``output`` when ADK parsed it and from the
-    final text content otherwise; in offline mode an unparseable output falls back to
-    :data:`OFFLINE_FALLBACK_DECISION`.
+    final text content otherwise.
     """
 
     def __init__(
@@ -510,7 +502,6 @@ class AdkDecisionProvider:
         app_name: str = CLIENT_APP_NAME,
         user_id: str = CLIENT_USER_ID,
         fallback_decision: NegotiationDecision | None = None,
-        offline: bool = False,
         user_request: str | None = None,
         conversation_context: str | None = None,
         session_db_path: str | None = None,
@@ -528,9 +519,6 @@ class AdkDecisionProvider:
             user_id: ADK user id of every decision session.
             fallback_decision: Decision returned when the model output cannot be parsed; ``None``
                 raises :class:`DecisionProviderError` instead.
-            offline: When ``True`` and no explicit fallback is supplied, use
-                :data:`OFFLINE_FALLBACK_DECISION` (the deterministic fake model cannot fail, but a
-                malformed offline response must not abort the demo).
             user_request: Original natural-language request of the run; included in every decision
                 prompt so target/feasibility proposals can be resolved without guessing.
             conversation_context: Recent turns of the same client conversation; included in every
@@ -568,8 +556,7 @@ class AdkDecisionProvider:
             auto_create_session=True,
         )
         self._user_id = user_id
-        self._fallback = fallback_decision or (OFFLINE_FALLBACK_DECISION if offline else None)
-        self._offline = offline
+        self._fallback = fallback_decision
         self._user_request = user_request
         self._conversation_context = conversation_context
         self._decision_basis: DecisionBasis | None = None
@@ -638,11 +625,6 @@ class AdkDecisionProvider:
     def durable_sessions(self) -> bool:
         """Whether decision sessions are persisted in the client database."""
         return self._durable_sessions
-
-    @property
-    def is_offline(self) -> bool:
-        """Whether this provider serves the deterministic offline demo rather than a live model."""
-        return self._offline
 
     async def respond(
         self,
@@ -825,7 +807,7 @@ class AdkDecisionProvider:
         return f"ran-client-{negotiation_id}"
 
     def _fallback_or_raise(self, message: str) -> NegotiationDecision:
-        """Return the offline fallback decision or raise a provider error."""
+        """Return the configured fallback decision or raise a provider error."""
         if self._fallback is not None:
             return self._fallback
         raise DecisionProviderError(message)
@@ -986,54 +968,6 @@ def _validation_problem(exc: ValidationError) -> str:
         value = error.get("input")
         parts.append(f"field '{location}': {message} (got {type(value).__name__})")
     return "; ".join(parts)
-
-
-class ScriptedDecisionProvider:
-    """Decision provider replaying a pre-defined sequence of decisions.
-
-    The offline scenarios of :mod:`demo.scenario` carry their decisions in order; each call to
-    :meth:`respond` consumes the next one. Exhausting the sequence is an error, so a scenario whose
-    server behavior drifts from its script fails loudly instead of silently accepting.
-    """
-
-    def __init__(
-        self,
-        decisions: Sequence[NegotiationDecision],
-        *,
-        graceful_exhaustion: bool = False,
-    ) -> None:
-        """Create one scripted provider over an ordered decision list.
-
-        ``graceful_exhaustion`` marks a script the caller supplied for one run (the tester's case
-        column) rather than the scenario's own catalogue. Such a script running out means the case
-        recorded fewer rounds than the vendor asked, so the client stops answering and reports the
-        reason instead of failing the run; a scenario script keeps failing loudly.
-        """
-        self._decisions = tuple(decisions)
-        self._index = 0
-        self.graceful_exhaustion = graceful_exhaustion
-
-    @property
-    def remaining(self) -> int:
-        """Number of scripted decisions not consumed yet."""
-        return len(self._decisions) - self._index
-
-    async def respond(
-        self,
-        propose: NegotiationProposeView,
-        session: NegotiationContext,
-    ) -> NegotiationDecision:
-        """Return the next scripted decision.
-
-        Raises:
-            DecisionProviderError: when the script has no decision left.
-        """
-        del propose, session
-        if self._index >= len(self._decisions):
-            raise DecisionProviderError("The scripted decision sequence is exhausted.")
-        decision = self._decisions[self._index]
-        self._index += 1
-        return decision
 
 
 class ConfirmingDecisionProvider:

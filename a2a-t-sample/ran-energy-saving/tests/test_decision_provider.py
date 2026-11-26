@@ -10,7 +10,26 @@ from pathlib import Path
 
 import pytest
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
-from demo.adk_fake_model import (
+from demo.agents.client_agent.agent import build_client_agent
+from demo.scenario import SCENARIO_INFORMATION, get_scenario
+from google.adk.sessions.sqlite_session_service import SqliteSessionService
+from protocol.decision_provider import (
+    CLIENT_APP_NAME,
+    CLIENT_USER_ID,
+    AdkDecisionProvider,
+    ConfirmingDecisionProvider,
+    DecisionProviderError,
+    DecisionTimeoutError,
+    ManualDecisionProvider,
+    NegotiationDecisionProvider,
+    _decision_retry_prompt,
+    build_decision_prompt,
+    build_manual_answer_prompt,
+    sweep_stale_sessions,
+)
+from shared.models import NegotiationDecision, NegotiationProposeView
+
+from tests.support.adk_fake_model import (
     CLIENT_AGENT_NAME,
     PROGRESS_FUNCTION_RESPONSES,
     PROGRESS_MODEL_TURNS,
@@ -20,26 +39,10 @@ from demo.adk_fake_model import (
     FakeTurn,
     build_fake_model,
 )
-from demo.agents.client_agent.agent import build_client_agent
-from demo.scenario import SCENARIO_INFORMATION, get_scenario
-from google.adk.sessions.sqlite_session_service import SqliteSessionService
-from protocol.decision_provider import (
-    CLIENT_APP_NAME,
-    CLIENT_USER_ID,
-    OFFLINE_FALLBACK_DECISION,
-    AdkDecisionProvider,
-    ConfirmingDecisionProvider,
-    DecisionProviderError,
-    DecisionTimeoutError,
-    ManualDecisionProvider,
-    NegotiationDecisionProvider,
-    ScriptedDecisionProvider,
-    _decision_retry_prompt,
-    build_decision_prompt,
-    build_manual_answer_prompt,
-    sweep_stale_sessions,
-)
-from shared.models import NegotiationDecision, NegotiationProposeView
+from tests.support.decision_provider import ScriptedDecisionProvider
+from tests.support.scenario_scripts import SCRIPTED_DECISIONS
+
+_FALLBACK = NegotiationDecision(action="accept", rationale="fallback")
 
 
 def _session(
@@ -254,9 +257,9 @@ async def test_scripted_provider_returns_decisions_in_order_and_then_raises() ->
 
 def test_scripted_provider_accepts_a_decision_sequence() -> None:
     scenario = get_scenario(SCENARIO_INFORMATION)
-    provider = ScriptedDecisionProvider(scenario.scripted_client_decisions)
+    provider = ScriptedDecisionProvider(SCRIPTED_DECISIONS[scenario.name])
 
-    assert provider.remaining == len(scenario.scripted_client_decisions)
+    assert provider.remaining == len(SCRIPTED_DECISIONS[scenario.name])
 
 
 async def test_manual_provider_returns_a_submitted_decision() -> None:
@@ -476,7 +479,7 @@ async def test_adk_provider_returns_the_fake_model_decision() -> None:
 
     assert decision.action == "accept"
     assert decision.rationale
-    assert decision is not OFFLINE_FALLBACK_DECISION
+    assert decision is not _FALLBACK
 
 
 async def test_a_turn_stops_after_the_tool_call_budget() -> None:
@@ -736,11 +739,11 @@ async def test_adk_provider_rejects_a_confirmed_intent_object_that_conflicts_wit
     assert "got dict" in message
 
 
-async def test_adk_provider_uses_the_offline_fallback_when_the_model_returns_no_decision() -> None:
+async def test_adk_provider_uses_the_configured_fallback_when_the_model_returns_no_decision() -> None:
     provider = AdkDecisionProvider(
         agent_factory=build_client_agent,
         model=build_fake_model(),
-        fallback_decision=OFFLINE_FALLBACK_DECISION,
+        fallback_decision=_FALLBACK,
     )
 
     decision = await provider.respond(_view(), _session())

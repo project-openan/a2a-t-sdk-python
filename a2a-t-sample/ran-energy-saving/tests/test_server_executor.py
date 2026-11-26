@@ -30,7 +30,6 @@ from a2a_t.core.metadata import (
 )
 from demo import ran_data
 from demo.agents.server_agent.factory import build_server_agent, server_agent_factory
-from demo.agents.server_agent.planner import ScriptedChatModel
 from demo.composition import build_demo_negotiation_policy
 from dotenv import dotenv_values
 from google.protobuf.json_format import MessageToDict
@@ -57,6 +56,8 @@ from protocol.server_executor import (
 from shared.config import MODEL_MODE_LIVE, SampleConfig
 from shared.metrics import render_prometheus, reset_metrics
 from shared.trace_propagation import propagated_trace
+
+from tests.support.scripted_planner import ScriptedChatModel
 
 CONTEXT_ID = "ctx-executor"
 TASK_PROMPT = "Create a RAN energy saving task in Region A."
@@ -361,7 +362,7 @@ def test_agent_card_declares_the_task_and_negotiation_extensions() -> None:
 
 
 def test_live_sdk_env_fills_empty_values_without_mutating_the_source(
-    offline_config: SampleConfig, tmp_path: Path
+    offline_config: SampleConfig, tmp_path: Path, live_sdk_provider: None
 ) -> None:
     config = replace(offline_config, model_mode=MODEL_MODE_LIVE)
     source = tmp_path / ".env"
@@ -399,7 +400,7 @@ def test_live_sdk_env_preserves_an_explicit_api_key(
 
 
 def test_live_server_constructs_from_the_example_env_with_an_empty_key(
-    offline_config: SampleConfig, tmp_path: Path
+    offline_config: SampleConfig, tmp_path: Path, live_sdk_provider: None
 ) -> None:
     source = Path(__file__).resolve().parents[1] / "env.example"
     # Reproduce the reported startup failure: the example profile with the proxy key blanked out.
@@ -418,5 +419,4 @@ def test_live_server_constructs_from_the_example_env_with_an_empty_key(
     )
 
     assert runtime.prompt_server is not None
-    assert runtime.config.is_offline is False
 

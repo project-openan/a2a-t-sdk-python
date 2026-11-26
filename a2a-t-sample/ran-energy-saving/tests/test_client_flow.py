@@ -77,7 +77,6 @@ from protocol.client_policy import ClientPolicy
 from protocol.decision_provider import (
     DecisionProviderError,
     DecisionTimeoutError,
-    ScriptedDecisionProvider,
 )
 from protocol.messages import (
     END_MESSAGE_TEXT,
@@ -98,6 +97,9 @@ from shared.trace import (
     set_global_activity_sink,
 )
 
+from tests.support.decision_provider import ScriptedDecisionProvider
+from tests.support.scenario_scripts import SCRIPTED_DECISIONS
+
 CONTEXT_ID = "ctx-client-flow"
 
 #: Business values the runtime would have parsed from these English requests.
@@ -105,6 +107,18 @@ _INTENT_FIELDS: dict[str, object] = {"operationType": "Create", "region": "Regio
 
 #: A complete INFORMATION negotiation fixture. The demo ``information`` scenario now blocks the
 #: missing target locally, so the flow tests use their own complete request and scripted accept.
+INFORMATION_DECISIONS = (
+    NegotiationDecision(
+        action="accept",
+        rationale="The missing time-segmented throughput target is supplied.",
+        filled_params={
+            "guaranteedThroughputTarget": (
+                "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}"
+            )
+        },
+    ),
+)
+
 INFORMATION_NEGOTIATION_SPEC = replace(
     _INFORMATION_SPEC_BASE,
     expected_sequence=(
@@ -112,17 +126,7 @@ INFORMATION_NEGOTIATION_SPEC = replace(
         ExpectedStep(actor="client", performative="ACCEPT", round=1),
     ),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="accept",
-            rationale="The missing time-segmented throughput target is supplied.",
-            filled_params={
-                "guaranteedThroughputTarget": (
-                    "{00:00-17:30,10Mbps}, {17:30-23:00,20Mbps}, {23:00-24:00,10Mbps}"
-                )
-            },
-        ),
-    ),
+
 )
 
 _PROPOSE_URIS: dict[str, str] = {
@@ -599,7 +603,7 @@ async def test_the_accept_extraction_does_not_block_the_event_loop() -> None:
             prompt_client=SlowAcceptPromptClient(),
             transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
             user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-            provider=ScriptedDecisionProvider((INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions[0],)),
+            provider=ScriptedDecisionProvider((INFORMATION_DECISIONS[0],)),
             language="en-US",
         )
     )
@@ -614,7 +618,7 @@ async def test_accept_span_carries_the_refilled_task_t_and_the_negotiation_paylo
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions[0],)),
+        provider=ScriptedDecisionProvider((INFORMATION_DECISIONS[0],)),
         language="en-US",
         trace_sink=spans.append,
     )
@@ -726,7 +730,7 @@ async def test_conversation_context_is_prepended_to_task_t_generation() -> None:
         prompt_client=prompt_client,
         transport=transport,
         user_request="current request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         conversation_context="user: earlier request\nassistant: earlier result",
     )
@@ -740,7 +744,7 @@ async def test_information_scenario_accepts_and_completes_a_task() -> None:
     result, transport, prompt_client = await _run(
         INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
-        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
+    INFORMATION_DECISIONS,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -818,7 +822,7 @@ async def test_accept_carries_the_proposal_negotiation_id_not_the_context_id() -
     result, transport, _prompt_client = await _run(
         INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1, negotiation_id="negotiation-1")], _task_completed_batch()],
-        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
+    INFORMATION_DECISIONS,
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -852,7 +856,7 @@ async def test_nms_accept_carries_only_the_negotiation_extension_key() -> None:
     result, transport, prompt_client = await _run(
         INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
-        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
+    INFORMATION_DECISIONS,
         single_extension_per_message=True,
     )
 
@@ -989,7 +993,7 @@ async def test_accept_rewrites_a_refill_that_dropped_the_agreed_target() -> None
         prompt_client=prompt_client,
         transport=transport,
         user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         intent_fields=_INTENT_FIELDS,
     )
@@ -1006,7 +1010,7 @@ async def test_target_scenario_corrects_the_target_in_one_accept() -> None:
     result, transport, prompt_client = await _run(
         SCENARIO_TARGET_SPEC,
         [[propose_event("target", 1)], _task_completed_batch()],
-        SCENARIO_TARGET_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["target"],
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -1019,7 +1023,7 @@ async def test_feasibility_scenario_accepts_the_alternative() -> None:
     result, transport, prompt_client = await _run(
         SCENARIO_FEASIBILITY_SPEC,
         [[propose_event("feasibility", 1)], _task_completed_batch()],
-        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["feasibility"],
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -1725,7 +1729,7 @@ async def test_a_vendor_frame_without_a_negotiation_context_is_answered() -> Non
         prompt_client=prompt_client,
         transport=transport,
         user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(SCRIPTED_DECISIONS["feasibility"]),
         language="en-US",
         intent_fields=_INTENT_FIELDS,
         infer_missing_negotiation_kind=True,
@@ -1746,7 +1750,7 @@ async def test_an_accept_continues_the_task_the_negotiation_belongs_to() -> None
     result, transport, _ = await _run(
         SCENARIO_FEASIBILITY_SPEC,
         [[status_propose_event("feasibility", 1)], _task_completed_batch()],
-        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["feasibility"],
     )
 
     assert result.final_state == FINAL_STATE_TASK_COMPLETED
@@ -1759,7 +1763,7 @@ async def test_a_propose_embedded_in_a_status_update_is_answered() -> None:
     result, transport, _ = await _run(
         SCENARIO_FEASIBILITY_SPEC,
         [[status_propose_event("feasibility", 1)], _task_completed_batch()],
-        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["feasibility"],
     )
 
     assert _client_negotiation_steps(transport.requests) == [("ACCEPT", 1)]
@@ -1774,7 +1778,7 @@ async def test_a_working_status_carrying_negotiation_metadata_is_not_answered() 
             [status_propose_event("feasibility", 1, state="TASK_STATE_WORKING")],
             _task_completed_batch(),
         ],
-        SCENARIO_FEASIBILITY_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["feasibility"],
     )
 
     assert _client_negotiation_steps(transport.requests) == []
@@ -1794,7 +1798,7 @@ async def test_reject_scenario_ends_without_a_task() -> None:
             ],
             [end_event()],
         ],
-        SCENARIO_REJECT_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["reject"],
     )
 
     assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
@@ -1808,7 +1812,7 @@ async def test_abort_scenario_ends_with_the_client_abort() -> None:
     result, transport, prompt_client = await _run(
         SCENARIO_ABORT_SPEC,
         [[propose_event("information", 1)], [end_event()]],
-        SCENARIO_ABORT_SPEC.scripted_client_decisions,
+        SCRIPTED_DECISIONS["abort"],
     )
 
     assert result.final_state == FINAL_STATE_NEGOTIATION_ENDED
@@ -1848,7 +1852,7 @@ async def test_initial_request_matches_the_old_message_shape() -> None:
     _, transport, _ = await _run(
         INFORMATION_NEGOTIATION_SPEC,
         [[propose_event("information", 1)], _task_completed_batch()],
-        INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions,
+    INFORMATION_DECISIONS,
     )
 
     request = transport.requests[0]
@@ -1874,7 +1878,7 @@ async def test_every_send_carries_the_configured_call_timeout() -> None:
         prompt_client=FakePromptClient(),
         transport=transport,
         user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(SCENARIO_TARGET_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(SCRIPTED_DECISIONS["target"]),
         language="en-US",
         intent_fields=_INTENT_FIELDS,
         call_timeout_seconds=123.0,
@@ -1889,7 +1893,7 @@ async def test_terminal_sends_carry_the_configured_call_timeout(terminal: str) -
     """Reject and abort responses are ordinary sends and must carry the same budget."""
     if terminal == "reject":
         batches = [[propose_event("information", 1)], [end_event()]]
-        decisions = SCENARIO_REJECT_SPEC.scripted_client_decisions
+        decisions = SCRIPTED_DECISIONS["reject"]
     else:
         batches = [[propose_event("target", 1)], [end_event()]]
         decisions = (NegotiationDecision(action="abort", rationale="Stop the negotiation."),)
@@ -1916,7 +1920,7 @@ async def test_call_timeout_defaults_to_the_documented_budget() -> None:
         prompt_client=FakePromptClient(),
         transport=transport,
         user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         intent_fields=_INTENT_FIELDS,
     )
@@ -2207,7 +2211,7 @@ async def test_webhook_mode_accept_reports_task_completed_after_the_artifact() -
         prompt_client=FakePromptClient(),
         transport=transport,
         user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
     )
 
@@ -2254,10 +2258,13 @@ async def test_real_sdk_client_runs_the_information_flow_offline(
 ) -> None:
     """The flow works with the real A2ATClient and the scripted LLM (no network)."""
     from a2a_t.client.a2at_client import A2ATClient
-    from demo.composition import install_offline_provider
     from protocol.server_app import prepare_sdk_env_path
 
-    install_offline_provider()
+    from tests.support.scripted_llm import register_scripted_provider
+    from tests.support.traced_scripted import register_traced_scripted_provider
+
+    register_scripted_provider()
+    register_traced_scripted_provider()
     # The scripted provider resolves its language from the process environment (the demo launcher
     # sets it per process); the test pins it to the language of the offline configuration.
     monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
@@ -2274,7 +2281,7 @@ async def test_real_sdk_client_runs_the_information_flow_offline(
         prompt_client=prompt_client,
         transport=transport,
         user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
     )
 
@@ -2294,7 +2301,7 @@ async def test_event_sink_sees_every_event_and_the_decision_hook_the_proposal() 
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         event_sink=seen.append,
         on_decision_requested=lambda propose, session: requested.append((propose.kind, session.round)),
@@ -2326,7 +2333,7 @@ async def test_proposal_view_carries_the_sample_area_options() -> None:
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[event], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         on_decision_requested=lambda propose, session: requested.append(propose),
     )
@@ -2368,7 +2375,7 @@ async def test_decision_hook_fires_before_the_response_is_sent() -> None:
         prompt_client=FakePromptClient(),
         transport=RecordingTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         on_decision_made=on_decision_made,
         trace_sink=spans.append,
@@ -2404,7 +2411,7 @@ async def test_decision_span_is_emitted_only_without_a_consumer_callback() -> No
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         on_decision_made=lambda decision, propose, session: decisions.append(decision),
         trace_sink=spans.append,
@@ -2418,7 +2425,7 @@ async def test_decision_span_is_emitted_only_without_a_consumer_callback() -> No
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()]),
         user_request="request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         trace_sink=cli_spans.append,
     )
@@ -2467,7 +2474,7 @@ async def test_trace_phases_and_steps_for_every_scenario(scenario_name: str) -> 
         prompt_client=FakePromptClient(),
         transport=ScriptedTransport(_scenario_batches(scenario_name)),
         user_request=scenario.user_request["en-US"],
-        provider=ScriptedDecisionProvider(scenario.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(SCRIPTED_DECISIONS[scenario.name]),
         language="en-US",
         enforce_required_fields=(scenario_name == "information"),
         trace_sink=spans.append,
@@ -2475,7 +2482,7 @@ async def test_trace_phases_and_steps_for_every_scenario(scenario_name: str) -> 
 
     assert result.final_state == scenario.expected_final_state
     assert [decision.action for decision in result.decisions] == [
-        decision.action for decision in scenario.scripted_client_decisions
+        decision.action for decision in SCRIPTED_DECISIONS[scenario.name]
     ]
     span_ids = [span["spanId"] for span in spans]
     assert len(span_ids) == len(set(span_ids))
@@ -2556,7 +2563,7 @@ async def test_sse_transport_forwards_events_to_its_sink_as_they_arrive() -> Non
         prompt_client=FakePromptClient(),
         transport=transport,
         user_request="request",
-        provider=ScriptedDecisionProvider(INFORMATION_NEGOTIATION_SPEC.scripted_client_decisions),
+        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
         language="en-US",
         event_sink=seen.append,
     )
@@ -2657,10 +2664,11 @@ async def test_a_model_entity_change_is_dropped_and_the_information_accept_is_re
 
 async def test_a_case_condition_grounds_an_entity_change() -> None:
     """The case's frozen conditions are a legitimate source for an information reply."""
-    from demo.adk_fake_model import build_fake_model
     from demo.agents.client_agent.agent import build_client_agent
     from protocol.decision_provider import AdkDecisionProvider
     from shared.models import DecisionBasis
+
+    from tests.support.adk_fake_model import build_fake_model
 
     anchor = AdkDecisionProvider(agent_factory=build_client_agent, model=build_fake_model())
     anchor.set_decision_basis(

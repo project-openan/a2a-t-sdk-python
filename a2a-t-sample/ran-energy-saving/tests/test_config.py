@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from demo.adk_fake_model import FakeLlm, build_fake_model
 from shared.config import (
     ADK_MODEL_API_BASE_ENV_KEY,
     ADK_MODEL_API_KEY_ENV_KEY,
@@ -44,7 +43,6 @@ from shared.config import (
     LONG_TASK_TRACKING_ENV_KEY,
     MANUAL_DECISION_TIMEOUT_ENV_KEY,
     MODEL_MODE_LIVE,
-    MODEL_MODE_OFFLINE,
     NMS_A2A_BASE_ENV_KEY,
     NMS_A2A_PORT_ENV_KEY,
     NMS_HOST_ENV_KEY,
@@ -167,7 +165,7 @@ def test_offline_config_loads_from_env_file(tmp_path: Path) -> None:
     env_file.write_text(
         "\n".join(
             [
-                "A2AT_SAMPLE_MODEL_MODE=offline",
+                "A2AT_SAMPLE_MODEL_MODE=live",
                 "A2AT_LANGUAGE=en-US",
                 "A2AT_SAMPLE_HOST=0.0.0.0",
                 "A2AT_SAMPLE_PORT=8100",
@@ -186,9 +184,8 @@ def test_offline_config_loads_from_env_file(tmp_path: Path) -> None:
 
     config = load_config(env_path=env_file)
 
-    assert config.model_mode == MODEL_MODE_OFFLINE
-    assert config.is_offline
-    assert config.model_label == "offline (scripted)"
+    assert config.model_mode == MODEL_MODE_LIVE
+    assert config.model_label.startswith("live (")
     assert config.language == "en-US"
     assert config.host == "0.0.0.0"
     assert config.port == 8100
@@ -210,7 +207,7 @@ def test_topology_and_trace_keys_load_from_the_env_file(tmp_path: Path) -> None:
     env_file.write_text(
         "\n".join(
             [
-                "A2AT_SAMPLE_MODEL_MODE=offline",
+                "A2AT_SAMPLE_MODEL_MODE=live",
                 f"{PROTOCOL_MODE_ENV_KEY}=both",
                 f"{TRACE_URL_ENV_KEY}=http://127.0.0.1:8080",
                 f"{TRACE_TOKEN_ENV_KEY}=trace-token",
@@ -330,7 +327,7 @@ def test_client_gateway_and_planner_reject_invalid_values(tmp_path: Path, key: s
 def test_missing_env_file_uses_offline_defaults(tmp_path: Path) -> None:
     config = load_config(env_path=tmp_path / "missing.env")
 
-    assert config.model_mode == MODEL_MODE_OFFLINE
+    assert config.model_mode == MODEL_MODE_LIVE
     assert config.http_timeout_seconds == DEFAULT_HTTP_TIMEOUT_SECONDS == 300.0
     assert config.llm_timeout_seconds == DEFAULT_LLM_TIMEOUT_SECONDS == 180.0
     assert config.llm_max_attempts == DEFAULT_LLM_MAX_ATTEMPTS == 1
@@ -445,17 +442,6 @@ def test_invalid_model_mode_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="A2AT_SAMPLE_MODEL_MODE"):
         load_config(env_path=env_file)
-
-
-def test_build_adk_model_returns_fake_model_offline(offline_config: SampleConfig) -> None:
-    model = build_adk_model(offline_config, offline_model_factory=lambda: build_fake_model())
-
-    assert isinstance(model, FakeLlm)
-
-
-def test_build_adk_model_requires_an_offline_factory(offline_config: SampleConfig) -> None:
-    with pytest.raises(ValueError, match="offline_model_factory"):
-        build_adk_model(offline_config)
 
 
 def test_build_adk_model_rejects_empty_live_model_name(offline_config: SampleConfig) -> None:

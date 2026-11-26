@@ -25,9 +25,6 @@ from typing import Any
 
 from a2a_t.llm.factory import LLMClientFactory
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
-from dotenv import dotenv_values
-from shared.run_constants import LANGUAGE_ZH, MAX_ROUNDS
-
 from demo.scenario import (
     EXAMPLE_REQUESTS,
     MODIFY_REQUEST,
@@ -43,12 +40,14 @@ from demo.served_areas import (
     build_area_proposal_text,
     match_served_areas,
 )
+from dotenv import dotenv_values
+from shared.run_constants import LANGUAGE_ZH, MAX_ROUNDS
 
 #: Provider name registered with ``LLMClientFactory``.
 SCRIPTED_PROVIDER_NAME = "scripted"
 
 #: Default response tree, relative to the sample root.
-_RESOURCES_DIR = Path(__file__).resolve().parents[1] / "resources" / "mock_llm"
+_RESOURCES_DIR = Path(__file__).resolve().parent / "mock_llm"
 
 #: Routed stage names (``llm_calls`` entries). The complete variants keep their historical names.
 STAGE_SLOT_EXTRACTION = "slot_extraction"

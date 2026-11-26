@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 
 import pytest
-from demo.adk_fake_model import (
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
+from google.genai import types
+from shared.models import NegotiationDecision
+
+from tests.support.adk_fake_model import (
     CLIENT_AGENT_NAME,
     DEFAULT_FINAL_TEXT,
     PROGRESS_MODEL_TURNS,
@@ -16,10 +21,6 @@ from demo.adk_fake_model import (
     build_client_script,
     build_fake_model,
 )
-from google.adk.models.llm_request import LlmRequest
-from google.adk.models.llm_response import LlmResponse
-from google.genai import types
-from shared.models import NegotiationDecision
 
 
 def _request(agent_name: str, user_text: str = "run the task") -> LlmRequest:

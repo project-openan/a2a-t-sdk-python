@@ -77,7 +77,7 @@ def _transcript() -> NegotiationTranscript:
     return NegotiationTranscript(
         scenario="information",
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         mode="auto",
         transport="sse",
     )
@@ -87,7 +87,7 @@ def test_the_transcript_carries_the_run_trace_id() -> None:
     transcript = NegotiationTranscript(
         scenario="information",
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         mode="auto",
         transport="sse",
         trace_id="b" * 32,

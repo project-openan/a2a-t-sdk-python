@@ -824,7 +824,7 @@ def _get_runtime(config: SampleConfig) -> _LangfuseRuntime | None:
 
 def langfuse_export_active(config: SampleConfig) -> bool:
     """Return whether a live run creates a Langfuse exporter (mirrors the create guard)."""
-    return config.langfuse_configured and not config.is_offline and LANGFUSE_AVAILABLE
+    return config.langfuse_configured and LANGFUSE_AVAILABLE
 
 
 def create_langfuse_exporter(
@@ -837,8 +837,7 @@ def create_langfuse_exporter(
 ) -> "LangfuseSpanExporter | None":
     """Build the exporter of one run, or ``None`` when Langfuse is disabled.
 
-    Langfuse is active when both keys are configured and the run is live. Offline runs use the
-    deterministic model whose token usage is not real, so they stay out of the dashboard.
+    Langfuse is active when both keys are configured and the package is installed.
 
     ``parent_trace_id`` is the correction chain's explicit (vendor-facing) trace id. When
     ``workflow_root_span_id`` names an already-exported anchor, this run's root attaches under
@@ -847,9 +846,7 @@ def create_langfuse_exporter(
     can persist it for every retry.
     """
     if not langfuse_export_active(config):
-        if config.langfuse_configured and config.is_offline:
-            _LOGGER.info("Langfuse export skipped: offline (scripted) runs are not exported")
-        elif config.langfuse_configured:
+        if config.langfuse_configured:
             _LOGGER.warning("LANGFUSE_* is configured but the langfuse package is not installed; export disabled")
         return None
     try:

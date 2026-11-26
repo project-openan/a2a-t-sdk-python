@@ -21,7 +21,13 @@ from a2a_t.core.validation_pipeline import FilledParamData
 from a2a_t.llm.models import LLMClientConfig
 from a2a_t.server.a2at_server import A2ATServer
 from demo.scenario import LANGUAGE_ZH, SCENARIOS, Scenario
-from demo.scripted_llm import (
+from protocol.messages import TASK_TEMPLATE_URI
+from protocol.negotiation_policy import NegotiationKind, negotiation_kind_for_errors
+from protocol.server_app import prepare_sdk_env_path
+from shared.config import SampleConfig
+from shared.task_schema import TASK_PARAM_SCHEMA
+
+from tests.support.scripted_llm import (
     SCRIPTED_PROVIDER_NAME,
     STAGE_CONTENT_VALIDATION,
     STAGE_CONTENT_VALIDATION_FEASIBILITY,
@@ -50,11 +56,6 @@ from demo.scripted_llm import (
     register_scripted_provider,
     route_structured_call,
 )
-from protocol.messages import TASK_TEMPLATE_URI
-from protocol.negotiation_policy import NegotiationKind, negotiation_kind_for_errors
-from protocol.server_app import prepare_sdk_env_path
-from shared.config import SampleConfig
-from shared.task_schema import TASK_PARAM_SCHEMA
 
 SLOT_SCHEMA: dict[str, Any] = {
     "type": "object",

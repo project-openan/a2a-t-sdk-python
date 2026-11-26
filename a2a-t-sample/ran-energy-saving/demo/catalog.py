@@ -95,7 +95,6 @@ def to_run_spec(
         name=scenario.name,
         description=scenario.description,
         user_request=user_request,
-        scripted_decisions=tuple(scenario.scripted_client_decisions),
         expected_sequence=tuple(
             ExpectedStep(actor=step.actor, performative=step.performative, round=step.round)
             for step in scenario.expected_sequence

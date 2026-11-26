@@ -169,22 +169,6 @@ def test_exporter_is_disabled_without_keys(tmp_path) -> None:
     assert create_langfuse_exporter(load_config(env_path=env), _metadata()) is None
 
 
-def test_exporter_is_disabled_in_offline_mode(tmp_path) -> None:
-    env = tmp_path / ".env"
-    env.write_text(
-        "\n".join(
-            [
-                "A2AT_SAMPLE_MODEL_MODE=offline",
-                "LANGFUSE_PUBLIC_KEY=pk",
-                "LANGFUSE_SECRET_KEY=sk",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    assert create_langfuse_exporter(load_config(env_path=env), _metadata()) is None
-
-
 def test_exporter_can_be_forced_off(tmp_path) -> None:
     env = tmp_path / ".env"
     env.write_text(
@@ -972,7 +956,8 @@ def test_finish_probes_ingestion_with_a_real_runtime(offline_config, monkeypatch
         _INGESTION_PROBES.clear()
 
 
-def test_the_otlp_exporter_retries_rejected_batches() -> None:
+def test_the_otlp_exporter_retries_rejected_batches(    live_sdk_provider: None,
+) -> None:
     """429/5xx and a temporary 403 must be retried instead of dropping the whole batch.
 
     The 403 is the intermittent Cloud rejection observed in the field (403 interleaved with 200),
@@ -1170,7 +1155,9 @@ def test_the_largest_accepted_request_tracks_only_successes(monkeypatch) -> None
     assert _max_accepted_bytes() == 100
 
 
-def test_the_runtime_uses_the_configured_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_runtime_uses_the_configured_batch_size(
+    monkeypatch: pytest.MonkeyPatch, live_sdk_provider: None
+) -> None:
     """The batch size bounds the OTLP request body behind a size-limited egress proxy."""
     config = replace(load_config(), langfuse_flush_at=4)
     captured: dict[str, Any] = {}

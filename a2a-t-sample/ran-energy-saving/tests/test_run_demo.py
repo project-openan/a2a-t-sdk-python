@@ -31,7 +31,7 @@ def test_write_run_env_points_both_processes_at_the_task_database(
     env_path = run_demo._write_run_env(
         source=None,
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         discovery="direct",
         transport="sse",
         webhook_port=0,
@@ -220,7 +220,7 @@ def test_state_round_trip_records_the_run_metadata(monkeypatch: pytest.MonkeyPat
 
     run_demo._save_state(
         [11, 12],
-        model_mode="offline",
+        model_mode="live",
         language="en-US",
         trace_token="tok",
         trace_url="http://127.0.0.1:8080",
@@ -230,7 +230,7 @@ def test_state_round_trip_records_the_run_metadata(monkeypatch: pytest.MonkeyPat
     state = run_demo._load_state()
     assert state == {
         "pids": [11, 12],
-        "model_mode": "offline",
+        "model_mode": "live",
         "language": "en-US",
         "protocol_mode": "a2a-t",
         "trace_token": "tok",
@@ -251,7 +251,7 @@ def test_state_file_is_written_owner_only(
     chmod_calls: list[tuple[str, int]] = []
     monkeypatch.setattr(run_demo.os, "chmod", lambda path, mode: chmod_calls.append((str(path), mode)))
 
-    run_demo._save_state([1], model_mode="offline", language="en-US", trace_token="tok")
+    run_demo._save_state([1], model_mode="live", language="en-US", trace_token="tok")
 
     assert chmod_calls == [(str(pid_file), 0o600)]
 
@@ -281,7 +281,7 @@ class TestServerReuseDecision:
     #: Metadata of a compatible, UI-mode keep-alive record.
     STATE: dict[str, object] = {
         "pids": [11, 12],
-        "model_mode": "offline",
+        "model_mode": "live",
         "language": "en-US",
         "trace_token": "tok",
         "trace_url": "http://127.0.0.1:8080",
@@ -293,7 +293,7 @@ class TestServerReuseDecision:
         params: dict[str, Any] = {
             "port_open": True,
             "state": self.STATE,
-            "model_mode": "offline",
+            "model_mode": "live",
             "language": "en-US",
             "ui": True,
             "trace_url": "http://127.0.0.1:8080",
@@ -310,7 +310,7 @@ class TestServerReuseDecision:
 
     def test_model_mode_mismatch_restarts(self) -> None:
         """The offline-UI/live-server bug: the recorded live server must not be reused."""
-        assert self.decide(state={**self.STATE, "model_mode": "live"}) == run_demo.REUSE_RESTART
+        assert self.decide(state={**self.STATE, "model_mode": "offline"}) == run_demo.REUSE_RESTART
 
     def test_language_mismatch_restarts(self) -> None:
         assert self.decide(state={**self.STATE, "language": "zh-CN"}) == run_demo.REUSE_RESTART

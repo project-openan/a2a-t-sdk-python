@@ -13,7 +13,6 @@ from demo.agents.server_agent.langgraph_tools import (
     tool_result_from_text,
 )
 from demo.agents.server_agent.planner import (
-    ScriptedChatModel,
     build_planner_input,
     build_planner_model,
     build_system_prompt,
@@ -22,6 +21,8 @@ from demo.agents.server_agent.planner import (
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from shared.config import MODEL_MODE_LIVE, SampleConfig
+
+from tests.support.scripted_planner import ScriptedChatModel
 
 
 async def _run_graph(config: SampleConfig | None = None) -> tuple[PlanGuard, list[object]]:
@@ -211,14 +212,6 @@ async def test_tool_guard_keeps_a_profile_per_cell() -> None:
         assert applied["ok"] is True
     finally:
         ran_data.reset()
-
-
-def test_build_planner_model_offline_returns_the_scripted_model(
-    offline_config: SampleConfig,
-) -> None:
-    model = build_planner_model(offline_config)
-    assert isinstance(model, ScriptedChatModel)
-    assert model.dataset_date == ran_data.dataset_date()
 
 
 def test_build_planner_model_live_builds_chat_openai(offline_config: SampleConfig) -> None:

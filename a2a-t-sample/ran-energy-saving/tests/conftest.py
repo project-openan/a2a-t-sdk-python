@@ -15,11 +15,14 @@ import pytest
 SAMPLE_ROOT = Path(__file__).resolve().parents[1]
 if str(SAMPLE_ROOT) not in sys.path:
     sys.path.insert(0, str(SAMPLE_ROOT))
+TESTS_ROOT = Path(__file__).resolve().parent
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
 
 from demo.scenario import LANGUAGE_EN  # noqa: E402
 from shared.config import (  # noqa: E402
     DISCOVERY_DIRECT,
-    MODEL_MODE_OFFLINE,
+    MODEL_MODE_LIVE,
     SAMPLE_ENV_PREFIXES,
     TRANSPORT_SSE,
     SampleConfig,
@@ -95,17 +98,64 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture(autouse=True)
-def install_offline_providers() -> None:
-    """Register both scripted LLM providers for every test.
+def install_test_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register the test-only deterministic SDK providers and route SDK calls to them."""
+    from tests.support.scripted_llm import register_scripted_provider
+    from tests.support.traced_scripted import register_traced_scripted_provider
 
-    Several integration tests build the real ``A2ATClient`` with the ``scripted_traced`` provider.
-    Registering both providers here makes each test independent of file order: running
-    ``test_scripted_llm.py`` alone must not depend on another module having registered the traced
-    provider first.
-    """
-    from demo.composition import install_offline_provider
+    register_scripted_provider()
+    register_traced_scripted_provider()
+    import shared.sdk_env as sdk_env
 
-    install_offline_provider()
+    monkeypatch.setattr(sdk_env, "sdk_provider_name", lambda: "scripted_traced")
+
+
+@pytest.fixture
+def live_sdk_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore the production traced-OpenAI provider for one test (undo the stub)."""
+    import shared.sdk_env as sdk_env
+    from shared.traced_llm import sdk_provider_name
+
+    monkeypatch.setattr(sdk_env, "sdk_provider_name", sdk_provider_name)
+
+
+@pytest.fixture(autouse=True)
+def stub_live_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve deterministic ADK/planner models so tests never open a network model."""
+    from tests.support.adk_fake_model import build_fake_model
+    from tests.support.scripted_planner import ScriptedChatModel
+
+    def traced_model(config: object = None, *, model: object = None) -> object:
+        del config
+        return model if model is not None else build_fake_model()
+
+    import shared.model_factory as model_factory
+
+    monkeypatch.setattr(model_factory, "build_traced_adk_model", traced_model)
+    import demo.agents.client_agent.agent as client_agent
+    import demo.agents.intent_agent.agent as intent_agent
+    import demo.intent as intent_module
+
+    monkeypatch.setattr(client_agent, "build_adk_model", lambda config=None: build_fake_model())
+    monkeypatch.setattr(intent_agent, "build_adk_model", lambda config=None: build_fake_model())
+    monkeypatch.setattr(intent_module, "build_traced_adk_model", traced_model)
+
+    import demo.agents.server_agent.factory as server_factory
+    from demo import ran_data
+
+    def planner_model(config: object = None, *, operation: str = "Create", existing_plan_id: str = "") -> object:
+        del config
+        return ScriptedChatModel(
+            dataset_date=ran_data.dataset_date(),
+            operation=operation,
+            existing_plan_id=existing_plan_id,
+        )
+
+    monkeypatch.setattr(server_factory, "build_planner_model", planner_model)
+
+    import protocol.client_runtime as client_runtime
+
+    monkeypatch.setattr(client_runtime, "build_traced_adk_model", traced_model)
 
 
 @pytest.fixture
@@ -121,9 +171,9 @@ def english_language(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def offline_config() -> SampleConfig:
-    """Return a fully offline sample configuration (scripted LLM + fake ADK model)."""
+    """Return a sample configuration whose network clients are replaced by tests."""
     return SampleConfig(
-        model_mode=MODEL_MODE_OFFLINE,
+        model_mode=MODEL_MODE_LIVE,
         language=LANGUAGE_EN,
         host="127.0.0.1",
         port=8000,

@@ -25,8 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 
 #: Model modes.
 MODEL_MODE_LIVE = "live"
-MODEL_MODE_OFFLINE = "offline"
-SUPPORTED_MODEL_MODES = (MODEL_MODE_LIVE, MODEL_MODE_OFFLINE)
+SUPPORTED_MODEL_MODES = (MODEL_MODE_LIVE,)
 ModelMode = Literal["live", "offline"]
 
 #: Discovery modes.
@@ -589,7 +588,7 @@ class SampleConfig:
     """Resolved sample configuration.
 
     Attributes:
-        model_mode: ``live`` (LiteLlm) or ``offline`` (scripted LLM + fake ADK model).
+        model_mode: always ``live``; kept for run metadata.
         language: Process-level language (``en-US`` / ``zh-CN``).
         host: Sample bind host.
         port: Sample bind port.
@@ -803,11 +802,6 @@ class SampleConfig:
         return bool(self.judge_model and self.judge_api_base)
 
     @property
-    def is_offline(self) -> bool:
-        """Return whether the sample runs with the scripted LLM and the fake ADK model."""
-        return self.model_mode == MODEL_MODE_OFFLINE
-
-    @property
     def langfuse_configured(self) -> bool:
         """Return whether the client Langfuse export is enabled and has both keys."""
         if self.langfuse_enabled is False:
@@ -817,7 +811,7 @@ class SampleConfig:
     @property
     def model_label(self) -> str:
         """Return the model-mode label shown by the CLI and the Web UI."""
-        return "offline (scripted)" if self.is_offline else f"live ({self.adk_model_name})"
+        return f"live ({self.adk_model_name})"
 
 
 def load_config(*, env_path: Path | None = None) -> SampleConfig:
@@ -836,7 +830,7 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
     resolved = env_path or Path.cwd() / ".env"
     values: dict[str, str | None] = dict(dotenv_values(resolved)) if resolved.exists() else {}
 
-    model_mode = _env_value(values, MODEL_MODE_ENV_KEY, MODEL_MODE_OFFLINE)
+    model_mode = _env_value(values, MODEL_MODE_ENV_KEY, MODEL_MODE_LIVE)
     if model_mode not in SUPPORTED_MODEL_MODES:
         raise ValueError(f"Unsupported {MODEL_MODE_ENV_KEY}: {model_mode}; expected one of {SUPPORTED_MODEL_MODES}")
 

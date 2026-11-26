@@ -49,27 +49,17 @@ TRACED_OPENAI_PROVIDER: Final[str] = "openai_traced"
 #: The yellow zone saw a single extraction take 116.7 s of a 120 s budget with no other signal.
 SLOW_CALL_WARNING_RATIO: Final[float] = 0.5
 
-#: Provider name of the traced scripted client (offline mode).
-TRACED_SCRIPTED_PROVIDER: Final[str] = "scripted_traced"
-
-#: Label reported instead of a fabricated token count in offline mode.
-SCRIPTED_TOKENS_LABEL: Final[str] = "n/a (scripted)"
-
 #: Per-call raw-response capture of :class:`TracedOpenAIClient` (no state on the client instance).
 _RAW_RESPONSE: ContextVar[dict[str, object] | None] = ContextVar("a2at_sample_llm_raw", default=None)
 
 
-def sdk_provider_name(*, offline: bool) -> str:
+def sdk_provider_name() -> str:
     """Return the SDK provider name the sample writes into its temporary ``.env``."""
-    return TRACED_SCRIPTED_PROVIDER if offline else TRACED_OPENAI_PROVIDER
+    return TRACED_OPENAI_PROVIDER
 
 
 def register_traced_providers() -> None:
-    """Register the traced OpenAI provider with the SDK factory (idempotent).
-
-    The offline traced provider belongs to the demo package and is registered by
-    :func:`demo.composition.install_offline_provider`; this module never imports it.
-    """
+    """Register the traced OpenAI provider with the SDK factory (idempotent)."""
     available = set(LLMClientFactory.available_providers())
     if TRACED_OPENAI_PROVIDER not in available:
         LLMClientFactory.register(TRACED_OPENAI_PROVIDER, TracedOpenAIClient)
@@ -119,17 +109,7 @@ def _parse_json(content: str | None) -> tuple[object | None, str | None]:
 
 
 def _token_map(response: LLMResponse) -> dict[str, object]:
-    """Render the token usage of one response; the scripted provider reports ``n/a``."""
-    if response.model == TRACED_SCRIPTED_PROVIDER or "scripted_stage" in response.metadata:
-        return {
-            "prompt": None,
-            "completion": None,
-            "total": None,
-            "cached": None,
-            "estimated": True,
-            "scripted": True,
-            "label": SCRIPTED_TOKENS_LABEL,
-        }
+    """Render the token usage of one response."""
     usage = response.usage or {}
     prompt = usage.get("prompt_tokens")
     completion = usage.get("completion_tokens")
@@ -412,9 +392,7 @@ class TracedOpenAIClient(TracedStructuredMixin, OpenAIClient):
 
 
 __all__ = [
-    "SCRIPTED_TOKENS_LABEL",
     "TRACED_OPENAI_PROVIDER",
-    "TRACED_SCRIPTED_PROVIDER",
     "TracedOpenAIClient",
     "TracedStructuredMixin",
     "is_traced_provider_registered",

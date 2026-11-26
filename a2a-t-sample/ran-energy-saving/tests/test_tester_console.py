@@ -58,6 +58,8 @@ class _PassRuntime:
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
+        decision_basis: object = None,
+        **kwargs: object,
     ) -> ClientFlowResult:
         del (
             run_id,
@@ -76,6 +78,8 @@ class _PassRuntime:
             target_context_id,
             target_server_task_id,
             target_server_context_id,
+            decision_basis,
+            kwargs,
         )
         if event_sink is not None:
             event_sink(
@@ -224,7 +228,7 @@ async def test_the_meta_lists_the_stage_chain(client: httpx.AsyncClient) -> None
         "final",
     ]
     assert payload["stageOrder"] == payload["stopAfter"]
-    assert payload["decisionModes"] == ["scripted", "live"]
+    assert payload["decisionModes"] == ["live"]
     assert payload["defaults"]["workingTimeoutSeconds"] == 60
     assert payload["runnerDefaultsIndicateCase"] is True
     assert payload["transport"] in {"sse", "webhook"}
@@ -695,36 +699,6 @@ def test_a2at_decision_parser_accepts_a_bare_natural_language_reply(reply: str) 
     assert decisions[0].feasibility_summary == reply
 
 
-def test_a_negotiation_case_without_a_scripted_reply_fails_before_the_run() -> None:
-    """A missing Q/P-column reply is case data, not a protocol failure at the first proposal."""
-    from demo.web.tester.service import _scripted_reply_error
-
-    empty = {
-        "expect": {
-            "protocols": {
-                "a2a-t": {"negotiation": {"expected": True, "rounds": []}},
-                "a2a": {"negotiation": {"expected": True, "rounds": []}},
-            }
-        }
-    }
-    reply = {
-        "expect": {
-            "protocols": {
-                "a2a-t": {
-                    "negotiation": {
-                        "expected": True,
-                        "rounds": ["Agree to reduce the target from 5Mbps to 2Mbps."],
-                    }
-                }
-            }
-        }
-    }
-
-    assert _scripted_reply_error(empty, PROTOCOL_A2A_T, [], []) is not None
-    assert _scripted_reply_error(empty, PROTOCOL_PURE, [], []) is not None
-    assert _scripted_reply_error(reply, PROTOCOL_A2A_T, a2at_decisions(reply), []) is None
-
-
 def test_pure_answers_replay_the_p_column() -> None:
     answers = pure_answers(CASES[1])
     assert len(answers) == 1
@@ -758,8 +732,8 @@ async def test_meta_exposes_the_acceptance_stage_model_and_transport(
         assert stage in stage_order
     assert stage_order.index("accepted") < stage_order.index("working") < stage_order.index("final")
     assert meta["defaults"]["stopAfter"] == "accepted"
-    assert meta["defaults"]["decisionMode"] == "scripted"
-    assert meta["decisionModes"] == ["scripted", "live"]
+    assert meta["defaults"]["decisionMode"] == "live"
+    assert meta["decisionModes"] == ["live"]
     assert meta["transport"] in {"sse", "webhook"}
     assert meta["discovery"]
 

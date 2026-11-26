@@ -107,7 +107,6 @@ STATUS_FINISHED: Final[RunStatus] = "finished"
 STATUS_FAILED: Final[RunStatus] = "failed"
 STATUS_INTERRUPTED: Final[RunStatus] = "interrupted"
 
-#: Modes the Web UI may start; the scripted mode is a CLI/test seam only.
 UI_MODES: Final[tuple[str, ...]] = (MODE_AUTO, MODE_MANUAL, MODE_CONFIRM)
 
 
@@ -157,8 +156,6 @@ class RunState:
         raw_request: operator request before the business intent layer.
         normalized_request: canonical text produced by the business intent layer.
         processed_intent: structured intent document, once the layer has run.
-        scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``.
-        pure_answers: per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds.
         negotiation_source: who authors a tester negotiation reply (``agent`` / ``script``).
         client_conditions: optional case-level acceptance conditions shown to the agent.
         negotiation_principles: shared client negotiation principles frozen for the batch.
@@ -266,10 +263,6 @@ class RunState:
     raw_request: str | None = None
     normalized_request: str | None = None
     processed_intent: dict[str, object] | None = None
-    #: Per-run A2A-T decision script (``MODE_SCRIPTED``); empty uses the catalog script.
-    scripted_decisions: tuple[NegotiationDecision, ...] = ()
-    #: Per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds, consumed in order.
-    pure_answers: tuple[str, ...] = ()
     #: A Task-T the caller already generated and validated (the tester's interception preflight).
     #: When set, the run reuses it instead of re-extracting and re-validating the same request.
     prepared_task_t: str | None = None

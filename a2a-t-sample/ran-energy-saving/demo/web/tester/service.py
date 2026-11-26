@@ -67,15 +67,10 @@ from eval.osp.runner import (
 from eval.osp.runner import (
     STAGE_ORDER as SDK_STAGE_ORDER,
 )
-from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
+from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
 from protocol.run_metrics import build_run_metrics
-from shared.config import (
-    DISCOVERY_NMS,
-    MODEL_MODE_LIVE,
-    MODEL_MODE_OFFLINE,
-)
-from shared.models import NegotiationDecision
+from shared.config import DISCOVERY_NMS, MODEL_MODE_LIVE
 from shared.run_constants import (
     FINAL_STATE_DECISION_UNGROUNDED,
     FINAL_STATE_INCOMPLETE,
@@ -91,7 +86,7 @@ from shared.run_constants import (
 )
 from shared.trace import reset_task_sink, set_task_sink
 
-from demo.web.tester.decisions import a2at_decisions, pure_answers
+from demo.web.tester.decisions import pure_answers
 from demo.web.tester.export_view import build_answer, read_traceparent, verdict_reason
 
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
@@ -131,13 +126,9 @@ CASE_ERROR: Final[str] = "error"
 #: At least one stage is ``waiting`` but none failed: the request is not proven either way.
 CASE_PARTIAL: Final[str] = "partial"
 
-#: Decision modes of a batch.
-DECISION_MODE_SCRIPTED: Final[str] = "scripted"
+#: Decision mode of a batch. The tester always exercises the live client agent.
 DECISION_MODE_LIVE: Final[str] = "live"
-DECISION_MODES: Final[tuple[str, ...]] = (DECISION_MODE_SCRIPTED, DECISION_MODE_LIVE)
-
-#: Batch decision mode used when the caller does not choose one. An online model should exercise
-#: the model decisions by default; an offline process can only run the scripted mode.
+DECISION_MODES: Final[tuple[str, ...]] = (DECISION_MODE_LIVE,)
 DEFAULT_DECISION_MODE: Final[str] = DECISION_MODE_LIVE
 
 #: How many items one batch runs at the same time unless the operator asks for more. One keeps
@@ -159,30 +150,20 @@ MAX_ROUNDS: Final[int] = 8
 
 
 def default_decision_mode(model_mode: str) -> str:
-    """Return the default decision mode of a tester process in one model mode."""
-    return DECISION_MODE_SCRIPTED if model_mode == MODEL_MODE_OFFLINE else DEFAULT_DECISION_MODE
+    """Return the default decision mode of a tester process."""
+    del model_mode
+    return DEFAULT_DECISION_MODE
 
 
-#: Who authors a case's negotiation reply: the live client agent or the recorded case script.
+#: The client agent authors every negotiation reply.
 NEGOTIATION_SOURCE_AGENT: Final[str] = "agent"
-NEGOTIATION_SOURCE_SCRIPT: Final[str] = "script"
-NEGOTIATION_SOURCES: Final[tuple[str, ...]] = (
-    NEGOTIATION_SOURCE_AGENT,
-    NEGOTIATION_SOURCE_SCRIPT,
-)
+NEGOTIATION_SOURCES: Final[tuple[str, ...]] = (NEGOTIATION_SOURCE_AGENT,)
 
 
 def default_negotiation_source(model_mode: str) -> str:
-    """Return the default reply source of a tester process in one model mode.
-
-    An offline process has no model, so it can only replay the case script; an online process
-    exercises the client agent by default.
-    """
-    return (
-        NEGOTIATION_SOURCE_SCRIPT
-        if model_mode == MODEL_MODE_OFFLINE
-        else NEGOTIATION_SOURCE_AGENT
-    )
+    """Return the reply source of a tester process."""
+    del model_mode
+    return NEGOTIATION_SOURCE_AGENT
 
 #: Persisted batch schema; v1-v4 batches are still readable and load as the script source.
 SCHEMA: Final[str] = "osp-tester/v5"
@@ -502,9 +483,9 @@ class _Batch:
     #: request on each protocol side). They are reported instead of silently disappearing.
     excluded_case_ids: list[int] = field(default_factory=list)
     working_timeout_seconds: float | None = None
-    decision_mode: str = DECISION_MODE_SCRIPTED
+    decision_mode: str = DECISION_MODE_LIVE
     #: Who authors a case's negotiation reply: ``agent`` (live decision agent) or ``script``.
-    negotiation_source: str = NEGOTIATION_SOURCE_SCRIPT
+    negotiation_source: str = NEGOTIATION_SOURCE_AGENT
     #: Shared negotiation principles frozen when the batch is created (P1 fills these).
     principles_version: str = ""
     principles_text: str = ""
@@ -644,7 +625,6 @@ class EvalBatchManager:
 
         ``timeout_seconds``/``working_timeout_seconds`` may be ``None``: the batch then uses each
         case's own ``runner`` block (or the process defaults for a scratch request).
-        ``decision_mode`` defaults to the process mode: live for an online model, scripted offline.
         ``keep_tasks`` keeps every Task alive after its item ends (long-task verification); by
         default each item releases its remote Task once its evidence is collected.
         ``concurrency`` is how many items run at once (1..:data:`MAX_CONCURRENCY`); ``1`` is the
@@ -745,12 +725,9 @@ class EvalBatchManager:
         resolved_decision_mode = self._validate_decision_mode(
             decision_mode or default_decision_mode(self._model_mode)
         )
-        default_source = default_negotiation_source(self._model_mode)
-        if resolved_decision_mode != DECISION_MODE_LIVE:
-            # A scratch run has no case script; a non-live mode cannot author an agent reply.
-            default_source = NEGOTIATION_SOURCE_SCRIPT
         resolved_negotiation_source = self._validate_negotiation_source(
-            negotiation_source or default_source, resolved_decision_mode
+            negotiation_source or default_negotiation_source(self._model_mode),
+            resolved_decision_mode,
         )
         principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
@@ -779,21 +756,14 @@ class EvalBatchManager:
         """Validate one batch decision mode; a live batch requires an online model."""
         if decision_mode not in DECISION_MODES:
             raise ValueError(f"unknown decision_mode {decision_mode!r}")
-        if decision_mode == DECISION_MODE_LIVE and self._model_mode == "offline":
-            raise ValueError("live 决策需要在线模型。")
         return decision_mode
 
     def _validate_negotiation_source(
         self, negotiation_source: str, decision_mode: str | None = None
     ) -> str:
-        """Validate one batch reply source; an offline or scripted run cannot author a live reply."""
+        """Validate one batch reply source."""
         if negotiation_source not in NEGOTIATION_SOURCES:
             raise ValueError(f"unknown negotiation_source {negotiation_source!r}")
-        if negotiation_source == NEGOTIATION_SOURCE_AGENT:
-            if self._model_mode == MODEL_MODE_OFFLINE:
-                raise ValueError("agent 协商答复需要在线模型。")
-            if decision_mode is not None and decision_mode != DECISION_MODE_LIVE:
-                raise ValueError("agent 协商答复需要 live 决策模式。")
         return negotiation_source
 
     def _load_principles(self, version: str | None) -> NegotiationPrinciples:
@@ -1302,7 +1272,7 @@ class EvalBatchManager:
         case: Mapping[str, Any],
         item: CaseItem,
         stop_after: str,
-        decision_mode: str = DECISION_MODE_SCRIPTED,
+        decision_mode: str = DECISION_MODE_LIVE,
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
@@ -1356,7 +1326,7 @@ class EvalBatchManager:
         follow-up segment is the returned outcome and the original is ``outcome.interception``.
         """
         judge = outcome_case if outcome_case is not None else case
-        model_mode = MODEL_MODE_LIVE if decision_mode == DECISION_MODE_LIVE else None
+        model_mode = MODEL_MODE_LIVE
         outcome = await self._run_case_with_client(
             case,
             stop_after,
@@ -1428,33 +1398,8 @@ class EvalBatchManager:
         transport = defaults.get("transport", "sse")
         discovery = defaults.get("discovery", "direct")
         negotiation_expected = _negotiation_expected(case, item.protocol)
-        # An agent-authored tester reply is decided live on either protocol: the Q/P column is
-        # only an expectation, so neither a reply script nor the "empty reply column" gate applies.
-        agent_negotiation = (
-            negotiation_expected and batch.negotiation_source == NEGOTIATION_SOURCE_AGENT
-        )
-        decisions = (
-            a2at_decisions(case)
-            if runtime_protocol == RUNTIME_A2A_T and not agent_negotiation
-            else []
-        )
-        answers = (
-            pure_answers(case)
-            if runtime_protocol == PROTOCOL_PURE and not agent_negotiation
-            else []
-        )
-        reply_error = (
-            None
-            if agent_negotiation
-            else _scripted_reply_error(case, runtime_protocol, decisions, answers)
-        )
-        if reply_error is not None:
-            # The reply is case data. Failing before the run keeps the failure attributable and,
-            # for a Modify, avoids creating a baseline Task the run can never continue.
-            for stage in stages:
-                item.stages[stage] = StageResult(stage, STAGE_ERROR, reply_error)
-            item.status = CASE_ERROR
-            return
+        # The Q/P column is only an expectation; the client agent authors every reply.
+        agent_negotiation = negotiation_expected
         # A blocked A2A-T request never reaches the NMS, so it has nothing to continue; without a
         # follow-up, seeding would only create a Task that the case then refuses to modify.
         blocked_without_followup = (
@@ -1489,14 +1434,7 @@ class EvalBatchManager:
 
         resolved_conditions = case_client_conditions(case)
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
-        mode = self._mode_for(batch, item.protocol)
-        if agent_negotiation:
-            # The agent is the only decision-maker; a scripted provider would run an empty script.
-            mode = MODE_AUTO
-        elif runtime_protocol == RUNTIME_A2A_T and negotiation_expected:
-            # The OSP Q column is the expected negotiation dialogue. Replaying it verifies the
-            # protocol path deterministically; the SDK intent/Task-T stages still run in live mode.
-            mode = MODE_SCRIPTED
+        mode = MODE_AUTO
         run = await self._runs.start(
             scenario,
             mode,
@@ -1524,8 +1462,6 @@ class EvalBatchManager:
             target_context_id=target_context_id,
             target_server_task_id=target_server_task_id,
             target_server_context_id=target_server_context_id,
-            scripted_decisions=decisions or None,
-            pure_answers=answers or None,
             validate_before_send=_pre_send_validation(runner),
             language=resolved_language,
             correction=correction,
@@ -1647,7 +1583,6 @@ class EvalBatchManager:
             user_id="tester",
             idempotency_key=idempotency_key,
             source={"kind": "tester", "channel": "tester-scratch", "batchId": batch.batch_id},
-            scripted_decisions=(),
             validate_before_send=True,
             negotiation_source=batch.negotiation_source,
             negotiation_principles=batch.principles_text,
@@ -1720,8 +1655,7 @@ class EvalBatchManager:
     @staticmethod
     def _mode_for(batch: _Batch, protocol: str) -> str:
         """Return the runtime decision mode of one item."""
-        if protocol == PROTOCOL_A2A_T and batch.decision_mode != DECISION_MODE_LIVE:
-            return MODE_SCRIPTED
+        del batch, protocol
         return MODE_AUTO
 
     @staticmethod
@@ -1758,10 +1692,7 @@ class EvalBatchManager:
         defaults = self._protocol_defaults.get(protocol, {})
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         request = _baseline_request(case)
-        # The baseline follows the batch's decision mode. A live batch must not seed the Create
-        # with ``MODE_SCRIPTED``: its script is empty, so a server question (INPUT_REQUIRED) would
-        # raise "The scripted decision sequence is exhausted" and abort the Modify before it runs.
-        mode = self._mode_for(batch, protocol)
+        mode = MODE_AUTO
         run = await self._runs.start(
             BASELINE_SCENARIO,
             mode,
@@ -1778,7 +1709,6 @@ class EvalBatchManager:
                 "batchId": batch.batch_id,
                 "caseId": item.case_id,
             },
-            scripted_decisions=(),
             # Only the A2A-T flow has a Task-T pre-send gate; the pure hop sends raw text.
             validate_before_send=protocol == RUNTIME_A2A_T,
             # The paired Create follows the same reply source and frozen principles as the batch.
@@ -2808,10 +2738,10 @@ class EvalBatchManager:
         item.stages["validate"] = self._validation_stage(case, detail)
 
     async def _ensure_prompt_client(self, model_mode: str | None = None) -> Any:
-        """Return the SDK prompt client of one model mode (offline scripted by default)."""
+        """Return the pooled SDK prompt client."""
         if self._prompt_client is not None:
             return self._prompt_client
-        key = model_mode or self._model_mode or MODEL_MODE_OFFLINE
+        key = model_mode or self._model_mode or MODEL_MODE_LIVE
         if key in self._prompt_errors:
             raise RuntimeError(self._prompt_errors[key])
         cached = self._prompt_clients.get(key)
@@ -2829,7 +2759,6 @@ class EvalBatchManager:
                 client, directory = await asyncio.to_thread(
                     build_client_with_env,
                     self._env_path,
-                    model_mode=model_mode,
                 )
             except Exception as exc:  # noqa: BLE001 - reported per case
                 self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
@@ -2891,7 +2820,7 @@ class EvalBatchManager:
 
     async def _checkout_prompt_client(self, model_mode: str | None) -> Any:
         """Return an idle pooled client, building one under the build lock when none is free."""
-        key = model_mode or self._model_mode or MODEL_MODE_OFFLINE
+        key = model_mode or self._model_mode or MODEL_MODE_LIVE
         queue = self._prompt_pool.setdefault(key, asyncio.Queue())
         try:
             return queue.get_nowait()
@@ -2910,7 +2839,6 @@ class EvalBatchManager:
                 client, directory = await asyncio.to_thread(
                     build_client_with_env,
                     self._env_path,
-                    model_mode=model_mode,
                 )
             except Exception as exc:  # noqa: BLE001 - reported per case
                 self._prompt_errors[key] = f"{type(exc).__name__}: {exc}"
@@ -2921,7 +2849,7 @@ class EvalBatchManager:
 
     def _checkin_prompt_client(self, model_mode: str | None, client: Any) -> None:
         """Return a pooled client so the next item of this mode can reuse it."""
-        key = model_mode or self._model_mode or MODEL_MODE_OFFLINE
+        key = model_mode or self._model_mode or MODEL_MODE_LIVE
         self._prompt_pool.setdefault(key, asyncio.Queue()).put_nowait(client)
 
     def _close_prompt_pool(self) -> None:
@@ -3031,7 +2959,7 @@ class EvalBatchManager:
             if isinstance(item, Mapping)
         ]
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
-        loaded_decision_mode = str(document.get("decisionMode") or DECISION_MODE_SCRIPTED)
+        loaded_decision_mode = DECISION_MODE_LIVE
         loaded_version = _optional_text(document.get("principlesVersion"))
         loaded_text = _optional_text(document.get("principlesText"))
         try:
@@ -3039,14 +2967,12 @@ class EvalBatchManager:
                 _loaded_negotiation_source(document), loaded_decision_mode
             )
         except ValueError:
-            # A batch persisted for another process (offline, or a scripted decision mode) cannot
-            # author agent replies here; replay its case scripts instead of failing to load it.
-            loaded_source = NEGOTIATION_SOURCE_SCRIPT
+            loaded_source = NEGOTIATION_SOURCE_AGENT
         if loaded_source == NEGOTIATION_SOURCE_AGENT and not loaded_text:
             try:
                 loaded_principles = load_principles(loaded_version or None)
             except (FileNotFoundError, ValueError):
-                loaded_source = NEGOTIATION_SOURCE_SCRIPT
+                raise
             else:
                 loaded_version = loaded_principles.version
                 loaded_text = loaded_principles.text
@@ -3704,26 +3630,6 @@ def _message_diffs(match: object) -> list[dict[str, object]]:
     ]
 
 
-def _scripted_reply_error(
-    case: Mapping[str, Any],
-    runtime_protocol: str,
-    decisions: Sequence[NegotiationDecision],
-    answers: Sequence[str],
-) -> str | None:
-    """Return why a negotiation case has no reply to replay, or ``None`` when it has one.
-
-    A case that expects a negotiation but carries no Q/P-column answer cannot be replayed.
-    Starting the run anyway would send the request and then fail at the first proposal with an
-    exhausted script, leaving a remote Task stuck in ``INPUT_REQUIRED`` and reporting a protocol
-    failure for what is missing case data.
-    """
-    if runtime_protocol == RUNTIME_A2A_T and _negotiation_expected(case, PROTOCOL_A2A_T) and not decisions:
-        return "用例 Q 列协商回复为空或无法解析，未启动 run。"
-    if runtime_protocol == PROTOCOL_PURE and _negotiation_expected(case, PROTOCOL_A2A) and not answers:
-        return "用例 P 列纯 A2A 回复为空，未启动 run。"
-    return None
-
-
 def _case_runner(case: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """Return the ``runner`` block of a case, empty when absent."""
     if not isinstance(case, Mapping):
@@ -4073,7 +3979,7 @@ def _loaded_negotiation_source(document: Mapping[str, object]) -> str:
     return (
         value
         if isinstance(value, str) and value in NEGOTIATION_SOURCES
-        else NEGOTIATION_SOURCE_SCRIPT
+        else NEGOTIATION_SOURCE_AGENT
     )
 
 
@@ -4097,7 +4003,6 @@ __all__ = [
     "CASE_RUNNING",
     "DECISION_MODES",
     "DECISION_MODE_LIVE",
-    "DECISION_MODE_SCRIPTED",
     "DEFAULT_CONCURRENCY",
     "DEFAULT_ROUNDS",
     "DEFAULT_WORKING_TIMEOUT_SECONDS",
@@ -4106,7 +4011,6 @@ __all__ = [
     "MAX_ROUNDS",
     "NEGOTIATION_SOURCES",
     "NEGOTIATION_SOURCE_AGENT",
-    "NEGOTIATION_SOURCE_SCRIPT",
     "default_negotiation_source",
     "validate_concurrency",
     "validate_rounds",

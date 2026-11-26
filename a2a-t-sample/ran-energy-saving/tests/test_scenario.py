@@ -13,6 +13,8 @@ from demo.scenario import (
 )
 from shared.run_constants import FINAL_STATE_INPUT_INVALID, MAX_ROUNDS, SUPPORTED_LANGUAGES
 
+from tests.support.scenario_scripts import SCRIPTED_DECISIONS
+
 
 def _sequence(name: str) -> tuple[tuple[str, str, int | None], ...]:
     return tuple((step.actor, step.performative, step.round) for step in SCENARIOS[name].expected_sequence)
@@ -77,8 +79,8 @@ def test_target_sequence_corrects_the_target_in_accept() -> None:
         ("client", "ACCEPT", 1),
     )
     assert scenario.expected_final_state == FINAL_STATE_TASK_COMPLETED
-    assert [decision.action for decision in scenario.scripted_client_decisions] == ["accept"]
-    accept = scenario.scripted_client_decisions[0]
+    assert [decision.action for decision in SCRIPTED_DECISIONS[scenario.name]] == ["accept"]
+    accept = SCRIPTED_DECISIONS[scenario.name][0]
     assert accept.filled_params and accept.filled_params.get("guaranteedThroughputTarget")
     assert accept.confirmed_intent
 
@@ -92,7 +94,7 @@ def test_feasibility_sequence() -> None:
         ("client", "ACCEPT", 1),
     )
     assert scenario.expected_final_state == FINAL_STATE_TASK_COMPLETED
-    accept = scenario.scripted_client_decisions[0]
+    accept = SCRIPTED_DECISIONS[scenario.name][0]
     assert accept.filled_params and accept.filled_params.get("guaranteedThroughputTarget")
 
 
@@ -105,7 +107,7 @@ def test_reject_sequence_ends_with_plain_message() -> None:
         ("server", "MESSAGE", None),
     )
     assert scenario.expected_final_state == FINAL_STATE_NEGOTIATION_ENDED
-    assert [decision.action for decision in scenario.scripted_client_decisions] == ["reject"]
+    assert [decision.action for decision in SCRIPTED_DECISIONS[scenario.name]] == ["reject"]
 
 
 def test_abort_sequence_ends_with_the_client_abort() -> None:
@@ -117,7 +119,7 @@ def test_abort_sequence_ends_with_the_client_abort() -> None:
         ("server", "MESSAGE", None),
     )
     assert scenario.expected_final_state == FINAL_STATE_NEGOTIATION_ENDED
-    assert [decision.action for decision in scenario.scripted_client_decisions] == ["abort"]
+    assert [decision.action for decision in SCRIPTED_DECISIONS[scenario.name]] == ["abort"]
 
 
 def test_expected_step_is_hashable_frozen_dataclass() -> None:

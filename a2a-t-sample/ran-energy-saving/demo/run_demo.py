@@ -258,9 +258,6 @@ def _warm_live_model(config: object) -> None:
     """
     import httpx
 
-    model_mode = getattr(config, "model_mode", "")
-    if model_mode != "live":
-        return
     base = str(getattr(config, "planner_api_base", "") or getattr(config, "adk_model_api_base", ""))
     if not base:
         return
@@ -1087,7 +1084,6 @@ def _build_parser(
     from shared.config import (
         SUPPORTED_DISCOVERY_MODES,
         SUPPORTED_INTENT_MODES,
-        SUPPORTED_MODEL_MODES,
         SUPPORTED_TRANSPORTS,
     )
     from shared.run_constants import BRAND_ORANGE, SUPPORTED_BRANDS, SUPPORTED_LANGUAGES
@@ -1194,12 +1190,6 @@ def _build_parser(
             "natural-language request override of the CLI run; required to name a region the "
             "real NMS serves (for example A2ATestRegion) in live mode"
         ),
-    )
-    parser.add_argument(
-        "--model-mode",
-        default=_env_str(env, "A2AT_SAMPLE_MODEL_MODE", "offline"),
-        choices=list(SUPPORTED_MODEL_MODES),
-        help="offline (scripted + fake ADK model) or live (OpenAI-compatible endpoint)",
     )
     parser.add_argument(
         "--intent-mode",
@@ -1422,7 +1412,7 @@ def main() -> int:
     env_path = _write_run_env(
         source=source_env,
         language=args.language,
-        model_mode=args.model_mode,
+        model_mode="live",
         discovery="nms" if args.nms else args.discovery,
         transport=args.transport,
         webhook_port=webhook_port,
@@ -1475,7 +1465,7 @@ def main() -> int:
         reuse = _server_reuse_decision(
             port_open=_port_open(server_port),
             state=state,
-            model_mode=args.model_mode,
+            model_mode="live",
             language=args.language,
             protocol_mode=args.protocol,
             ui=args.ui,
@@ -1497,7 +1487,7 @@ def main() -> int:
             print(
                 f"[run_demo] recorded server configuration does not match this run "
                 f"(recorded model_mode={recorded_mode}, language={recorded_language}, "
-                f"trace={recorded_target}; requested model_mode={args.model_mode}, "
+                f"trace={recorded_target}; requested model_mode={"live"}, "
                 f"language={args.language}, trace={requested_target}); stopping the recorded "
                 f"processes and starting fresh"
             )
@@ -1643,7 +1633,7 @@ def main() -> int:
                 os.environ["A2AT_SAMPLE_TRACE_TOKEN"] = server_trace_env["A2AT_SAMPLE_TRACE_TOKEN"]
             server_env = dict(server_trace_env)
             server_env["A2AT_SAMPLE_PROTOCOL_MODE"] = args.protocol
-            server_env["A2AT_SAMPLE_MODEL_MODE"] = args.model_mode
+            server_env["A2AT_SAMPLE_MODEL_MODE"] = "live"
             if start("server", SERVER_MODULE, server_port, server_env) is None:
                 return 1
             if args.gateway and start(
@@ -1651,7 +1641,7 @@ def main() -> int:
                 GATEWAY_MODULE,
                 args.gateway_port,
                 {
-                    "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
+                    "A2AT_SAMPLE_MODEL_MODE": "live",
                 },
             ) is None:
                 return 1
@@ -1659,7 +1649,7 @@ def main() -> int:
         if args.ui:
             print(
                 f"[run_demo] starting Web UI (scenario selectable, mode manual/auto, "
-                f"transport={args.transport}, language={args.language}, model_mode={args.model_mode}) ..."
+                f"transport={args.transport}, language={args.language}, model_mode={"live"}) ..."
             )
             # ``shared.config`` prefers the process environment over the per-run .env, so a launch
             # shell that sourced the source .env (``set -a``) would otherwise override the hop the
@@ -1675,7 +1665,7 @@ def main() -> int:
                 ),
                 # CLI values must win over an exported shell value; shared.config prefers the
                 # process environment over RUN_DIR/.env, so an un-pinned CLI flag silently loses.
-                "A2AT_SAMPLE_MODEL_MODE": args.model_mode,
+                "A2AT_SAMPLE_MODEL_MODE": "live",
                 **(
                     {"A2AT_SAMPLE_INTENT_MODE": args.intent_mode}
                     if args.intent_mode
@@ -1743,7 +1733,7 @@ def main() -> int:
         # dead PIDs from an older record are dropped instead of being carried forward.
         _save_state(
             [pid for pid in dict.fromkeys(managed) if _pid_alive(pid)],
-            model_mode=args.model_mode,
+            model_mode="live",
             language=args.language,
             protocol_mode=args.protocol,
             trace_token=server_trace_env.get("A2AT_SAMPLE_TRACE_TOKEN", ""),
@@ -1772,7 +1762,7 @@ def main() -> int:
                 f"[run_demo] running client (scenario={args.scenario}, mode={args.mode}, "
                 f"transport={args.transport}, discovery={resolved_config.discovery}, "
                 f"language={args.language}, "
-                f"model_mode={args.model_mode}) ..."
+                f"model_mode={"live"}) ..."
             )
             pure_nms = args.nms and args.protocol == "pure"
             return_code = asyncio.run(

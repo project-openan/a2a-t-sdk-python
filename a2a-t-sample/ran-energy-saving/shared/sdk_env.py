@@ -32,7 +32,7 @@ from typing import Final
 
 from dotenv import dotenv_values
 
-from shared.config import MODEL_MODE_OFFLINE, SampleConfig, merge_sample_process_env
+from shared.config import SampleConfig, merge_sample_process_env
 from shared.traced_llm import register_traced_providers, sdk_provider_name
 
 #: Prefix of the temporary SDK ``.env`` directories.
@@ -115,32 +115,22 @@ def prepare_sdk_env(
     source_path = env_path or Path.cwd() / ".env"
     values = _env_values(source_path)
     values["A2AT_LANGUAGE"] = config.language
-    if config.model_mode == MODEL_MODE_OFFLINE:
-        values.update(
-            {
-                "A2AT_LLM_PROVIDER": sdk_provider_name(offline=True),
-                "A2AT_LLM_MODEL": "scripted",
-                "A2AT_LLM_API_KEY": "not-needed",
-                "A2AT_LLM_BASE_URL": values.get("A2AT_LLM_BASE_URL") or config.adk_model_api_base,
-            }
-        )
-    else:
-        values.update(
-            {
-                # The traced provider is a drop-in replacement of the SDK OpenAI provider; the Run
-                # Explorer must see every structured call, so the source value never wins.
-                "A2AT_LLM_PROVIDER": sdk_provider_name(offline=False),
-                "A2AT_LLM_MODEL": _sdk_value(
-                    "ADK_MODEL_NAME", "A2AT_LLM_MODEL", _sdk_model_name(config.adk_model_name), values
-                ),
-                "A2AT_LLM_API_KEY": _sdk_value(
-                    "ADK_MODEL_API_KEY", "A2AT_LLM_API_KEY", config.adk_model_api_key, values
-                ),
-                "A2AT_LLM_BASE_URL": _sdk_value(
-                    "ADK_MODEL_API_BASE", "A2AT_LLM_BASE_URL", config.adk_model_api_base, values
-                ),
-            }
-        )
+    values.update(
+        {
+            # The traced provider is a drop-in replacement of the SDK OpenAI provider; the Run
+            # Explorer must see every structured call, so the source value never wins.
+            "A2AT_LLM_PROVIDER": sdk_provider_name(),
+            "A2AT_LLM_MODEL": _sdk_value(
+                "ADK_MODEL_NAME", "A2AT_LLM_MODEL", _sdk_model_name(config.adk_model_name), values
+            ),
+            "A2AT_LLM_API_KEY": _sdk_value(
+                "ADK_MODEL_API_KEY", "A2AT_LLM_API_KEY", config.adk_model_api_key, values
+            ),
+            "A2AT_LLM_BASE_URL": _sdk_value(
+                "ADK_MODEL_API_BASE", "A2AT_LLM_BASE_URL", config.adk_model_api_base, values
+            ),
+        }
+    )
     values.update(
         {
             # The sample's fail-fast policy always wins over the source file: a slow or retrying

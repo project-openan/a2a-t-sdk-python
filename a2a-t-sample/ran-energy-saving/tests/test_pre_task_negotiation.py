@@ -31,7 +31,6 @@ from a2a_t.core.standard_templates import (
 )
 from a2a_t.core.validation_pipeline import FilledParamData
 from a2a_t.server.a2at_server import A2ATServer
-from demo.composition import install_offline_provider
 from demo.scenario import (
     EXAMPLE_REQUESTS,
     SCENARIO_FEASIBILITY,
@@ -50,6 +49,9 @@ from protocol.pre_task_negotiation import NegotiationOutcome, PreTaskNegotiation
 from protocol.server_app import prepare_sdk_env_path
 from shared.config import SampleConfig
 from shared.trace import set_global_sink
+
+from tests.support.scripted_llm import register_scripted_provider
+from tests.support.traced_scripted import register_traced_scripted_provider
 
 CONTEXT_ID = "ctx-negotiation"
 TASK_PROMPT = "Create a RAN energy saving task in Region A."
@@ -780,7 +782,8 @@ async def test_existing_task_bypasses_the_pre_task_handler() -> None:
 @pytest.fixture
 def real_server(offline_config: SampleConfig) -> A2ATServer:
     """Build a real A2ATServer on the scripted SDK provider (no network)."""
-    install_offline_provider()
+    register_scripted_provider()
+    register_traced_scripted_provider()
     return A2ATServer(env_path=prepare_sdk_env_path(offline_config))
 
 

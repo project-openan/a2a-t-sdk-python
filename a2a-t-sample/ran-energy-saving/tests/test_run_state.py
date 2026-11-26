@@ -23,7 +23,7 @@ def _run(tmp_path: Path) -> RunState:
     run.transcript = NegotiationTranscript(
         scenario="night",
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         mode="auto",
         transport="webhook",
         runs_dir=tmp_path,
@@ -39,7 +39,7 @@ def test_the_run_started_frame_carries_the_trace_id(tmp_path: Path) -> None:
         description="d",
         user_request="r",
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         model_label="",
         expected_sequence=[],
     )
@@ -427,7 +427,7 @@ def test_a_modify_run_marks_the_task_modified(tmp_path: Path) -> None:
     run.transcript = NegotiationTranscript(
         scenario="night",
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         mode="auto",
         transport="webhook",
         runs_dir=tmp_path,

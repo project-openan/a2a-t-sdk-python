@@ -123,7 +123,6 @@ from protocol.decision_provider import (
     DecisionProviderError,
     DecisionTimeoutError,
     NegotiationDecisionProvider,
-    ScriptedDecisionProvider,
     current_decision_basis,
 )
 from protocol.grounding import UngroundedValue, find_ungrounded, grounding_reask_text, normalize
@@ -2093,14 +2092,11 @@ def _allows_graceful_exhaustion(provider: object) -> bool:
 def _requires_auto_verification(provider: NegotiationDecisionProvider) -> bool:
     """Return whether this provider's ACCEPT is an automatic decision that must be verified.
 
-    A scripted provider is a recorded operator answer. An offline ADK provider is the
-    deterministic fake model used by the demo/tests. Manual and confirm providers return the
-    operator's submitted decision. Only a live automatic ADK decision is verified.
+    Manual and confirm providers return the operator's submitted decision, and only an automatic
+    ADK decision is verified.
     """
-    if isinstance(provider, ScriptedDecisionProvider):
-        return False
     if isinstance(provider, AdkDecisionProvider):
-        return not provider.is_offline
+        return True
     return getattr(provider, "requires_grounding", False) is True
 
 

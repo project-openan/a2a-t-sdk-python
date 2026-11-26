@@ -14,7 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from shared.models import NegotiationDecision
 from shared.run_constants import LANGUAGE_ZH
 
 
@@ -36,8 +35,6 @@ class RunSpec:
         description: one-line description shown by the UI.
         user_request: natural-language request resolved for the process language. This text is
             both what the UI shows and what the client sends.
-        scripted_decisions: decisions replayed by the scripted provider and the offline model
-            (test doubles for the ADK decision agent).
         expected_sequence: expected performative sequence (UI hints and acceptance tests).
         expected_final_state: terminal state the run must reach, when the catalog provides one.
         expected_negotiation_target: guaranteed-throughput target the negotiation must agree on,
@@ -47,7 +44,6 @@ class RunSpec:
     name: str
     description: str
     user_request: str
-    scripted_decisions: tuple[NegotiationDecision, ...] = ()
     expected_sequence: tuple[ExpectedStep, ...] = ()
     expected_final_state: str | None = None
     expected_negotiation_target: str | None = None

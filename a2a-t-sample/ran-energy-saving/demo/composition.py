@@ -6,26 +6,17 @@ Only this module (and the entry points that import it) may combine ``protocol`` 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_client_runtime
 from protocol.pre_task_negotiation import TaskTPrecheck
-from protocol.run_spec import RunSpec
 from shared.config import DISCOVERY_NMS, INTENT_MODE_PROCESSED, SampleConfig
-from shared.models import NegotiationDecision
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 
 _LOGGER = logging.getLogger("ran_energy_saving.composition")
-
-
-def offline_model_factory(run_spec: RunSpec) -> Any:
-    """Build the deterministic ADK model carrying one run's scripted decisions."""
-    from demo.adk_fake_model import build_client_script, build_fake_model
-
-    return build_fake_model((build_client_script(run_spec.scripted_decisions),))
 
 
 def build_demo_negotiation_policy() -> Any:
@@ -46,41 +37,6 @@ def build_demo_task_t_precheck() -> TaskTPrecheck:
     return RanDataTaskTPrecheck()
 
 
-def install_offline_provider() -> None:
-    """Install the deterministic SDK structured-call routing used in offline mode."""
-    from demo.scripted_llm import register_scripted_provider
-    from demo.traced_scripted import register_traced_scripted_provider
-
-    register_scripted_provider()
-    register_traced_scripted_provider()
-
-
-def _scripted_pure_answer(answers: Sequence[str]) -> Callable[[dict[str, object]], str]:
-    """Return a pure A2A answer callback that replays ``answers`` in order.
-
-    An exhausted script answers with an empty string instead of raising: the flow then records
-    "no answer left" as the unfinished reason and keeps the downstream's receipt, which is the
-    evidence a batch test wants. A vendor that asks more rounds than the case recorded is a case
-    data gap, not a client failure.
-    """
-    remaining = list(answers)
-    consumed = 0
-
-    def answer(event: dict[str, object]) -> str:
-        del event
-        nonlocal consumed
-        if not remaining:
-            _LOGGER.warning(
-                "pure A2A answer script exhausted after %s answer(s); leaving the question unanswered",
-                consumed,
-            )
-            return ""
-        consumed += 1
-        return remaining.pop(0)
-
-    return answer
-
-
 async def build_demo_runtime(
     config: SampleConfig,
     scenario: str,
@@ -92,13 +48,11 @@ async def build_demo_runtime(
     run_id: str = "",
     env_path: Path | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
-    scripted_decisions: Sequence[NegotiationDecision] | None = None,
-    pure_answers: Sequence[str] | None = None,
     prepared_task_t: str | None = None,
     prepared_filled: Mapping[str, object] | None = None,
     pure_reply_source: str = "",
 ) -> Any:
-    """Build one client runtime with the demo catalog and offline assets."""
+    """Build one client runtime with the demo catalog."""
     from protocol.client_policy import ClientPolicy
 
     from demo.agents.client_agent.agent import build_client_agent
@@ -112,11 +66,7 @@ async def build_demo_runtime(
         """Build the decision agent; the basis and policy are stated in the prompt."""
         return build_client_agent(model)
 
-    if pure_answers is not None:
-        pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = _scripted_pure_answer(
-            pure_answers
-        )
-    elif protocol == PROTOCOL_PURE:
+    if protocol == PROTOCOL_PURE:
         from demo.pure_confirmation import PureConfirmationAnswer
 
         if mode in (MODE_CONFIRM, MODE_MANUAL):
@@ -140,12 +90,8 @@ async def build_demo_runtime(
             run_spec = DemoRunCatalog.from_config(config).spec(
                 scenario, language=config.language
             )
-            offline_model = (
-                offline_model_factory(run_spec) if config.is_offline else None
-            )
             provider = AdkDecisionProvider(
-                model=build_traced_adk_model(config, model=offline_model),
-                offline=config.is_offline or offline_model is not None,
+                model=build_traced_adk_model(config),
                 user_request=run_spec.user_request,
                 session_db_path=config.client_db_path,
                 agent_factory=client_agent_factory,
@@ -189,11 +135,8 @@ async def build_demo_runtime(
         run_id=run_id,
         env_path=env_path,
         trace_sink=trace_sink,
-        offline_model_factory=offline_model_factory,
-        install_offline_provider=install_offline_provider,
         client_agent_factory=client_agent_factory,
         pure_answer=pure_answer,
-        scripted_decisions=scripted_decisions,
         intent_processor_factory=intent_processor_factory,
         prepared_task_t=prepared_task_t,
         prepared_filled=prepared_filled,

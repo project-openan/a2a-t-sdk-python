@@ -688,25 +688,13 @@ def _append_note(note: str, extra: str) -> str:
     return f"{note}; {extra}" if note else extra
 
 
-def build_client(
-    env_path: Path | None = None,
-    *,
-    model_mode: str | None = None,
-) -> EvalPromptClient:
-    """Build the real SDK client from the sample configuration.
-
-    Offline mode registers the demo's deterministic SDK provider, because the SDK facade resolves
-    ``scripted_traced`` only after that registration (the same step the demo runtime performs).
-    """
-    client, _ = build_client_with_env(env_path, model_mode=model_mode)
+def build_client(env_path: Path | None = None) -> EvalPromptClient:
+    """Build the real SDK client from the sample configuration."""
+    client, _ = build_client_with_env(env_path)
     return client
 
 
-def build_client_with_env(
-    env_path: Path | None = None,
-    *,
-    model_mode: str | None = None,
-) -> tuple[EvalPromptClient, Path]:
+def build_client_with_env(env_path: Path | None = None) -> tuple[EvalPromptClient, Path]:
     """Build the client and return the temporary SDK env directory it was built from.
 
     Callers that pool clients own those directories and must remove them; :func:`build_client`
@@ -717,14 +705,6 @@ def build_client_with_env(
     from shared.config import load_config
 
     config = load_config(env_path=env_path)
-    if model_mode is not None and model_mode != config.model_mode:
-        from dataclasses import replace
-
-        config = replace(config, model_mode=model_mode)
-    if config.is_offline:
-        from demo.composition import install_offline_provider
-
-        install_offline_provider()
     sdk_env = prepare_client_sdk_env(config, env_path)
     return A2ATClient(env_path=sdk_env.path, logger=None), sdk_env.directory
 

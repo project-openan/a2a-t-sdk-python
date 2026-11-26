@@ -108,30 +108,6 @@ def test_tokens_are_normalized_across_producer_shapes() -> None:
     assert by_side["server"]["total"] == 120
 
 
-def test_scripted_runs_report_tokens_as_unavailable() -> None:
-    metrics = build_run_metrics(
-        run_id="run-1",
-        conversation_id=None,
-        protocol=PROTOCOL_PURE,
-        scenario="information",
-        mode="auto",
-        transport="sse",
-        language=LANGUAGE_ZH,
-        model_mode="offline",
-        model_label="offline",
-        status="finished",
-        transcript=_transcript(),
-        result=ClientFlowResult(final_state=FINAL_STATE_TASK_COMPLETED),
-        spans=[_span(tokens={"scripted": True, "prompt": None, "completion": None})],
-        expected=None,
-    )
-    tokens = metrics["tokens"]
-    assert isinstance(tokens, dict)
-    assert tokens["available"] is False
-    assert tokens["scripted"] is True
-    assert tokens["total"] is None
-
-
 def test_missing_usage_contributes_an_estimated_prompt_size() -> None:
     """A timed-out call reports no usage; its request size must still be visible."""
     spans = [

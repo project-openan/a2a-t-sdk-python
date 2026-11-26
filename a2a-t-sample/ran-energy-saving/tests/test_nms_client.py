@@ -97,7 +97,7 @@ def test_config_requires_all_four_values() -> None:
     from shared.config import SampleConfig
 
     config = SampleConfig(
-        model_mode="offline",
+        model_mode="live",
         language="en-US",
         host="127.0.0.1",
         port=8000,
@@ -1928,7 +1928,7 @@ def test_a_timeout_error_is_self_describing() -> None:
 def test_the_send_timeout_is_mapped_from_the_sample_config() -> None:
     """``message:send`` gets its own budget; GET/poll keeps the shorter request timeout."""
     config = SampleConfig(
-        model_mode="offline",
+        model_mode="live",
         language="en-US",
         host="127.0.0.1",
         port=8000,

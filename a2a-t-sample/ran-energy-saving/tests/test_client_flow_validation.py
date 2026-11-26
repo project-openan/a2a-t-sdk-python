@@ -21,9 +21,10 @@ from protocol.client_flow import (
     run_client_flow,
     scripted_correction,
 )
-from protocol.decision_provider import ScriptedDecisionProvider
 from shared.run_constants import FINAL_STATE_INPUT_INVALID, FINAL_STATE_TASK_COMPLETED
 from shared.trace import PHASE_TASK_PROMPT
+
+from tests.support.decision_provider import ScriptedDecisionProvider
 
 _CONTEXT_ID = "ctx-validation"
 

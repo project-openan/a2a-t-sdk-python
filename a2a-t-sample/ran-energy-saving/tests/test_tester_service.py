@@ -50,7 +50,7 @@ from eval.osp.followup import followup_input, is_blocked_case
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
-from protocol.client_runtime import MODE_AUTO, MODE_SCRIPTED
+from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import RunState
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import (
@@ -61,6 +61,8 @@ from shared.run_constants import (
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
+
+MODE_SCRIPTED = "scripted"
 
 CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
 
@@ -843,19 +845,6 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
     assert manager._resolved_timeout(batch, case) == 7
 
 
-async def test_live_decision_mode_is_rejected_offline(tmp_path: Path) -> None:
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="offline")
-
-    with pytest.raises(ValueError, match="在线模型"):
-        manager.create(
-            case_ids=[1],
-            protocols=[PROTOCOL_A2A_T],
-            stop_after="final",
-            timeout_seconds=2,
-            decision_mode=DECISION_MODE_LIVE,
-        )
-
-
 async def test_live_decision_mode_uses_auto_for_a2a_t(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
     created = manager.create(
@@ -873,36 +862,6 @@ async def test_live_decision_mode_uses_auto_for_a2a_t(tmp_path: Path) -> None:
     assert isinstance(runs, _FakeRuns)
     assert runs.calls[0]["mode"] == MODE_AUTO
     assert manager.get(str(created["batchId"]))["decisionMode"] == DECISION_MODE_LIVE
-
-
-def test_an_offline_batch_rejects_the_agent_negotiation_source(tmp_path: Path) -> None:
-    """An offline process has no model, so it cannot author a live negotiation reply."""
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="offline")
-
-    with pytest.raises(ValueError):
-        manager.create(
-            case_ids=[1],
-            protocols=[PROTOCOL_A2A_T],
-            stop_after="validate",
-            negotiation_source="agent",
-        )
-
-
-def test_the_default_negotiation_source_follows_the_model_mode(tmp_path: Path) -> None:
-    """Offline defaults to the recorded script; an online model defaults to the client agent."""
-    offline = _manager(tmp_path / "offline", _FakeRuns(_finish), model_mode="offline").create(
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="validate",
-    )
-    live = _manager(tmp_path / "live", _FakeRuns(_finish), model_mode="live").create(
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="validate",
-    )
-
-    assert offline["negotiationSource"] == "script"
-    assert live["negotiationSource"] == "agent"
 
 
 def test_an_unknown_negotiation_source_is_rejected(tmp_path: Path) -> None:
@@ -933,26 +892,6 @@ async def test_an_agent_negotiation_case_runs_in_auto_mode(tmp_path: Path) -> No
     runs = manager._runs
     assert isinstance(runs, _FakeRuns)
     assert runs.calls[0]["mode"] == MODE_AUTO
-    assert runs.calls[0]["scripted_decisions"] is None
-
-
-async def test_a_script_negotiation_case_runs_scripted_with_its_decisions(tmp_path: Path) -> None:
-    """The script source keeps replaying the case Q column."""
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
-    created = manager.create(
-        case_ids=[51],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="final",
-        negotiation_source="script",
-    )
-
-    await manager.start(str(created["batchId"]))
-    await _wait_status(manager, str(created["batchId"]), "finished")
-
-    runs = manager._runs
-    assert isinstance(runs, _FakeRuns)
-    assert runs.calls[0]["mode"] == MODE_SCRIPTED
-    assert runs.calls[0]["scripted_decisions"]
 
 
 async def test_a_non_negotiation_agent_case_keeps_its_normal_mode(tmp_path: Path) -> None:
@@ -971,7 +910,6 @@ async def test_a_non_negotiation_agent_case_keeps_its_normal_mode(tmp_path: Path
     runs = manager._runs
     assert isinstance(runs, _FakeRuns)
     assert runs.calls[0]["mode"] == MODE_AUTO
-    assert runs.calls[0]["scripted_decisions"] is None
 
 
 async def test_an_agent_pure_case_does_not_replay_the_p_column(tmp_path: Path) -> None:
@@ -997,24 +935,6 @@ async def test_an_agent_pure_case_does_not_replay_the_p_column(tmp_path: Path) -
     item = manager._batches[str(created["batchId"])].items[0]
     # The P column is not lost: it stays in the export as the recorded client reply.
     assert item.refs["clientReplies"] == ["The region is A2ATestRegion."]
-
-
-async def test_a_script_pure_case_still_replays_the_p_column(tmp_path: Path) -> None:
-    """The script source keeps the deterministic P-column replay unchanged."""
-    manager = _manager(tmp_path, _FakeRuns(_accepted_negotiation), model_mode="live")
-    created = manager.create(
-        case_ids=[51],
-        protocols=[PROTOCOL_A2A],
-        stop_after="final",
-        negotiation_source="script",
-    )
-
-    await manager.start(str(created["batchId"]))
-    await _wait_status(manager, str(created["batchId"]), "finished")
-
-    runs = manager._runs
-    assert isinstance(runs, _FakeRuns)
-    assert runs.calls[0]["pure_answers"] == ["The region is A2ATestRegion."]
 
 
 async def test_a_pure_item_reads_its_own_expectation_block(tmp_path: Path) -> None:
@@ -1204,40 +1124,6 @@ def test_a_batch_round_trips_the_negotiation_source(tmp_path: Path) -> None:
     assert reloaded["negotiationSource"] == "agent"
 
 
-@pytest.mark.parametrize(
-    "schema",
-    ["osp-tester/v1", "osp-tester/v2", "osp-tester/v3", "osp-tester/v4"],
-)
-def test_an_old_batch_loads_with_the_script_negotiation_source(
-    tmp_path: Path, schema: str
-) -> None:
-    """A batch persisted before the source switch replayed the case script."""
-    manager = _manager(tmp_path, _FakeRuns(_finish))
-    history = tmp_path / "tester"
-    history.mkdir(parents=True)
-    document = {
-        "schema": schema,
-        "batchId": "old-batch",
-        "caseIds": [1],
-        "protocols": [PROTOCOL_A2A_T],
-        "stopAfter": "validate",
-        "items": [
-            {
-                "caseId": 1,
-                "name": "old",
-                "protocol": PROTOCOL_A2A_T,
-                "status": "passed",
-            }
-        ],
-    }
-    (history / "old-batch.json").write_text(json.dumps(document), encoding="utf-8")
-
-    snapshot = manager.get("old-batch")
-
-    assert snapshot is not None
-    assert snapshot["negotiationSource"] == "script"
-
-
 def test_a_persisted_batch_without_a_stage_loads_as_accepted(tmp_path: Path) -> None:
     """A document written before the default changed must not wait for a final state either."""
     manager = _manager(tmp_path, _FakeRuns(_finish))
@@ -1297,40 +1183,6 @@ def test_create_freezes_the_shared_principles(tmp_path: Path) -> None:
     assert reloaded is not None
     assert reloaded["principlesVersion"] == created["principlesVersion"]
     assert reloaded["principlesText"] == created["principlesText"]
-
-
-def test_a_loaded_agent_batch_falls_back_to_script_on_a_scripted_decision_mode(
-    tmp_path: Path,
-) -> None:
-    """A batch persisted for another process must not inject agent replies here."""
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
-    history = tmp_path / "tester"
-    history.mkdir(parents=True)
-    document = {
-        "schema": "osp-tester/v5",
-        "batchId": "scripted-batch",
-        "caseIds": [1],
-        "protocols": [PROTOCOL_A2A_T],
-        "stopAfter": "validate",
-        "decisionMode": "scripted",
-        "negotiationSource": "agent",
-        "principlesVersion": "2026-11-23.1",
-        "principlesText": "frozen principles",
-        "items": [
-            {
-                "caseId": 1,
-                "name": "old",
-                "protocol": PROTOCOL_A2A_T,
-                "status": "passed",
-            }
-        ],
-    }
-    (history / "scripted-batch.json").write_text(json.dumps(document), encoding="utf-8")
-
-    snapshot = manager.get("scripted-batch")
-
-    assert snapshot is not None
-    assert snapshot["negotiationSource"] == "script"
 
 
 async def test_cancel_marks_the_item_cancelled_not_passed(tmp_path: Path) -> None:
@@ -1613,33 +1465,6 @@ async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
     await _wait_status(manager, str(created["batchId"]), "finished")
 
     assert runs.calls[0]["mode"] == MODE_AUTO
-    assert runs.calls[0]["scripted_decisions"] == ()
-
-
-async def test_a_negotiation_case_without_a_parsed_reply_never_starts_a_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A missing scripted reply is reported as case data before any Task is created."""
-    from demo.web.tester import service as tester_service
-
-    runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
-    manager = _manager(tmp_path, runs)
-    monkeypatch.setattr(tester_service, "a2at_decisions", lambda case: [])
-    created = manager.create(
-        case_ids=[32],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="negotiate",
-        timeout_seconds=2,
-        decision_mode="scripted",
-    )
-
-    await manager.start(str(created["batchId"]))
-    snapshot = await _wait_status(manager, str(created["batchId"]), "finished")
-
-    item = snapshot["items"][0]
-    assert isinstance(item, Mapping)
-    assert item["status"] == CASE_ERROR
-    assert runs.calls == []
 
 
 async def test_a_negotiating_baseline_is_recorded_as_failed_with_its_run(tmp_path: Path) -> None:
@@ -2591,19 +2416,6 @@ def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -
     )
 
     assert created["decisionMode"] == "live"
-
-
-def test_the_default_decision_mode_stays_scripted_offline(tmp_path: Path) -> None:
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="offline")
-
-    created = manager.create(
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="validate",
-        timeout_seconds=None,
-    )
-
-    assert created["decisionMode"] == "scripted"
 
 
 async def test_a_rerun_clears_the_previous_arbitration_evidence(tmp_path: Path) -> None:
@@ -3615,7 +3427,7 @@ async def test_a_cancelled_sdk_checkout_does_not_reuse_its_client(
         server_auth_token=None,
         runs_dir=tmp_path,
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         prompt_client=None,
     )
     built: list[Path] = []
@@ -3654,7 +3466,7 @@ async def test_a_cancelled_sdk_checkout_does_not_reuse_its_client(
     with pytest.raises(asyncio.CancelledError):
         await task
     # The retired client is not idle in the pool, so the worker cannot be shared.
-    assert manager._prompt_pool["offline"].empty() is True
+    assert manager._prompt_pool["live"].empty() is True
 
     release.set()
     deadline = asyncio.get_running_loop().time() + 10.0
@@ -3664,7 +3476,7 @@ async def test_a_cancelled_sdk_checkout_does_not_reuse_its_client(
     await asyncio.wait_for(second, timeout=10.0)
 
     assert len(built) == 2
-    assert manager._prompt_pool["offline"].qsize() == 1
+    assert manager._prompt_pool["live"].qsize() == 1
 
 
 async def test_the_concurrent_sdk_stage_pools_clients_per_slot(
@@ -3679,7 +3491,7 @@ async def test_the_concurrent_sdk_stage_pools_clients_per_slot(
         server_auth_token=None,
         runs_dir=tmp_path,
         language="en-US",
-        model_mode="offline",
+        model_mode="live",
         prompt_client=None,
     )
     built: list[Path] = []

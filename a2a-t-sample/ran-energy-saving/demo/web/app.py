@@ -30,7 +30,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -389,8 +389,6 @@ def create_app(
         *,
         protocol: str = PROTOCOL_A2A_T,
         run_id: str = "",
-        scripted_decisions: Sequence[NegotiationDecision] | None = None,
-        pure_answers: Sequence[str] | None = None,
         prepared_task_t: str | None = None,
         prepared_filled: Mapping[str, object] | None = None,
         pure_reply_source: str = "",
@@ -407,8 +405,6 @@ def create_app(
             protocol=protocol,
             run_id=run_id,
             env_path=env_path,
-            scripted_decisions=scripted_decisions,
-            pure_answers=pure_answers,
             prepared_task_t=prepared_task_t,
             prepared_filled=prepared_filled,
             pure_reply_source=pure_reply_source,

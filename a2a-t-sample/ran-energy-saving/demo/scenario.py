@@ -26,7 +26,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from shared.models import NegotiationDecision
 from shared.run_constants import (
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_NEGOTIATION_ABORTED,  # noqa: F401 - re-exported for the scenario tests
@@ -216,8 +215,6 @@ class Scenario:
         user_request: The request shown and sent, per language.
         expected_sequence: Exact performative/round sequence from the design.
         expected_final_state: Terminal state the run must reach.
-        scripted_client_decisions: Decisions returned by the offline scripted decision provider,
-            in order. They are the deterministic test double of the ADK decision agent.
         description: One-line business description.
     """
 
@@ -226,7 +223,7 @@ class Scenario:
     user_request: Mapping[str, str]
     expected_sequence: tuple[ExpectedStep, ...]
     expected_final_state: FinalState
-    scripted_client_decisions: tuple[NegotiationDecision, ...]
+    expected_negotiation_target: str | None
     description: str
 
 
@@ -236,7 +233,7 @@ SCENARIO_NIGHT_SPEC = Scenario(
     user_request=EXAMPLE_REQUESTS[SCENARIO_NIGHT],
     expected_sequence=(),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(),
+    expected_negotiation_target=None,
     description=(
         "A complete night-time energy-saving request; the RAN Agent creates the task without a pre-task negotiation."
     ),
@@ -252,7 +249,7 @@ SCENARIO_INFORMATION_SPEC = Scenario(
     # can no longer serve as the missing field.
     expected_sequence=(),
     expected_final_state=FINAL_STATE_INPUT_INVALID,
-    scripted_client_decisions=(),
+    expected_negotiation_target=None,
     description=(
         "Task-T misses the area; the client blocks the request before sending it and asks the "
         "operator to edit it."
@@ -268,16 +265,7 @@ SCENARIO_UNKNOWN_AREA_SPEC = Scenario(
         ExpectedStep(actor="client", performative="ACCEPT", round=1),
     ),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="accept",
-            rationale=(
-                "The area is not served; the client confirms Region A and keeps the "
-                "requested guaranteed throughput windows."
-            ),
-            filled_params={"region": "Region A", "guaranteedThroughputTarget": UNKNOWN_AREA_TARGET},
-        ),
-    ),
+    expected_negotiation_target=UNKNOWN_AREA_TARGET,
     description=(
         "The request names an unknown area; the RAN Agent asks the client to confirm a served area before executing."
     ),
@@ -292,14 +280,7 @@ SCENARIO_TARGET_SPEC = Scenario(
         ExpectedStep(actor="client", performative="ACCEPT", round=1),
     ),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="accept",
-            rationale="The revised plan has non-overlapping segments and meets the throughput target.",
-            filled_params={"guaranteedThroughputTarget": TARGET_TARGET},
-            confirmed_intent=TARGET_ACCEPT_CONFIRMATION,
-        ),
-    ),
+    expected_negotiation_target=TARGET_TARGET,
     description=(
         "Overlapping throughput segments; the client corrects the target inside its Accept."
     ),
@@ -314,14 +295,7 @@ SCENARIO_FEASIBILITY_SPEC = Scenario(
         ExpectedStep(actor="client", performative="ACCEPT", round=1),
     ),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="accept",
-            rationale="The outage-aware alternative plan is feasible and keeps the SLA margin.",
-            filled_params={"guaranteedThroughputTarget": FEASIBILITY_TARGET, **FEASIBILITY_CONTEXT},
-            feasibility_summary=FEASIBILITY_ACCEPT_SUMMARY,
-        ),
-    ),
+    expected_negotiation_target=FEASIBILITY_TARGET,
     description="A guaranteed rate conflicts with a long power outage; the client accepts the alternative plan.",
 )
 
@@ -337,12 +311,7 @@ SCENARIO_REJECT_SPEC = Scenario(
         ExpectedStep(actor="server", performative="MESSAGE", round=None),
     ),
     expected_final_state=FINAL_STATE_NEGOTIATION_ENDED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="reject",
-            rationale="The client cannot confirm a served area for the requested region.",
-        ),
-    ),
+    expected_negotiation_target=None,
     description=("The client cannot confirm a served area; the negotiation ends without a task."),
 )
 
@@ -358,12 +327,7 @@ SCENARIO_ABORT_SPEC = Scenario(
         ExpectedStep(actor="server", performative="MESSAGE", round=None),
     ),
     expected_final_state=FINAL_STATE_NEGOTIATION_ENDED,
-    scripted_client_decisions=(
-        NegotiationDecision(
-            action="abort",
-            rationale="The client cannot choose a served area; the negotiation is aborted.",
-        ),
-    ),
+    expected_negotiation_target=None,
     description=(
         "The client ends the information negotiation with ABORT when it cannot provide a served area."
     ),
@@ -375,7 +339,7 @@ SCENARIO_OUTAGE_SPEC = Scenario(
     user_request=EXAMPLE_REQUESTS[SCENARIO_OUTAGE],
     expected_sequence=(),
     expected_final_state=FINAL_STATE_TASK_COMPLETED,
-    scripted_client_decisions=(),
+    expected_negotiation_target=None,
     description=(
         "A two-site baseline request in the planned-outage use case; the Modify phase is the "
         "separate selected-Task request."
@@ -434,18 +398,6 @@ def expected_negotiation_target(
     scenario: Scenario,
     language: str = LANGUAGE_ZH,
 ) -> str | None:
-    """Return the guaranteed-throughput target a completed scenario must agree on.
-
-    Only a negotiation scenario agrees on a target; a complete request already carries it in the
-    request text. Scenarios that do not complete (reject/abort) have no agreed target either.
-    """
+    """Return the guaranteed-throughput target a completed scenario must agree on."""
     del language
-    if scenario.expected_final_state != FINAL_STATE_TASK_COMPLETED or scenario.expected_kind == KIND_NONE:
-        return None
-    for decision in reversed(scenario.scripted_client_decisions):
-        if decision.action != "accept":
-            continue
-        value = (decision.filled_params or {}).get("guaranteedThroughputTarget")
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return scenario.expected_negotiation_target

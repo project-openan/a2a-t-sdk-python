@@ -13,8 +13,6 @@ import pytest
 from a2a_t.llm.errors import LLMRuntimeError
 from a2a_t.llm.models import LLMClientConfig, LLMResponse
 from a2a_t.llm.providers.openai import OpenAIClient
-from demo.scripted_llm import ScriptedLLMClient
-from demo.traced_scripted import TracedScriptedClient, register_traced_scripted_provider
 from shared.adk_tracing import serialize_llm_response
 from shared.trace import (
     PHASE_NEGOTIATION,
@@ -28,14 +26,19 @@ from shared.trace import (
     trace_stage,
 )
 from shared.traced_llm import (
-    SCRIPTED_TOKENS_LABEL,
     TRACED_OPENAI_PROVIDER,
-    TRACED_SCRIPTED_PROVIDER,
     TracedOpenAIClient,
     _token_map,
     is_traced_provider_registered,
     register_traced_providers,
     sdk_provider_name,
+)
+
+from tests.support.scripted_llm import ScriptedLLMClient
+from tests.support.traced_scripted import (
+    TRACED_SCRIPTED_PROVIDER,
+    TracedScriptedClient,
+    register_traced_scripted_provider,
 )
 
 #: Schema of the scripted semantic-validation call (routable without any scenario marker).
@@ -112,8 +115,7 @@ def test_register_traced_providers_is_idempotent_and_selects_by_mode() -> None:
 
     assert is_traced_provider_registered(TRACED_OPENAI_PROVIDER)
     assert is_traced_provider_registered(TRACED_SCRIPTED_PROVIDER)
-    assert sdk_provider_name(offline=True) == TRACED_SCRIPTED_PROVIDER
-    assert sdk_provider_name(offline=False) == TRACED_OPENAI_PROVIDER
+    assert sdk_provider_name() == TRACED_OPENAI_PROVIDER
 
 
 def test_traced_scripted_client_emits_request_response_and_scripted_tokens(
@@ -142,8 +144,6 @@ def test_traced_scripted_client_emits_request_response_and_scripted_tokens(
     assert isinstance(span["durationMs"], float)
     tokens = span["tokens"]
     assert isinstance(tokens, dict)
-    assert tokens["label"] == SCRIPTED_TOKENS_LABEL
-    assert tokens["prompt"] is None and tokens["completion"] is None and tokens["total"] is None
     detail = span["detail"]
     assert isinstance(detail, dict)
     assert detail["provider"] == TRACED_SCRIPTED_PROVIDER
@@ -440,20 +440,6 @@ def test_token_map_reads_the_deepseek_native_cache_field() -> None:
     )
 
     assert _token_map(response)["cached"] == 8
-
-
-def test_scripted_tokens_never_invent_a_cache_hit() -> None:
-    response = LLMResponse(
-        content="ok",
-        model=TRACED_SCRIPTED_PROVIDER,
-        usage=cast("dict[str, int]", {}),
-        metadata={},
-    )
-
-    tokens = _token_map(response)
-
-    assert tokens["cached"] is None
-    assert tokens["scripted"] is True
 
 
 def test_token_map_reads_the_sdk_normalized_cache_key() -> None:

@@ -217,17 +217,17 @@ def prepare_sdk_env_path(config: SampleConfig, env_path: Path | None = None) -> 
     temporary copy. In live mode the copy keeps the SDK endpoint values of the source file and
     normalizes empty or missing ``A2AT_LLM_*`` keys from :class:`SampleConfig`, so an empty
     ``A2AT_LLM_API_KEY`` becomes the local-proxy placeholder instead of failing the SDK's eager
-    configuration validation. In offline mode the copy pins the scripted provider keys.
+    configuration validation.
 
     Args:
         config: resolved sample configuration.
         env_path: optional source ``.env`` path.
 
     Raises:
-        FileNotFoundError: in live mode when the resolved file does not exist.
+        FileNotFoundError: when the resolved file does not exist.
     """
     base_path = env_path or Path.cwd() / ".env"
-    if not config.is_offline and not base_path.exists():
+    if not base_path.exists():
         raise FileNotFoundError(f"Live mode requires an SDK .env file at {base_path}")
     return prepare_sdk_env(config, base_path, prefix=SERVER_ENV_PREFIX).path
 
@@ -323,7 +323,6 @@ def build_server_runtime(
     config: SampleConfig | None = None,
     env_path: Path | None = None,
     logger: logging.Logger | None = None,
-    install_offline_provider: Callable[[], None] | None = None,
     protocol_mode: str = PROTOCOL_A2A_T,
     pure_policy: PureTargetPolicy | None = None,
 ) -> ServerRuntime:
@@ -338,8 +337,6 @@ def build_server_runtime(
         config: resolved sample configuration; defaults to :func:`shared.config.load_config`.
         env_path: optional ``.env`` source path.
         logger: optional logger shared by the gate and the runtime.
-        install_offline_provider: installer of the deterministic SDK LLM routing; required in
-            offline mode.
         protocol_mode: ``a2a-t`` keeps the existing pre-task gate with the plain fallback;
             ``pure`` installs only the extension-free INPUT_REQUIRED handler; ``both`` serves
             both forms in one agent, deciding per request from the Task-T extension.
@@ -367,10 +364,6 @@ def build_server_runtime(
         token_env_key=SERVER_AUTH_TOKEN_ENV_KEY,
     )
     register_traced_providers()
-    if resolved_config.is_offline:
-        if install_offline_provider is None:
-            raise ValueError("Offline mode needs install_offline_provider; the demo entry point supplies it.")
-        install_offline_provider()
     trace_emitter = build_trace_emitter(resolved_config)
     if trace_emitter is not None:
         set_global_sink(trace_emitter)
@@ -451,7 +444,6 @@ def build_server_app(
     config: SampleConfig | None = None,
     env_path: Path | None = None,
     logger: logging.Logger | None = None,
-    install_offline_provider: Callable[[], None] | None = None,
     protocol_mode: str = PROTOCOL_A2A_T,
     pure_policy: PureTargetPolicy | None = None,
 ) -> Starlette:
@@ -463,7 +455,6 @@ def build_server_app(
         config=config,
         env_path=env_path,
         logger=logger,
-        install_offline_provider=install_offline_provider,
         protocol_mode=protocol_mode,
         pure_policy=pure_policy,
     ).app
@@ -478,7 +469,6 @@ def main() -> None:
     from demo.composition import (
         build_demo_negotiation_policy,
         build_demo_task_t_precheck,
-        install_offline_provider,
     )
     from demo.pure_policy import build_demo_pure_policy
 
@@ -498,7 +488,6 @@ def main() -> None:
         precheck=build_demo_task_t_precheck(),
         config=resolved_config,
         env_path=resolved_env_path,
-        install_offline_provider=install_offline_provider,
         protocol_mode=protocol_mode,
         pure_policy=pure_policy,
     )

@@ -22,7 +22,7 @@ import contextvars
 import inspect
 import logging
 import shutil
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import Token
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,7 +91,6 @@ from protocol.decision_provider import (
     ConfirmingDecisionProvider,
     ManualDecisionProvider,
     NegotiationDecisionProvider,
-    ScriptedDecisionProvider,
 )
 from protocol.discovery import DiscoveredAgent, discover_agent
 from protocol.intent import (
@@ -117,9 +116,8 @@ _LOGGER = logging.getLogger("ran_energy_saving.client_runtime")
 #: Client decision modes.
 MODE_AUTO: Final[str] = "auto"
 MODE_MANUAL: Final[str] = "manual"
-MODE_SCRIPTED: Final[str] = "scripted"
 MODE_CONFIRM: Final[str] = "confirm"
-SUPPORTED_MODES: Final[tuple[str, ...]] = (MODE_AUTO, MODE_MANUAL, MODE_SCRIPTED, MODE_CONFIRM)
+SUPPORTED_MODES: Final[tuple[str, ...]] = (MODE_AUTO, MODE_MANUAL, MODE_CONFIRM)
 
 #: Discovery key of the direct server base URL.
 DIRECT_SERVER_URL_ENV_KEY: Final[str] = "A2AT_SAMPLE_DIRECT_SERVER_URL"
@@ -307,14 +305,8 @@ def _decision_provider(
     *,
     model: Any | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
-    scripted_decisions: Sequence[NegotiationDecision] | None = None,
 ) -> NegotiationDecisionProvider:
     """Build the decision provider of one client mode.
-
-    The offline model is supplied by the composition root; a scripted provider replays the run
-    spec's decisions, or the per-run override when one is supplied. In offline ``auto`` mode the
-    model serves the same scripted decisions, so the ADK runner stays in the loop and still
-    produces counter/reject/abort decisions.
 
     Raises:
         ClientRuntimeError: when the mode is not supported.
@@ -329,12 +321,6 @@ def _decision_provider(
             keep_waiting=True,
             timeout_seconds=config.manual_decision_timeout_seconds,
         )
-    if mode == MODE_SCRIPTED:
-        decisions = scripted_decisions if scripted_decisions is not None else run_spec.scripted_decisions
-        # A per-run script (tester case column) may run out before the vendor stops asking; that
-        # is a case-data gap and must end the run with a visible reason, not a failed run. The
-        # scenario's own catalogue script keeps failing loudly on drift.
-        return ScriptedDecisionProvider(decisions, graceful_exhaustion=scripted_decisions is not None)
     if mode == MODE_AUTO:
         return _build_adk_decision_provider(
             config,
@@ -358,11 +344,6 @@ def _build_adk_decision_provider(
     # conflict but not the concrete throughput target, so the model cannot resolve them alone.
     return AdkDecisionProvider(
         model=build_traced_adk_model(config, model=model),
-        # Only the offline demo supplies a scripted decision model. When an unexpected proposal
-        # has no scripted answer, the offline fallback keeps the demo alive. A live run keeps
-        # ``offline=False``: an unparseable live decision fails the run instead of inventing an
-        # accept the model never made.
-        offline=config.is_offline or model is not None,
         user_request=run_spec.user_request,
         session_db_path=config.client_db_path,
         agent_factory=client_agent_factory,
@@ -448,7 +429,7 @@ class ClientRuntime:
     Attributes:
         config: resolved sample configuration.
         run_spec: the named run being executed (catalog entry).
-        mode: decision mode (``auto`` / ``manual`` / ``scripted``).
+        mode: decision mode (``auto`` / ``manual`` / ``confirm``).
         protocol: interaction protocol (``a2a-t`` / ``plain`` / ``pure``).
         transport_name: event transport (``sse`` / ``webhook``).
         prompt_client: A2A-T SDK prompt facade; ``None`` in pure mode.
@@ -895,9 +876,7 @@ class ClientRuntime:
                         self.config.discovery == DISCOVERY_NMS
                         and self.config.nms_infer_negotiation_kind
                     ),
-                    # A scripted provider replays case/scenario data: that text is the reply, so
-                    # the accept must carry it verbatim instead of the flow's own wording.
-                    verbatim_decision_text=isinstance(provider, ScriptedDecisionProvider),
+                    verbatim_decision_text=False,
                     # The tester (live mode included) replays its case reply: the accept carries
                     # that reply only, with nothing derived or refilled.
                     reply_only_accept=reply_only_accept,
@@ -969,11 +948,8 @@ async def build_client_runtime(
     run_id: str = "",
     env_path: Path | None = None,
     trace_sink: Callable[[dict[str, object]], None] | None = None,
-    offline_model_factory: Callable[[RunSpec], Any] | None = None,
-    install_offline_provider: Callable[[], None] | None = None,
     client_agent_factory: Callable[[Any], Any] | None = None,
     pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None,
-    scripted_decisions: Sequence[NegotiationDecision] | None = None,
     intent_processor_factory: Callable[[SampleConfig], IntentProcessor] | None = None,
     prepared_task_t: str | None = None,
     prepared_filled: Mapping[str, object] | None = None,
@@ -983,7 +959,7 @@ async def build_client_runtime(
     Args:
         config: resolved sample configuration (language and model mode are process-level).
         scenario: run name resolved through ``catalog``.
-        mode: decision mode (``auto`` / ``manual`` / ``scripted``).
+        mode: decision mode (``auto`` / ``manual`` / ``confirm``).
         transport: event transport (``sse`` / ``webhook``).
         protocol: interaction protocol (``a2a-t`` / ``plain`` / ``pure``).
         catalog: run catalog supplied by the composition root.
@@ -991,13 +967,9 @@ async def build_client_runtime(
         env_path: source ``.env`` used for discovery and for the per-run SDK ``.env``.
         trace_sink: optional Run Explorer sink attached **before** the SDK and ADK clients are
             built, so their LLM/tool producers are traced from the first call.
-        offline_model_factory: builder of the deterministic ADK model; required in offline mode.
-        install_offline_provider: optional installer of the deterministic SDK LLM routing.
         client_agent_factory: optional builder of the ADK decision agent from its model.
         pure_answer: callback answering one pure ``INPUT_REQUIRED`` event. Pure mode skips the
             A2A-T SDK facade and the negotiation decision provider entirely.
-        scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``; ``None``
-            replays the scenario's catalog script.
         intent_processor_factory: optional builder of the business intent layer; when omitted,
             processed mode falls back to the raw text.
 
@@ -1005,8 +977,8 @@ async def build_client_runtime(
         The assembled runtime; the caller owns it and must call :meth:`ClientRuntime.aclose`.
 
     Raises:
-        ClientRuntimeError: on an unsupported mode/transport, a missing offline factory, or when
-            the runtime cannot assemble.
+        ClientRuntimeError: on an unsupported mode/transport, or when the runtime cannot
+            assemble.
         KeyError: when the run name is unknown to the catalog.
         DiscoveryError: when no usable server endpoint is found.
     """
@@ -1020,14 +992,6 @@ async def build_client_runtime(
     run_spec = catalog.spec(scenario, language=config.language)
     intent_processor = intent_processor_factory(config) if intent_processor_factory is not None else None
     register_traced_providers()
-    if config.is_offline:
-        if offline_model_factory is None:
-            raise ClientRuntimeError(
-                "Offline mode needs a deterministic model factory; configure live mode or pass "
-                "offline_model_factory from the composition root."
-            )
-        if install_offline_provider is not None:
-            install_offline_provider()
     # Task-local: a concurrent run built on the same loop gets its own sink, and `aclose` clears
     # only this runtime's override.
     sink_token = set_task_sink(trace_sink) if trace_sink is not None else None
@@ -1144,7 +1108,7 @@ async def build_client_runtime(
         manual_structurer: Any | None = None
         if protocol == PROTOCOL_PURE:
             provider: NegotiationDecisionProvider | None = None
-            if mode in (MODE_CONFIRM, MODE_MANUAL) and not config.is_offline:
+            if mode in (MODE_CONFIRM, MODE_MANUAL):
                 # The pure form has no decision provider; the confirmation answer still offers the
                 # free-text box, so build the same structurer the A2A-T manual mode uses.
                 try:
@@ -1157,36 +1121,26 @@ async def build_client_runtime(
                 except Exception as exc:  # noqa: BLE001 - optional preview capability
                     _LOGGER.warning("manual answer parsing unavailable: %s", exc)
         else:
-            # Only offline mode runs the deterministic decision model. Passing it in live mode
-            # made every negotiation decision (and every manual-answer parse) run the fake model,
-            # which has no script for an unexpected proposal and fell back to a canned accept.
-            offline_model = (
-                offline_model_factory(run_spec)
-                if config.is_offline and offline_model_factory is not None
-                else None
-            )
             provider = _decision_provider(
                 config,
                 run_spec,
                 mode,
-                model=offline_model,
                 client_agent_factory=client_agent_factory,
-                scripted_decisions=scripted_decisions,
             )
             if isinstance(provider, ConfirmingDecisionProvider):
                 # The confirmation mode already builds an ADK provider for its recommendation;
                 # reuse it for the manual-answer preview.
                 manual_structurer = provider.structurer
-            elif isinstance(provider, ManualDecisionProvider) and not config.is_offline:
+            elif isinstance(provider, ManualDecisionProvider):
                 # Manual mode has no automatic decision agent; build one only to structure the
-                # engineer's free-text answer. Offline mode requires a live model for this step.
-                # A model misconfiguration must not stop the run: the quick decision buttons still
-                # work, and the parse endpoint reports that structuring is unavailable.
+                # engineer's free-text answer. A model misconfiguration must not stop the run: the
+                # quick decision buttons still work, and the parse endpoint reports that
+                # structuring is unavailable.
                 try:
                     manual_structurer = _build_adk_decision_provider(
                         config,
                         run_spec,
-                        model=offline_model,
+                        model=None,
                         client_agent_factory=client_agent_factory,
                     )
                 except Exception as exc:  # noqa: BLE001 - optional preview capability

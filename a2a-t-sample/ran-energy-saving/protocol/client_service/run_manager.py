@@ -889,8 +889,6 @@ class RunManager:
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
-        scripted_decisions: Sequence[NegotiationDecision] | None = None,
-        pure_answers: Sequence[str] | None = None,
         validate_before_send: bool | None = None,
         language: str | None = None,
         prepared_task_t: str | None = None,
@@ -930,10 +928,6 @@ class RunManager:
             target_server_task_id: A2A peer's Task a pure Modify continues; the pair above is the
                 vendor-facing picker identity and this is what the A2A message carries.
             target_server_context_id: context paired with ``target_server_task_id``.
-            scripted_decisions: per-run A2A-T decision script used by ``MODE_SCRIPTED``; ``None``
-                keeps the scenario's catalog script.
-            pure_answers: per-run answers for the pure A2A ``INPUT_REQUIRED`` rounds, consumed in
-                order; ``None`` keeps the process-level pure policy.
             validate_before_send: force the pre-send Task-T validation on or off; ``None`` uses the
                 process setting and the source kind.
             language: per-run scenario language; ``None``/empty keeps the process language.
@@ -1092,8 +1086,6 @@ class RunManager:
             target_context_id=resolved_target_context or None,
             target_server_task_id=resolved_server_task or None,
             target_server_context_id=resolved_server_context or None,
-            scripted_decisions=tuple(scripted_decisions or ()),
-            pure_answers=tuple(pure_answers or ()),
             prepared_task_t=prepared_task_t,
             prepared_filled=dict(prepared_filled) if prepared_filled else None,
             correction_request=correction.strip() if isinstance(correction, str) and correction.strip() else None,
@@ -1708,10 +1700,6 @@ class RunManager:
 
         try:
             runtime_kwargs: dict[str, object] = {}
-            if run.scripted_decisions:
-                runtime_kwargs["scripted_decisions"] = run.scripted_decisions
-            if run.pure_answers:
-                runtime_kwargs["pure_answers"] = run.pure_answers
             if run.prepared_task_t:
                 runtime_kwargs["prepared_task_t"] = run.prepared_task_t
                 runtime_kwargs["prepared_filled"] = run.prepared_filled

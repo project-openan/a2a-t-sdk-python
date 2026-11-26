@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -11,23 +10,13 @@ from pathlib import Path
 
 import pytest
 from a2a.client import ClientConfig
-from demo.adk_fake_model import CLIENT_AGENT_NAME, FakeLlm
 from demo.composition import build_demo_runtime
-from demo.scenario import SCENARIO_ABORT, SCENARIO_TARGET, get_scenario
 from dotenv import dotenv_values
-from google.adk.agents.llm_agent import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
 from protocol.client_runtime import (
     prepare_client_sdk_env,
 )
-from protocol.decision_provider import (
-    AdkDecisionProvider,
-    ManualDecisionProvider,
-    ScriptedDecisionProvider,
-)
 from protocol.discovery import DiscoveredAgent
-from protocol.server_app import AGENT_CARD_NAME, AGENT_CARD_ORGANIZATION, build_agent_card
-from shared.adk_tracing import TracingLlm
+from protocol.server_app import build_agent_card
 from shared.config import DISCOVERY_NMS, MODEL_MODE_LIVE, SampleConfig
 
 
@@ -46,186 +35,6 @@ def _card() -> DiscoveredAgent:
         agent_card=build_agent_card(host="127.0.0.1", port=8000),
         url="http://127.0.0.1:8000",
     )
-
-
-async def test_manual_runtime_wires_scripted_env_and_streaming(
-    offline_config: SampleConfig,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    import protocol.client_runtime as client_runtime
-
-    captured: dict[str, object] = {}
-    fake_client = _FakeA2AClient()
-
-    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
-        captured["discover"] = kwargs
-        return _card()
-
-    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
-        captured["agent"] = agent
-        captured["client_config"] = client_config
-        return fake_client
-
-    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
-    monkeypatch.setattr(client_runtime, "create_client", fake_create)
-    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
-
-    runtime = await build_demo_runtime(
-        offline_config,
-        "information",
-        "manual",
-        "sse",
-        offline_config.discovery,
-        env_path=tmp_path / "missing.env",
-    )
-
-    assert isinstance(runtime.provider, ManualDecisionProvider)
-    assert runtime.manual_provider is runtime.provider
-    assert runtime.transport_name == "sse"
-    values = dotenv_values(runtime.sdk_env.path)
-    assert values["A2AT_LLM_PROVIDER"] == "scripted_traced"
-    assert values["A2AT_LLM_MODEL"] == "scripted"
-    assert values["A2AT_LLM_API_KEY"] == "not-needed"
-    assert values["A2AT_LANGUAGE"] == "en-US"
-    client_config = captured["client_config"]
-    assert isinstance(client_config, ClientConfig)
-    assert client_config.streaming is True
-    discovery = captured["discover"]
-    assert isinstance(discovery, dict)
-    assert discovery["organization"] == AGENT_CARD_ORGANIZATION
-    assert discovery["name"] == AGENT_CARD_NAME
-    assert discovery["direct_base_url"] == "http://127.0.0.1:8000"
-
-    sdk_dir = runtime.sdk_env.directory
-    await runtime.aclose()
-
-    assert fake_client.closed is True
-    assert not sdk_dir.exists()
-
-
-async def test_scripted_mode_uses_the_scenario_decisions(
-    offline_config: SampleConfig,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    import protocol.client_runtime as client_runtime
-
-    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
-        del kwargs
-        return _card()
-
-    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
-        del agent, client_config
-        return _FakeA2AClient()
-
-    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
-    monkeypatch.setattr(client_runtime, "create_client", fake_create)
-    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
-
-    runtime = await build_demo_runtime(
-        offline_config,
-        SCENARIO_TARGET,
-        "scripted",
-        "sse",
-        offline_config.discovery,
-        env_path=tmp_path / "missing.env",
-    )
-
-    assert isinstance(runtime.provider, ScriptedDecisionProvider)
-    assert runtime.provider.remaining == 1
-    await runtime.aclose()
-
-
-async def test_auto_live_mode_uses_the_live_decision_model(
-    offline_config: SampleConfig,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Live mode must run the client ADK agent on the configured endpoint, not the fake model."""
-    import protocol.client_runtime as client_runtime
-
-    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
-        del kwargs
-        return _card()
-
-    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
-        del agent, client_config
-        return _FakeA2AClient()
-
-    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
-    monkeypatch.setattr(client_runtime, "create_client", fake_create)
-    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
-    live_config = replace(offline_config, model_mode=MODEL_MODE_LIVE)
-
-    runtime = await build_demo_runtime(
-        live_config,
-        "night",
-        "auto",
-        "sse",
-        live_config.discovery,
-        env_path=tmp_path / "missing.env",
-    )
-    try:
-        assert isinstance(runtime.provider, AdkDecisionProvider)
-        assert runtime.provider.is_offline is False
-        model = runtime.provider.runner.agent.model
-        assert isinstance(model, TracingLlm)
-        assert isinstance(model.inner, LiteLlm)
-    finally:
-        await runtime.aclose()
-
-
-@pytest.mark.parametrize(
-    ("scenario_name", "expected_actions"),
-    [
-        (SCENARIO_TARGET, ["accept"]),
-        (SCENARIO_ABORT, ["abort"]),
-    ],
-)
-async def test_auto_offline_mode_scripts_the_scenario_decisions(
-    offline_config: SampleConfig,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    scenario_name: str,
-    expected_actions: list[str],
-) -> None:
-    import protocol.client_runtime as client_runtime
-
-    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
-        del kwargs
-        return _card()
-
-    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
-        del agent, client_config
-        return _FakeA2AClient()
-
-    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
-    monkeypatch.setattr(client_runtime, "create_client", fake_create)
-    monkeypatch.setenv("A2AT_LANGUAGE", offline_config.language)
-
-    runtime = await build_demo_runtime(
-        offline_config,
-        scenario_name,
-        "auto",
-        "sse",
-        offline_config.discovery,
-        env_path=tmp_path / "missing.env",
-    )
-    try:
-        assert isinstance(runtime.provider, AdkDecisionProvider)
-        agent = runtime.provider.runner.agent
-        assert isinstance(agent, LlmAgent)
-        model = agent.model
-        assert isinstance(model, TracingLlm)
-        inner = model.inner
-        assert isinstance(inner, FakeLlm)
-        client_script = next(script for script in inner.scripts if script.marker == CLIENT_AGENT_NAME)
-        actions = [json.loads(turn.text or "")["action"] for turn in client_script.turns]
-        assert actions == expected_actions
-        assert len(actions) == len(get_scenario(scenario_name).scripted_client_decisions)
-    finally:
-        await runtime.aclose()
 
 
 async def test_runtime_attaches_the_trace_sink_before_building_and_clears_it_on_close(
@@ -272,6 +81,7 @@ async def test_runtime_attaches_the_trace_sink_before_building_and_clears_it_on_
 def test_prepare_client_sdk_env_does_not_mutate_the_source(
     offline_config: SampleConfig,
     tmp_path: Path,
+    live_sdk_provider: None,
 ) -> None:
     source = tmp_path / ".env"
     original = (

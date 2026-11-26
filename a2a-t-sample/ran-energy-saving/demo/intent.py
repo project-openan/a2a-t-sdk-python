@@ -29,7 +29,6 @@ from shared.json_text import iter_json_objects
 from shared.model_factory import build_traced_adk_model
 from shared.run_constants import LANGUAGE_EN, LANGUAGE_ZH
 
-from demo.adk_fake_model import build_fake_model
 from demo.agents.intent_agent import BusinessIntent, build_intent_agent
 
 _LOGGER = logging.getLogger("ran_energy_saving.intent")
@@ -173,7 +172,7 @@ class DemoIntentProcessor:
 
 def build_demo_intent_processor(config: SampleConfig) -> IntentProcessor:
     """Build the intent processor of one demo run, or of the OSS Agent."""
-    model = build_traced_adk_model(config, offline_model_factory=build_fake_model)
+    model = build_traced_adk_model(config)
     return DemoIntentProcessor(
         language=config.language,
         extractor=AdkIntentExtractor(build_intent_agent(model)),

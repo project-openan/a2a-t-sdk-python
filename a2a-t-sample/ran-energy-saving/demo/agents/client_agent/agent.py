@@ -1,8 +1,8 @@
 """ADK client decision agent of the RAN energy-saving sample.
 
 ``root_agent`` is loadable by ``adk run`` / ``adk web``. The model comes from
-:func:`shared.model_factory.build_adk_model`, so the agent is deterministic and offline by default
-and uses the configured OpenAI-compatible endpoint in ``live`` mode.
+:func:`shared.model_factory.build_adk_model`, so the agent uses the configured
+OpenAI-compatible endpoint.
 
 The agent's structured output is :class:`shared.models.NegotiationDecision`: ADK parses the model
 response into that schema, so the deterministic client flow never parses free text.
@@ -22,9 +22,7 @@ from google.adk.models.base_llm import BaseLlm
 from shared.model_factory import build_adk_model
 from shared.models import NegotiationDecision
 
-from demo.adk_fake_model import build_fake_model
-
-#: Agent name; the offline fake model keys its client script on this name.
+#: Agent name.
 AGENT_NAME = "ran_energy_request_agent"
 
 #: Location of the agent instruction.
@@ -38,17 +36,12 @@ def build_client_agent(model: BaseLlm | None = None) -> LlmAgent:
     """Build the RAN energy-saving client decision agent.
 
     Args:
-        model: Model to use; defaults to :func:`shared.model_factory.build_adk_model` (the fake
-            model in offline mode, ``LiteLlm`` in live mode).
+        model: Model to use; defaults to :func:`shared.model_factory.build_adk_model`.
     """
     tools: list[object] = []
     return LlmAgent(
         name=AGENT_NAME,
-        model=(
-            model
-            if model is not None
-            else build_adk_model(offline_model_factory=build_fake_model)
-        ),
+        model=model if model is not None else build_adk_model(),
         description=(
             "Decides how the client answers a RAN energy-saving negotiation proposal: accept "
             "(with the corrected target in the accept content), reject, or abort."

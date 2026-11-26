@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 import shared.adk_tracing as adk_tracing
-from demo.adk_fake_model import FakeScript, FakeToolCall, FakeTurn, build_fake_model
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
 from google.adk.models._capabilities import LlmCapabilities
@@ -34,6 +33,8 @@ from shared.trace import (
     set_global_sink,
     trace_scope,
 )
+
+from tests.support.adk_fake_model import FakeScript, FakeToolCall, FakeTurn, build_fake_model
 
 #: Model id of the deterministic fake model.
 _FAKE_MODEL_NAME = "fake-ran-energy-saving"

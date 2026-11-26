@@ -6,9 +6,12 @@ from typing import Any
 
 from a2a_t.llm.factory import LLMClientFactory
 from a2a_t.llm.models import LLMResponse
-from shared.traced_llm import TRACED_SCRIPTED_PROVIDER, TracedStructuredMixin
+from shared.traced_llm import TracedStructuredMixin
 
-from demo.scripted_llm import ScriptedLLMClient
+from tests.support.scripted_llm import ScriptedLLMClient
+
+#: Provider name of the test-only traced scripted client.
+TRACED_SCRIPTED_PROVIDER = "scripted_traced"
 
 
 class TracedScriptedClient(TracedStructuredMixin, ScriptedLLMClient):
