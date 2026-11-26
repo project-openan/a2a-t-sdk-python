@@ -1,605 +1,116 @@
-# RAN 节能：OSS 与 RAN 网管的智能协商（A2A-T 客户方案）
+# RAN 节能 —— 面向真机网管集成的 A2A-T 客户端
 
-> **一句话：** OSS 提出节能目标，RAN 网管先协商补齐或纠偏，再评估、下发并出报告——全程自动、可追溯。
+本样例是 RAN 节能集成的**客户端**：ADK agent 读取运维人员请求，A2A-T SDK 生成并校验 Task-T，
+客户端与厂商网管（或本地参考 RAN 服务端）协商，直到任务被接受并执行。所有决策均由模型产生，
+不再提供 scripted / offline 决策模式。
 
-```mermaid
-flowchart LR
-    OSS["OSS/BSS<br/>客户侧<br/>提出节能目标"] -->|"A2A-T 任务前协商"| NMS["RAN 网管系统<br/>校验 · 协商 · 评估 · 下发"]
-    NMS -->|"节能方案下发"| CELL["小区 / 基站"]
-    NMS -->|"任务状态 + 节能报告"| OSS
+同一个客户端对外提供两个入口：
+
+- **Web UI**（presentation 或 run explorer），供工程师操作；
+- **A2A gateway**，供 Gemini Enterprise 等调用方接入。
+
+样例还附带一个**本地 RAN 参考服务端**，便于在没有厂商网管时自测。
+
+```
+工程师 ── Web UI ──┐
+                   ├── A2A-T / 标准 A2A 客户端 ── 真机网管（message:send + webhook）
+Gemini Enterprise ── gateway ──┘
+                   └── 本地参考服务端（可选）
 ```
 
-## 1. 系统间交互
+## 1. 快速开始（真机网管）
 
-OSS 与 RAN 网管之间只做两件事：**先把目标谈清楚，再把方案执行掉**。
-
-| 系统 | 角色 | 在本方案中负责 |
-| --- | --- | --- |
-| OSS/BSS | 客户侧 | 提出节能目标，做接受 / 拒绝 / 反提议决策 |
-| RAN 网管（NMS） | 执行侧 | 校验目标、发起协商、评估并下发方案、生成报告 |
-
-```mermaid
-sequenceDiagram
-    participant O as OSS/BSS
-    participant N as RAN 网管
-    O->>N: 节能目标（例如“保障速率前提下最大化节能”）
-    N->>O: 提议：补充参数 / 纠正冲突 / 给出替代方案
-    O->>N: 接受 / 拒绝 / 中止
-    N->>O: 执行状态 + 节能报告
-```
-
-协商可能进行 2–3 轮，但**任务只在双方达成一致后才创建**，因此不会出现“按错误目标下发”的情况。
-
-典型问题正好对应三类协商：
-
-- 目标缺参数；
-- 时段重叠；
-- 条件不可行（例如停电期间仍要求保障速率）；
-- 区域未知：网管按请求中的区域名对其服务的区域做模糊匹配并给出候选，请工程师选择，同时保留原保障速率时段。
-
-## 2. 典型场景
-
-### 2.1 目标缺参数：网管问，OSS 补
-
-```mermaid
-sequenceDiagram
-    participant O as OSS
-    participant N as RAN 网管
-    O->>N: 节能目标（缺少分时段保障速率）
-    N->>O: 请补充：分时段保障速率目标
-    O->>N: 接受并补齐目标
-    N->>O: 评估 → 下发 → 节能报告
-```
-
-**结果：** 任务完成，无需人工工单。
-
-### 2.2 时段冲突：先纠偏再执行
-
-```mermaid
-sequenceDiagram
-    participant O as OSS
-    participant N as RAN 网管
-    O->>N: 节能目标（两个时段重叠）
-    N->>O: 提议：请给出不重叠的分段目标
-    O->>N: 反提议：修正后的分段目标
-    N->>O: 确认修订方案
-    O->>N: 接受
-    N->>O: 评估 → 下发 → 节能报告
-```
-
-**结果：** 冲突在任务创建前纠正，避免错误下发。
-
-### 2.3 条件不可行：网管给替代方案
-
-```mermaid
-sequenceDiagram
-    participant O as OSS
-    participant N as RAN 网管
-    O->>N: 节能目标（停电期间仍要求保障速率）
-    N->>O: 提议：改用可行的替代方案
-    O->>N: 接受
-    N->>O: 评估 → 下发 → 节能报告
-```
-
-**结果：** 不下发不可行方案，直接给出可执行替代。
-
-其余两种终止情形，客户只需要知道结论：
-
-| 场景 | 结论 |
-| --- | --- |
-| OSS 无法提供必需参数 | 协商结束，不创建任务 |
-| 多轮反提议仍不收敛 | 达到轮次上限后主动中止，不创建任务 |
-
-## 3. 客户价值
-
-| 痛点 | 没有任务前协商 | 本方案 |
-| --- | --- | --- |
-| 参数缺失 | 任务失败或人工追问 | 网管问、OSS 补，自动完成 |
-| 目标冲突 | 可能按错误目标下发 | 任务创建前纠正 |
-| 条件不可行 | 下发失败、回滚 | 先给替代方案，接受才执行 |
-| 审计 | 邮件、工单 | 每次提议、决策、下发都有记录 |
-
-## 4. 演示
+1. 复制 `env.example` 为 `.env`，填写：
+   - `ADK_MODEL_*`（必填），以及需要单独配置的 `A2AT_LLM_*`（SDK 结构化调用）；
+   - `A2AT_SAMPLE_NMS_*`（A2A 地址、token 接口、用户名/密码、服务区域与站点）；
+   - 网管经 NAT/代理访问本机时，填写 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL`；
+   - 使用 gateway 时填写 `A2AT_SAMPLE_GATEWAY_PUBLIC_URL`。
+2. 启动客户端对接厂商：
 
 ```bash
-# 用显式配置文件启动：不同启动脚本指向不同 .env，不再依赖启动器猜测
-python run_demo.py --env-file configs/yellow-zone.env --nms --ui
-# 等价写法：A2AT_SAMPLE_ENV_FILE=configs/yellow-zone.env python run_demo.py ...
-# 命令行（离线、确定性，无需 key）：计划停电基线 Create，无协商
-python run_demo.py --scenario outage --mode auto --model-mode offline
-# Web UI（演示视图；默认打开完整的用例 1）
-python run_demo.py --ui --model-mode offline
-# 华为主题演示（页面也可切换，?brand=huawei 可临时覆盖）
-python run_demo.py --ui --brand huawei --model-mode offline
-# Web UI：审批 1（意图）+ 审批 2（MIE 中的 MML）
-python run_demo.py --ui --mode confirm --approval-gate --scenario target --model-mode offline
-# 未知区域：由工程师手动选择可用区域
-python run_demo.py --ui --mode manual --scenario unknown_area --model-mode offline
-# 可选：把 OSS 侧作为 A2A 后端暴露
-python run_demo.py --ui --gateway --ui-port 8080 --gateway-port 8001 --model-mode offline
-# 在局域网共享 Web UI：显式选择免 token（仅限可信网络）
-python run_demo.py --ui --ui-host 0.0.0.0 --allow-insecure-bind --model-mode offline
-# 或者保留 token，分享带 token 的链接；页面会把它存进同源 cookie
-A2AT_SAMPLE_AUTH_TOKEN=<token> python run_demo.py --ui --ui-host 0.0.0.0 --model-mode offline
-# 同事打开 http://<你的局域网 IP>:8080/?token=<token>
+python run_demo.py --nms --ui --protocol both
 ```
 
-`--mode manual` / `--mode confirm` 下，决策卡还提供一个自由文本输入框。live 模型下点
-**由 OSS Agent 解析**，会把工程师的回答结构化成 `filled_params`（信息协商）或
-`counter_params`（目标/可行性协商），先展示预览，确认后才发送。离线运行没有解析器；
-快捷的接受/拒绝按钮和可用区域选择仍然可用。
+真机 `--nms` 固定使用 webhook transport，交付 `.env` 模板中应显式设置
+`A2AT_SAMPLE_LONG_TASK_TRACKING=1`。
 
-`--ui-host 0.0.0.0` 只暴露 Web UI；注册中心与网管服务仍在回环地址。未配置
-`A2AT_SAMPLE_AUTH_TOKEN` 时，启动器默认拒绝非回环绑定；只有显式加 `--allow-insecure-bind`
-才允许。该模式下能访问端口的人都能发起运行，请只在可信网络使用。配置了 token 时，分享
-`/?token=…` 链接即可：页面会把 token 写入同源 `a2at_ui_token` cookie，并从地址栏移除，因此
-`fetch` 与 SSE 流都能通过认证（浏览器无法给 `EventSource` 设置 `Authorization` 头）。
+3. 打开 `http://127.0.0.1:8080/`，选择协议（A2A-T 或标准 A2A），输入运维请求，并在 `/runs`
+   查看证据。
 
-使用 `--gateway` 时，OSS 侧本身就是一个 A2A Agent：Gemini Enterprise 之类的外部调用方发送一次请求后，
-会在最终节能报告之前收到协商与执行里程碑的进度通知——可以走流式连接，也可以注册 webhook。
-
-Web UI 默认打开演示视图：左侧是 16:9 的舞台，依次是网络工程师、OSS Agent、RAN Agent、MIE 与
-无线站点，中间是 A2A-T 通道。演示视图支持两套品牌主题：**Orange**（原 Demo 风格，默认）和
-**Huawei**（暖灰画布、描边节点、低噪声的 ICT 风格）。顶栏按钮可实时切换并记忆选择；
-`--brand huawei` 或 `?brand=huawei` 可指定启动默认值。八个示例覆盖用例 1（夜间节能，含协商与无协商）和用例 2（计划停电）；计划停电示例创建站点级基线，运行中的 Task 通过独立的 **运行中的任务** 入口下发真正的 Modify Task-T。
-舞台按人的节奏跟随真实运行，共九步：请求、结构化 Task-T、审批 1（意图）、下发 Task-T、需要时协商、
-策略与任务启动、数据采集（第 2–8 天，时间压缩）、审批 2（MIE 中的 MML）、下发与报告。请求框展示网络
-工程师会直接输入的自然表述，例如“在区域 A 创建节能任务，保障速率为：…”。这段文本就是 OSS 客户端实际下发的
-内容；OSS Agent 把它解析成自己的结构化意图，仅用于展示与审批。**未知区域**示例会列出模糊匹配后的可用区域，请工程师选择；
-选择只填充区域，原保障速率时段保持不变。Task-T 被接受后，RAN Agent 依次上报 `SUBMITTED`、策略生成中、
-策略就绪、任务已启动，然后才开始数据采集。右侧保留证据层：OSS Agent 理解到的任务（含 24 小时保障速率图）、
-协商轮次、**On the wire** 报文检查器，以及合并
-后的会话轨迹。规范化文本可以折叠收起；协商面板上方的把手可与意图面板交换高度，长报文一次看全。On the wire 读取本次运行 `wire.jsonl` 中已脱敏的真实报文——请求行、请求头（含真实的
-`traceparent`）和 SDK 实际发送的 `SendMessageRequest` JSON body（`{"message": …}`，A2A-T 模式下含
-Task-T metadata）。a2a-sdk 的 HTTP 传输同样会被捕获，因此本地 A2A-T 和 A2A 运行也显示真实请求，
-而不是从轨迹重建的 message 对象；没有捕获到报文时明确提示，而不是拼一份假的。在 A2A-T 模式下切换到
-**普通 A2A** 时，同一请求被写成一句自然语言，去掉扩展头和 Task-T 字段（这是同一条消息的格式视图）。点击
-会话轨迹的一行会在检查器中选中该消息。轨迹行现在带演示日（第 1 天、第 2–8 天、第 9 天、第 9 天+）和
-消息流向（OSS → RAN、RAN → OSS、MIE ⇄ 工程师）；晚到的服务端 span 按事件时间合并，状态与对应 span 只保留一行。
-
-连接真实网管（`--nms`）时，工具栏还会出现 **运行中的任务**。它读取
-`GET /api/nms/tasks?state=active`（后端调用网管 `/tasks`），列出所有仍占用网管任务配额的任务——
-SUBMITTED、WORKING 和 INPUT_REQUIRED——并显示真实状态；选择器打开期间每 5 秒自动刷新。选中任务后
-有两个动作，未点击前不会发送任何内容：
-
-* **修改该任务** —— 对 A2A-T 下的 SUBMITTED / WORKING 任务可用；对由本页面纯 A2A run 创建的 Task，
-  在 A2A 下也可用。它会记录该任务的 task id 和 context，把示例切到计划停电的修改场景，把“只修改”的
-  请求填入输入框。点击开始才提交目标 id；这样发起的 run 没有 baseline 阶段。A2A-T 下第一条 Task-T
-  直接续接所选网管任务（即使仍处于 SUBMITTED）；A2A 下消息续接 OSS Agent 的外层 Task（选择器行会
-  同时给出两套 id），由 OSS Agent 把操作员原文转发给它绑定的网管 Task。发送前任务若已进入终态，后端
-  会明确拒绝。切换协议请求形态不会丢弃已选任务；若该任务没有纯 A2A 外层 Task，页面会提示改用 A2A-T，
-  而不是静默清空选择。
-* **取消该任务** —— 对列表中的任意任务、任意协议可用，适合反复测试把任务配额跑满的情况。第一次点击
-  进入“确认取消？”，5 秒内第二次点击才真正下发；后端调用 `POST /api/nms/tasks/{id}/cancel`，向网管
-  发送厂商 `:cancel` 请求，并停止本进程内仍跟踪该 Task 的 run。网管回已知的 HTTP 503 时表示任务未被
-  取消：该行保留，选择器给出警告而不是假装成功。
-
-选择器在 run 运行期间也可以打开；此时「修改该任务」禁用，但允许取消正在测试的任务。网管流安静后，
-run 会转为后台轮询继续跟踪任务；页面仍订阅该 run 时一直保留轮询，关闭页面 30 秒后停止跟踪。本地对
-模拟器排练时可设置 `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1`，让模拟器新建的任务停留在 WORKING，供选择器
-使用（再次对该任务发起请求会正常完成）；设置 `A2AT_SAMPLE_NMS_SIM_CANCEL_UNSUPPORTED=1` 可复现旧的
-HTTP 503 取消应答。
-
-### 测试控制台（Excel 导入）
-
-同一个 UI 进程的 `/tester` 是给测试人员的独立入口（启动器会打印该地址）：下载 `.xlsx` 模板，
-一行填一条用例，导入后即可批量执行。该页面是中方测试团队的内部工具，界面固定使用中文。每行填写协议（`A2A-T` / `A2A`）和可选的用户请求；
-场景列可留空，因为客户现场的真实测试通常只有一段业务请求。场景留空时，内部仍使用 `night`
-配置模板，但只校验最终状态（默认 `task_completed`）；填写场景时，空的预期单元格继承该场景的
-最终状态、协商类型和轮次。单个批次内的用例串行执行，不同批次（以及不同 webhook run）可以并发；
-页面逐条展示通过/失败、实际最终状态、协商类型与轮次、耗时，以及本次运行的 `wire` / `trace`
-链接；结果可导出回 `.xlsx`。审批结果留空时默认
-`approve`，无人值守批次不会卡在审批窗口；`reject` 测试拒绝路径；`auto` 交给人工或超时。
-批次按浏览器持久化在 `runs/tester` 下：页面会下发匿名 `a2at_tester_client` cookie，列表、打开
-和重跑都只作用于该浏览器创建的批次，刷新页面只会打开自己的最近一批，新浏览器进去是空状态。
-**重跑失败** 会用失败、错误或取消的行新建一个草稿批次；即使当前显示的是旧结果，**开始执行**
-也始终按左侧当前选择新建批次。连接真实网管时页面会显示警示并在开始前二次确认。每条用例记录墙钟耗时、
-模型/工具/审批延迟、LLM 调用次数和 Token 用量（prompt/completion/total，并按客户端/服务端拆分），
-端点返回缓存字段时还会记录缓存命中的前缀 Token 和缓存命中率；导出的工作簿包含 **测试结果**、
-**指标** 和 **汇总** 三个 sheet。离线脚本 LLM 的 Token 会明确标记为不可用，而不是编造数字。
-传输与发现方式仍由后端按协议决定，不需要在表格里填写。
-
-### 内部 Run 控制台
-
-`/runs` 是测试团队专用的诊断页面（启动器会打印地址），与演示页分离。它读取客户端 SQLite 中的
-持久化运行，而不是展示页的内存状态，因此重启后仍可回看：
-
-- 列表支持协议 / 状态 / 来源 / 场景筛选和请求、run id、conversation id、服务端/下游 task 与
-  context id 搜索，并显示耗时、Token 和创建时间；
-- 详情分概览、指标、时间线、协商、报文、原始 JSON：指标含 Token（含缓存命中与命中率）、耗时拆分
-  和准确率；时间线来自持久化 transcript；协商展示协议事件、客户端决策和会话轮次；报文读取
-  `wire.jsonl` / `wire-oss.jsonl`；
-- **请求来源**在 run 创建时记录：来源类型（`presentation` / `explorer` / `tester` / `gateway` /
-  `api` / `cli`）、入口通道、客户端地址、`X-Forwarded-For`、Host、Origin、Referer、User-Agent、
-  Accept-Language、请求 ID、入口路径和接收时间；测试页批次还会记录批次/用例，网关会记录 Task /
-  Context。Referer 中的 `token` 查询参数会先被移除，不会落库。
-- **跨跳身份**：两跳的 pure 运行会并列显示本客户端这一跳的 `OSS Context`，以及 OSS Agent 在远端
-  继续的 `NMS Context` / `RAN Agent Context`（连同对应的 task id）。在网管侧查任务要用后者，
-  前者查不到。A2A-T 运行直连 RAN 侧，只有一个 context。
-- 列表自动刷新（5 秒，可关闭）；选中运行后通过 URL hash `#run=<id>` 可直接分享定位。
-
-页面本身是中文，和测试页一样属于内部工具。
-
-### 操作员意图处理层
-
-操作员原文是唯一来源。默认的 `processed` 模式插入真实 OSS 会做的业务解读，但**不改写请求**：
-
-```text
-操作员请求 → ADK 意图 agent（ProcessedIntent，仅展示/审批） → 审批 1
-           → 从同一段文本抽取 Task-T
-```
-
-- 已知场景就是普通示例请求。样例没有内置意图表，也没有“文本 → 内置意图”的匹配：ADK 意图 agent
-  读取页面展示、操作员实际发送的那段文本。live 模式使用配置的模型；offline 模式下确定性 fake model
-  无法回答意图 schema，意图回退为原文并记录 warning。
-- 请求文本所见即所得：页面原样发送编辑框文本，A2A-T 也从同一段文本抽取 Task-T。`normalizedText` /
-  `plainText` 就是操作员原文；结构化字段是 agent 的解析结果。
-- 业务层**不修复**缺失或冲突。缺失的保障速率、未知区域、重叠时段都会保留在文本里，
-  后续 A2A-T 协商仍然会发生。
-- 协商 accept 由解析出的意图加上 ADK 决策 agent 的 `filled_params` 组成；以决策为准，模型漏填时
-  样例不编造业务值。
-- 只使用 SDK 打包的 `prompt_resources/`（共享 slot schema、模板与提示词），它是唯一权威来源。
-  每次运行生成的 SDK `.env` 固定 `A2AT_PROMPT_SOURCE_TYPE=packaged`，并丢弃继承来的
-  `local_file` 根目录，避免旧 overlay 覆盖打包资源。
-- A2A 把同样的处理放在 OSS Agent 内：工程师客户端发送原文，OSS Agent 解析并发布意图，
-  再把同一段文本转发给 RAN。
-- 展示页并列显示操作员请求和结构化意图；trace 记录 `intent_processed`。
-- A2A-T 默认 `raw`：Task-T 由 SDK 从原文生成，ADK 意图层只用于展示/审批，默认省掉这一次
-  模型调用。需要展示结构化意图时用 `A2AT_SAMPLE_INTENT_MODE=processed`、
-  `--intent-mode processed` 或 `POST /api/runs {"intentMode":"processed"}`；发送的始终是原文。
-  Gateway 入站文本一律按 raw 处理。
-
-### 发送前 Task-T 校验
-
-A2A-T 模式下，演示页在发送前用 SDK 内容校验检查渲染后的 Task-T。校验位于渲染之后、审批 1 之前，
-被阻断的请求不会发送，也不会开启协商。
-
-- `A2ATClient.validate_task_prompt_and_data_filling` 是服务端同名方法的客户端入口，共用
-  `DefaultContentValidator` 和语义校验提示词。
-- 能映射到服务端协商类型（`INFORMATION` / `TARGET` / `FEASIBILITY`）的错误是可协商的，仍然发送，
-  协商演示不受影响。条目内缺字段（`content.entry_field_missing`，例如缺 Rate）属于信息协商，
-  不再硬阻断。
-- **OSS agent 会拦截自己的必填项。** SDK 抽取完调用方 schema 的参数后，必填值缺失（例如保障速率）
-  会在 OSS 层停住：不发送请求，校验卡提示操作员补充。这是 `TASK_PARAM_SCHEMA.required` 的业务门，
-  与网管侧的 Task-T 协商是两回事；调用方 schema 未要求的字段仍会发给服务端，由网管协商。
-  内置的信息 / 拒绝 / 中止场景刻意省略必填值来演示服务端协商，会跳过这道门；操作员输入或编辑的
-  请求始终执行检查。
-- 映射不到的错误会阻断发送：run 以 `finished` + `final_state=input_invalid` 结束，记录
-  `task_validation` trace，页面内联展示问题。
-- 业务 slot 抽取失败（`slot.constraint_violated` 等）发生在 Task-T 存在之前，也按同样方式呈现：
-  一条 blocked 的 `task_validation` 记录，带结构化 slot 错误，并复用编辑重试卡片；
-  基础设施失败仍然抛出。
-- LLM/基础设施失败降级为 warning 并放行；模型故障不会中断演示。
-- 选中任务的 Modify Task-T 走同一道门；被阻断时不发送任何内容。
-- 在校验卡中修改原始请求会**新建一次 run**；失败的 run 保留在历史中，并通过
-  `parentRunId` 关联。重试沿用同一个 `chainId`，但新建 run、会话和 trace，因此被拦截的原文
-  不会进入下一轮 Task-T 的会话上下文。
-- `A2AT_SAMPLE_PRE_SEND_VALIDATION=on|always|off` 控制范围；默认 `on`，只覆盖演示页。
-
-### Langfuse 可观测
-
-live 模式的 client run 可以把 Run Explorer span 导出到 Langfuse，每次 run 一条 trace：
-
-- 设置 `LANGFUSE_PUBLIC_KEY` 和 `LANGFUSE_SECRET_KEY`（可选 `LANGFUSE_BASE_URL`）；
-- `LANGFUSE_BASE_URL` 是 SDK 上报端点，可以指向代理；`A2AT_SAMPLE_LANGFUSE_UI_BASE_URL`
-  是浏览器打开 trace 链接所用的 UI 地址（默认 `https://us.cloud.langfuse.com`）；
-- `A2AT_SAMPLE_LANGFUSE_ENABLED=0` 强制关闭；`A2AT_SAMPLE_LANGFUSE_CAPTURE_CONTENT=0`
-  只上报模型、token、状态和耗时元数据；
-- offline/scripted 运行不上报。
-
-trace 结构为 `run → phase → 协商轮次`；`llm` span 映射为 generation（带模型和 token 用量），
-`tool` span 映射为 tool，其余保持 span。演示页结束卡片和 Run Explorer 的 **Exports** 面板会显示
-Langfuse trace 链接。导出是 best-effort：失败只显示 warning，不改变 run 结果。`langfuse` 是
-sample 的可选依赖；未安装或未配置 key 时导出器为空操作。
-
-客户端与服务端 span 共用同一条 trace。每次本地 A2A 调用都会携带客户端的 W3C `traceparent`
-（以及 `X-A2AT-Run-Id`、conversation、user 头）；RAN、OSS、MIE 服务端在创建 a2a-sdk handler span
-之前先附加该上下文，因此服务端的 `SendMessage` / `CancelTask` 会落在同一条 Langfuse trace 里。
-如果服务端无法加入，桥接 span 会携带 `langfuse.trace.metadata.runId`，仍可按 run 检索。要导出
-服务端 span，需要把 SDK 的 OTLP 导出指向 Langfuse（`OTEL_EXPORTER_OTLP_ENDPOINT` 和
-`OTEL_EXPORTER_OTLP_HEADERS`）；所选 `.env` 中的 `OTEL_*`/`LANGFUSE_*` 会被导出给子进程。厂商网管
-不使用同一条 trace，因此发往网管的 `traceparent` 仍使用 run id。
-
-`POST /api/runs` 也接受调用方传入的 W3C `traceparent`：带链路追踪的调用方启动 run 时，UI 导出器
-会采用该父上下文，UI、OSS 和下游跳都进入调用方的 trace，而不是另开一条。每条 Run Explorer
-信封都会带 `traceId`、`otelSpanId`、`otelParentId`，因此 OSS span 可以在 UI 之外检查或再导出。
-出站本地 A2A 调用的 `parent-id` 使用发送方当前的 span id（服务端跳即该请求的桥接 span），
-不会复用调用它的那个 span。
-
-`A2AT_SAMPLE_TRACE_SPAN_LEVEL` 控制 Run Explorer 数据进 Langfuse 的粒度：`phase`（默认）保留
-LLM/tool 调用、run 结果和 OSP 时间点载体——每跳 `message_sent`、每轮 `propose`/decision、
-Task-T rendered、Task created、业务意图、校验结论和审批对——去掉状态噪声、phase 代表行和仅排障用
-的行。NMS 原始报文使用 `kind=transport`，只有 `full` 才导出。`minimal` 只保留 LLM/tool 调用和
-最终结果，约为原来数量的三分之一；`full` 导出全部 span。
-Web UI 时间线始终保留全部 span，不影响排障。修正重试保持独立 trace（一条 trace 一个 root），
-通过与首次 attempt 共享的 `chainId` 归入同一个 Langfuse session。
-
-### Langfuse 指标导出（`/observe`）
-
-启动器会打印 `/observe` 地址。这是一个面向开发和测试团队的中文内部页面：一行粘贴一个
-Langfuse traceId（导出开启时 run 的 `traceId` 等于 run id，可直接从 `/runs` 复制），或从"最近
-run"列表勾选。单个 traceId 用 **查询**；两个及以上用 **批量导出**（批量模式与 `table.xlsx`
-属于导出路径）。服务端用 vendoring 进来的 `langfuse_export` 包（上游 `langfuse-export` 0.5.1）
-拉取 trace 并派生 A2A / A2A-T 指标。
-
-- 页面展示每条 trace 的时间线、阶段耗时、token（总数 + client/server 分侧）、协商轮次和
-  observation 数量。可下载：`langfuse-metrics.csv`（UTF-8 BOM，一行一个 trace）、
-  `rounds.csv`（一行一个协商轮次，含 pure A2A 的 `negotiationType`、`hop`）、
-  `fields.csv`（每个字段的含义、来源和注意事项）、`table.xlsx`（上游 Issue AF–AW 宽表：一行一个
-  trace，协商按轮展开成 AJ–AO 列，按批量内最大轮数取列）；同样的字段说明也内嵌在页面上。
-- Token 口径按上游代码实际行为：`input` **包含**缓存命中部分，`cachedInput` 是它的子集，
-  `total` 取 provider 上报值；额外提供 `inputExcludingCached` 作为第二口径。`server.*` 是
-  a2a-t-server 侧，父 span 与子 generation 重复上报时只计一次；没有用量的侧输出 `0`
-  （上游 0.4.3），所以 pure A2A 的 server 桶是 0 而不是空白。
-- pure A2A 的协商轮次已与 A2A-T 同构：每个转发的 `INPUT_REQUIRED` 提问导出 `propose`，每个回答
-  导出 `accept`，因此两种协议的 `rounds` 与 `negotiationLatencyMs` 都可用。没有
-  `negotiation_started` 时，以 propose 时刻（client 时钟）作为本轮协商起点；两者都没有才回退
-  a2a-t-server。
-- 批量顺序执行，同一时刻只跑一个 job，单批最多 200 条 traceId。页面按批量大小自适应轮询
-  （1s / 2s / 5s），可以关掉页面再回来；完成的 job 记录在 `runs/observability/jobs/`。
-- **完整导出**会额外在上游证据目录里写出原始 observation、`transcript.md` 和带 sha256 的
-  `manifest.json`（位于 `runs/observability/`），并按 trace 提供 zip 下载。
-- 凭证和网络配置只从环境变量 / `.env` 读取（`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`、
-  `LANGFUSE_BASE_URL`，以及可选的 `LANGFUSE_PROXY`、`LANGFUSE_NO_PROXY`、
-  `LANGFUSE_CACERT`、`LANGFUSE_INSECURE`）；页面不接收密钥，只显示脱敏后的 host。
-- 这份 CSV 是 Langfuse trace 口径（含 a2a-t-server 侧），与 `/api/metrics/export.csv` 的
-  客户端自记账口径**不同**，两者并存。
-
-### 真实厂商网管模式
-
-sample 也可以作为真实厂商网管的 OSS 客户端。加 `--nms` 后，启动器不再启动本地 registry、RAN
-Agent 和 MIE：A2A-T 客户端从网管的令牌接口获取会话，再直接调用网管的 A2A 面。
-`--nms --protocol a2a` 仍保留本地 OSS Agent（工程师 UI → OSS Agent → 网管），只去掉 RAN
-Agent 和 MIE。
-
-真实 `--nms` run 使用 **`POST /a2a/json/message:send` + webhook**（网管的直连机器模式）；
-本地网管仿真器继续使用 SSE `message:stream` 契约。
+### Gemini Enterprise 网关
 
 ```bash
-# 真实网管：先在 .env 填好 A2AT_SAMPLE_NMS_* 和网管可达的 A2AT_SAMPLE_WEBHOOK_HOST
-python run_demo.py --nms --ui --brand huawei
-
-# 本地网管仿真器：同一套客户端路径，不依赖联调网络，也不会改动真实网络
-python run_demo.py --nms --nms-sim --ui --brand huawei
+python run_demo.py --nms --ui --gateway \
+  --gateway-public-url https://ran-client.example/gateway \
+  --gateway-port 8001 --gateway-webhook-port 9001 \
+  --gateway-downstream-protocol a2a-t
 ```
 
-`.env` 必填项：
+- 网关 AgentCard 使用 `A2AT_SAMPLE_GATEWAY_PUBLIC_URL`；设置 `A2AT_SAMPLE_AUTH_TOKEN` 时卡片声明
+  bearer 方案并由网关校验。
+- 一条入站消息对应一个客户端 run 和一个新的入站 Task；不支持同一 Task 的多轮续传。
+- 调用方身份来自 A2A 认证上下文（`user_name`），不再使用固定占位符。
+- UI 与 gateway 各绑定一个回调接收端口，两个端口都必须被网管访问到。
 
-```ini
-A2AT_SAMPLE_NMS_HOST=<nms-host>
-A2AT_SAMPLE_NMS_TOKEN_USER=<northbound-user>
-A2AT_SAMPLE_NMS_TOKEN_VALUE=<password>
-# 真机运行必须显式配置区域；示例请求已使用网管支持的站点，此列表仅用于收窄或扩展
-A2AT_SAMPLE_NMS_REGION=A2ATestRegion
-A2AT_SAMPLE_NMS_SITES=NRES_XCS_6102937,NES_27A_321071,LTE_26441_LNR_OCL,LNR_KPI_7745
-A2AT_SAMPLE_NMS_VERIFY_TLS=false
-# 真实网管必须能访问这个地址和 webhook 端口
-A2AT_SAMPLE_WEBHOOK_HOST=<客户端局域网地址>
-A2AT_SAMPLE_WEBHOOK_PORT=9000
-# 原始报文日志：NMS 模式默认开启；设为 0 可避免业务数据落盘
-A2AT_SAMPLE_NMS_WIRE_LOG=1
-```
-
-只需配置主机地址。sample 会按 910 标准面自动推导两个 URL：
-`https://<host>:31127/a2a/json` 和
-`https://<host>:27417/rest/plat/smapp/v1/sessions`。非标准部署可以覆盖
-`A2AT_SAMPLE_NMS_SCHEME`、`A2AT_SAMPLE_NMS_A2A_PORT` / `A2AT_SAMPLE_NMS_TOKEN_PORT`，或直接
-设置完整的 `A2AT_SAMPLE_NMS_A2A_BASE` / `A2AT_SAMPLE_NMS_TOKEN_URL`；显式完整 URL 优先。
-
-联调环境使用自签名证书，因此默认关闭 TLS 校验；只有证书链可信时才设为
-`A2AT_SAMPLE_NMS_VERIFY_TLS=true`。客户端同时发送两种被接受的认证头（`Authorization: Bearer`
-和 `X-Auth-Token`）以及两种扩展头拼写（`A2A-Extensions` 和 `X-A2A-Extensions`）。
-
-NMS 模式下，`A2AT_SAMPLE_NMS_REGION` 与 `A2AT_SAMPLE_NMS_SITES` 只用于预填页面上的可见示例请求，
-以及配置本地模拟器。它们不会改写操作员的 Task-T：客户端发送操作员的原文，发送前校验必填字段，
-并拒绝接受任何不是来自操作员、服务端 proposal 或权威工具的协商值。真机运行必须显式配置区域；
-sample 不再提供内置默认值。页面与报文之间不会出现“左侧中性名、轨迹真机名”的静默替换。
-例如：“在 A2ATestRegion 区域创建无线网络节能任务；激活时段 00:00-06:00，每小区保证 30 Mbps。”
-
-厂商契约说明：
-
-- 只有同时声明 Task-T 和 Negotiation-T 时，网管才返回结构化协商 metadata。客户端在初始请求里
-  两者都声明；只声明 Task-T 会得到 metadata 为空的普通 Message。
-- 一条消息只能带一个 `-T` metadata 键。NMS 模式的 ACCEPT 只带 Negotiation-T；本地 demo server
-  仍保留回填的 Task-T。
-- 继续协商的 PROPOSE 可能被包在 `error` 信封里。客户端把它写入 `wire-error.jsonl` 并以明确的
-  协议错误结束，而不是静默当作协商结束。
-- `negotiationContext.id` 是网管的协商句柄，不是 A2A 的 `contextId`。应答必须携带 PROPOSE 的
-  协商 id；继续协商时，网管可能在同一个 context id 上开启**新的**协商 id。
-- ACCEPT / COUNTER / REJECT 之后，客户端会继续读响应流直到空闲
-  （`A2AT_SAMPLE_NMS_READ_AFTER_SEND`，默认开启），避免丢掉同一流里的下一个 PROPOSE。
-- idle 窗口默认 45 秒（`A2AT_SAMPLE_NMS_IDLE_TIMEOUT_SECONDS`）；`: heartbeat` 不算作进展。
-- 任务取消返回 HTTP 503；客户端把它当作已知限制，且发送超时后不重试。
-- 展示视图工具栏在“编辑请求”旁提供“取消任务”。它会先尽力请求远端网管取消 Task（当前返回
-  HTTP 503），然后停止本地运行，因此长周期任务或反复测试时不需要重启页面。
-- 网管不发布 AgentCard，因此发现使用静态卡；真实注册中心对接是后续步骤。
-
-原始报文写入 `runs/<runId>/wire.jsonl`（A2A 模式的 OSS Agent 写入同目录的 `wire-oss.jsonl`），
-失败帧写入 `wire-error.jsonl`，凭据已脱敏。发送前的
-人审用 `--ui --mode confirm`；NMS 模式没有服务端审批 2，因为执行侧由厂商网管负责。
-
-webhook 接收端是**进程级**的：启动时按 `A2AT_SAMPLE_WEBHOOK_PORT` 绑定一次，Web UI 的每次
-“开始”复用同一个回调地址，不再为每个 request 重新绑端口。因此同一个进程内一次只跑一个
-webhook 任务；第二个会返回明确的冲突提示。没有配置 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 时，
-如果配置端口已被占用，会自动改用系统分配的端口；配置了 public URL（网关固定转发）时不会
-静默改端口，而是给出“端口被占用、等待/取消或改端口”的明确错误。
-
-`--protocol both --nms` 需要两个接收端：UI 使用 `A2AT_SAMPLE_WEBHOOK_PORT`，OSS Agent 使用
-`A2AT_SAMPLE_OSS_WEBHOOK_PORT`（默认取下一个端口）。真实网管运行必须配置
-`A2AT_SAMPLE_OSS_WEBHOOK_PUBLIC_URL`，它绝不会从 UI 的回调地址继承；两个地址都要能被网管访问。
-public URL 中显式写出的端口必须与对应接收端口一致；网关/NAT 映射了不同外部端口时，设置
-`A2AT_SAMPLE_ALLOW_CALLBACK_PORT_MISMATCH=1`。默认端口与其它实例冲突时显式设置 OSS 端口；它
-不能与 UI 端口相同。若端口已被上一次记录的 OSS 进程占用，启动器会重启该 OSS，而不是复用旧
-回调配置。
-
-A2A + `--nms` 的 OSS Agent 现在会把网管的 token、发送、轮询 span 上报到同一次 run，
-会话轨迹里能看到 `NMS session token acquired`、`NMS A2A stream opened` 等真实下游事件，
-状态文案也区分 `NMS` 与本地 `RAN Agent`，不再看起来像本地三跳演示。
-
-启动器还会把选定的拓扑“钉”进每个子进程的环境：UI 子进程显式拿到部署 discovery 和 OSS 的
-`A2AT_SAMPLE_DIRECT_SERVER_URL`；OSS Agent 始终拿到 `A2AT_SAMPLE_DISCOVERY=nms`（本地拓扑为
-`direct`）、transport 和 RAN URL。`shared.config` 的优先级是进程环境高于每次运行的 `.env`，
-因此启动脚本用 `set -a` 载入 `.env` 时，不再可能把标准 A2A run 静默改到本地 RAN Agent。
-OSS 启动日志会明确写出下游是 `OSS Agent downstream: NMS <base>` 还是
-`OSS Agent downstream: local RAN Agent (<url>)`；pure run 看起来没到网管时，先看 `oss.log`。
-
-OSS Agent 的 span 会发给“拥有该 run 的 UI 进程”。如果 `oss.log` 里出现
-`POST .../api/runs/<id>/trace` 返回 404 且响应体是 `unknown_run`，说明 OSS 仍配着另一个/已重启的
-UI 实例：run id 和 trace token 都属于旧 UI。用启动器重新起一对（`--stop` 后再启动），旧 OSS
-无法把 span 挂到新 UI 的 run 上。启动行 `OSS trace emitter: http://... (token configured)` 会写明
-目标 UI；被拒绝的批次现在会打印 UI 的响应体（`unknown_run` / `trace_token_invalid` /
-`span_invalid`），而不是只有状态码。
-
-### 同一台机器并行两个实例
-
-单个实例即可在页面切换请求形态（UI 默认 `--protocol both`）。当两边需要不同的网管凭据、数据目录或
-webhook 地址时，仍可并行两个实例。两个实例必须使用不同的启动状态目录、数据目录、UI 端口
-和 webhook 端口：
-
-| | A2A-T | A2A |
-|---|---|---|
-| UI | 8080 | 8081 |
-| Webhook | 9000 | 9001 |
-| OSS Agent | 不启动 | 8011 |
-| `A2AT_SAMPLE_RUN_DIR` | `%TEMP%/a2at-ran-energy-saving-adk` | `%TEMP%/a2at-ran-energy-saving-adk-a2a` |
-| `A2AT_SAMPLE_RUNS_DIR` | `runs` | `runs-a2a` |
+### 本地参考服务端
 
 ```bash
-# 实例 A（A2A-T）
-A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk \
-A2AT_SAMPLE_RUNS_DIR=runs \
-A2AT_SAMPLE_UI_PORT=8080 \
-A2AT_SAMPLE_WEBHOOK_PORT=9000 \
-python run_demo.py --nms --ui --brand huawei
-
-# 实例 B（A2A：UI -> 本地 OSS Agent -> 网管）
-A2AT_SAMPLE_RUN_DIR=/tmp/a2at-adk-a2a \
-A2AT_SAMPLE_RUNS_DIR=runs-a2a \
-A2AT_SAMPLE_UI_PORT=8081 \
-A2AT_SAMPLE_WEBHOOK_PORT=9001 \
-python run_demo.py --nms --protocol a2a --ui --brand huawei --oss-port 8011
+python run_demo.py --ui            # 本地 RAN 服务端 + UI，AgentCard 直连发现
+python run_demo.py --stop          # 停止启动器管理的进程
 ```
 
-`--stop` 只读本实例 `A2AT_SAMPLE_RUN_DIR/pids.json`，停 B 不影响 A。A2A + NMS 中，UI 通过
-direct A2A/SSE 访问本地 OSS Agent；OSS Agent 通过标准 A2A 访问网管（webhook，`--nms-sim` 时用
-SSE）。OSS Agent 复用与 A2A-T 客户端相同的 ADK 决策 Agent 回答网管的 `INPUT_REQUIRED`，并把
-决策渲染成自然语言文本。
+## 2. 客户端链路
 
-如果网管拒绝带 `taskId` 的 A2A follow-up，设置 `A2AT_SAMPLE_PURE_FOLLOWUP=context`
-（或 `task` 只带 taskId）后重试；默认是 `both`。
+1. ADK intent 层读取运维请求（仅用于展示与 approval 1）。
+2. SDK 从**运维原文**生成 Task-T，样例不重写请求、不猜测 slot。
+3. 发送前校验 Task-T（`A2AT_SAMPLE_PRE_SEND_VALIDATION`）。
+4. 与网管协商：information / target / feasibility，客户端 ADK agent 负责每一次答复与决策。
+5. 发送已接受请求，跟踪 Task 到终态（含长任务），发布报告。
 
-真实网管要求通过网关访问的 https 回调：把 `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL` 设为该 URL，
-`A2AT_SAMPLE_WEBHOOK_TLS_CERT` / `A2AT_SAMPLE_WEBHOOK_TLS_KEY` 设为接收端证书对，
-`A2AT_SAMPLE_WEBHOOK_AUTH_CREDENTIALS` 设为网管推送时携带的 `user:password`。此时接收器改为校验
-Basic 鉴权，不再校验 `A2AT_SAMPLE_WEBHOOK_TOKEN`；同一凭据也会注册到内联 push config。
+Web UI 保留 approval 1（`--mode confirm`）。执行审批属于厂商网管，样例不再提供本地 MIE/MML
+审批环节。
 
-### 一个 Agent，两种请求形态
+## 3. 测试台
 
-A2A-T 是 A2A 的扩展，不是第二套协议。RAN Agent 始终支持标准 A2A；当请求声明或携带 `Task-T` 时，
-同一个 Agent 先执行预任务协商，再在结果上写入 A2A-T 元数据。真机网管也是这个模型：一个服务，
-由请求本身决定是否使用扩展。
-
-带 `--ui` 启动时，`--protocol` 默认就是 `both`：启动这个单一 Agent，并在页面上提供协议切换。
-纯 CLI 运行默认使用 A2A-T。
+`/tester` 使用 OSP 用例集（`eval/osp/cases`）对配置的端点执行验收，并导出 xlsx 报告，包含
+Task-T、校验、发送、协商、accepted、working、final 各阶段证据。客户端始终使用 live 决策
+agent；Q/P 列仅作为期望参考，不再回放。
 
 ```bash
-uv run python -m demo.run_demo --ui --model-mode offline
+# 先启动 UI，再打开 /tester。
+python run_demo.py --nms --ui
 ```
 
-- **A2A**：标准 Task 生命周期（`INPUT_REQUIRED` 续传）。本地拓扑为三跳：UI → OSS Agent →
-  RAN Agent → MIE Agent。
-- **A2A + A2A-T**：Task-T 模板校验与预任务协商，由同一个 RAN Agent 处理。
+正式验收必须对准真机网管；本地参考服务端只用于进场前演练。
 
-每次 run 都会记录请求形态，因此切换后 session trace、metrics 和历史仍然可区分。
-`--protocol a2a-t` 和 `--protocol a2a` 继续保留，供只服务一种形态的部署或确定性 CLI 运行使用。
+## 4. 可观测性
 
-### A2A 模式（三跳，只用标准 A2A）
+- `/runs` 是只读运行控制台：持久化 run、wire 原始报文、transcript、trace 时间线。
+- 每个 run 写入 `runs/<runId>/wire.jsonl` 与 `runs/<runId>/server-trace.jsonl`。
+- Langfuse 导出可选（`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`）；未配置时为空操作，
+  且不影响协议结果。
 
-`--protocol a2a` 启动真实的三跳 A2A 链路：
+## 5. 配置
 
-```
-工程师/UI ──A2A──► OSS Agent (:8001) ──A2A──► RAN Agent (:8000) ──A2A──► MIE Agent (:8002)
-```
+所有键见 `env.example`。优先级：CLI 参数 > shell 环境 > 每 run `.env` > 源 `.env` > 默认值。
 
-- OSS Agent 把工程师请求原样转发给 RAN Agent。缺参数或目标冲突时，RAN Agent 返回标准 A2A Task 的
-  `INPUT_REQUIRED`；OSS Agent 带 `taskId`/`contextId` 在同一任务上发后续消息作答，最多 3 轮。
-  全程不生成、不返回 `Task-T/v1` 或 `Negotiation-T/v1` metadata。
-- RAN Agent 在下发方案前通过 A2A 请求 MIE Agent 审批。MIE Agent 通过自己的 SSE 把审批卡推给页面，
-  工程师的批准/拒绝通过 `POST /api/mie/approvals/{taskId}` 回到 MIE。
-- 演示会展示 OSS、RAN、MIE 三跳、协商轮次、MIE 审批卡，以及每次运行的指标（跳数、协商轮次、
-  A2A 消息数）。示例包括 `night`（无协商）、`information`（缺参 1 轮）和 `target`（先反提议再接受）。
-- 旧的单轮 `plain` 路径仍保留在代码和测试中作为内部基线，但 CLI 和页面都不再暴露。
+交付关键键：
+
+| 键 | 含义 |
+|---|---|
+| `ADK_MODEL_*` / `A2AT_LLM_*` | ADK agent 与 SDK 结构化调用使用的模型端点 |
+| `A2AT_SAMPLE_NMS_*` | 厂商 A2A 地址、token 接口与服务清单 |
+| `A2AT_SAMPLE_WEBHOOK_*` | UI 回调接收端口及其公网 URL |
+| `A2AT_SAMPLE_GATEWAY_*` | gateway 公网 URL、回调端口与下游协议 |
+| `A2AT_SAMPLE_LONG_TASK_TRACKING` | 观察窗口结束后继续跟踪 Task |
+| `A2AT_SAMPLE_AUTH_TOKEN` / `SERVER_AUTH_TOKEN` | UI/gateway 与本地服务端的 bearer token |
+
+## 6. 测试
 
 ```bash
-# A2A：三跳 + MIE 人工审批
-uv run python -m demo.run_demo --protocol a2a --ui --approval-gate --scenario information
-
-# 现有 A2A-T 模式（Task-T + Negotiation-T），行为不变
-uv run python -m demo.run_demo --protocol a2a-t --ui --mode confirm --approval-gate --scenario information
+PYTHONPATH=. ../../.venv/Scripts/python.exe -m pytest tests -q
+../../.venv/Scripts/python.exe -m ruff check shared protocol demo tests run_demo.py
 ```
 
-审批 1 是真实的：`--mode confirm` 下，Task-T 在离开 OSS Agent 之前停住，工程师确认结构化意图后才
-发送。审批 2 是 MIE 的 MML 审核：`--approval-gate` 下，RAN Agent 在下发前发布真实的 A2A
-`INPUT_REQUIRED` 状态；页面直接展示 MML 建议，请工程师在 MIE 中审核并确认。审核窗口默认 240 秒；
-超时（或运行在卡片打开期间结束）时页面会关闭卡片并显示结局，不会停在“待审核”。驳回则不下发、不出报告。
-数据采集阶段由 RAN Agent 的三条真实 `WORKING` 状态驱动（started / in progress / completed）；页面
-把第 1–8 天压缩成几秒，不伪造测量值。MML 命令只有在 MIE 确认之后才下发：绿色 `MML commands` 包
-从 MIE 直接飞向无线站点，站点执行后把执行结果经 RAN Agent 上报给 OSS Agent。
-
-播放控制（自动 / 单步、速度、暂停、上一步 / 下一步、循环）只影响演示节奏，后端运行是真实的。
-传输、模型与语言在进程启动时确定，页面上只保留场景切换和请求编辑。
-
-需要协议级视图（阶段、LLM 与工具调用、原始报文、历史记录）时，在同一条命令后加 `--ui-mode explorer`。
-安装、环境变量与完整参数见[技术指南](TECHNICAL-zh.md)。
-
-### 指标与协议对比
-
-每次 run 都会生成一条指标记录：token 消耗、耗时拆分（模型 / 工具 / 人工审批 / 其他）以及
-相对场景 ground truth 的准确率（终态、协商轮次、达成目标的吞吐目标、报告是否存在）。当模型端点
-返回前缀缓存命中（`prompt_tokens_details.cached_tokens`，或 DeepSeek 的
-`prompt_cache_hit_tokens`）时，记录中会带上 `tokens.cached`、`tokens.cachedCalls` 和
-`tokens.cacheHitRate`；`None` 表示供应商没有上报该字段，`0` 表示明确没有命中。记录写入客户端
-SQLite 的 `run_metrics` 表，并追加到 `runs/metrics/run-metrics.jsonl`；Web UI 同时提供
-`/api/metrics/runs`、`/api/metrics/summary`、`/api/runs/{runId}/metrics` 和
-`/api/metrics/export.csv`。
-
-打开 `http://127.0.0.1:8080/comparison` 可按协议 / 场景查看成功率、平均 token（含缓存 token
-和缓存命中率）、模型与总耗时、P95 和审批等待时间。页面读取的就是这些持久化记录。
-
-协议是进程级选择，因此基准脚本会为每种协议分别拉起一套 demo，跑同一组场景，在固定延迟
-（默认 0.3 秒）后自动通过人工审批 gate，最后把 `metrics.json`、`metrics.jsonl`、`summary.csv`、
-`summary.json` 和 `report.html` 写到 `runs/benchmarks/<timestamp>/`：
-
-```bash
-# 用真实模型做 token / 耗时 / 准确率对比
-uv run python -m demo.benchmark --model-mode live --scenarios information,target --repeats 3
-
-# 一次快速离线 smoke（脚本模型不上报 token，因此 token 为 N/A）
-uv run python -m demo.benchmark --protocols a2a --scenarios information --repeats 1
-```
-
-离线模式仍可对比耗时和准确率；token 因 scripted 模型没有 usage 而显示为 `N/A`。人工审批时间单独
-统计，不计入模型/协议耗时对比。
-
-## 5. 集成边界
-
-| OSS 侧 | 网管侧 |
-| --- | --- |
-| 接入 A2A-T 客户端，由 SDK 提供协议能力 | 保留现有网管的评估、下发与报告能力 |
-| 提供决策智能体：接受 / 拒绝 / 反提议 | 把样例工具替换为真实网管接口 |
-| 保留自有策略、审批与审计 | 保留协商策略与任务存储 |
-
-参考实现中，OSS 侧使用 ADK 决策智能体，网管侧使用 LangGraph 执行；它们只是选型，不影响上述系统间交互。
-
-## 6. 关键特性
-
-| 特性 | 说明 |
-| --- | --- |
-| 可审计 | 每次提议、决策、下发与报告都有记录 |
-| 模型无关 | 离线可复现；在线模型只影响决策与规划 |
-| 可替换 | 工具与策略可替换为真实网管实现 |
-
-## 7. 技术资料
-
-协议细节、实现结构、配置、测试与生产化注意事项见[技术指南](TECHNICAL-zh.md)。
-现场联调前请先读[现场注意](FIELD-NOTES-zh.md)（LLM 延迟、意图默认、token 统计）。
+单元测试通过 `tests/support/` 下的 test-only double 替换模型与 SDK 结构化调用；集成与验收测试
+使用配置的 live 端点与真机网管。样例不在 CI 中运行，本地全量套件是唯一自动化门禁。
