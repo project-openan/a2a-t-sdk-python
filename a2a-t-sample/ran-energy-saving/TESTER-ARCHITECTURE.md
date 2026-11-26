@@ -594,6 +594,9 @@ flowchart TB
 | D21 | `warning` / `final=recorded` 是否让 item 待定 | 保持通过 / 待定 / 失败 | `warning` 与“有预期终态但未观察到”的 `final` 记 `partial`；无终态预期的纯 A2A `recorded` 不算待定 | 已对齐（2026-11-25） |
 | D22 | 分段时段的语义等价 | 结构逐项比较 / 先合并同速率相邻段 | 先合并同速率、相邻/重叠的时段，再比较；差异列使用同一套归一化结果 | 已对齐（2026-11-25） |
 | D23 | 非通过行的判定理由 | 只看备注 / 只看错误列 / 汇总结果后单列 | 仲裁格式新增「判定原因」列，`partial` / `failed` / `error` 行不得为空 | 已对齐（2026-11-25） |
+| D24 | 模型把字符串字段写成对象时怎么处理 | 直接失败 / 解析层窄归一 / 放宽共享模型 | 解析层窄归一：`confirmed_intent` / `feasibility_summary` 只有一个字符串值时取出该字符串；`filled_params` 同名键值不同则不归一，按错误报出 | 已对齐（2026-11-26） |
+| D25 | pure A2A 是否复用 A2A-T 的拦截后补充请求 | 复用 / 不复用 / 新增 pure 本地拦截门 | 不复用：`blocked_followup` 是 A2A-T 发送前门禁的补充请求；pure A2A 发原始请求，由网管的重叠反问和用例记录的 3 轮答复完成协商 | 已对齐（2026-11-26） |
+| D26 | NMS 500 `Agent SSE lock already held` 是否重试 | 有界重试 / 只记录 / 固定等待 | 只记录：客户端在 `INPUT_REQUIRED` 后已关闭自己的 SSE 响应，剩余串行化在网管侧；错误文案明确标注不重试 | 已对齐（2026-11-26） |
 
 **D5/D19 撤销说明（2026-11-24）**：决策依据（通用原则 + 用例 `client_conditions`）本来就会完整写入
 决策 prompt，grounding 也直接使用同一份依据；条件检查器是用第二个模型回答同一份依据里的问题，
@@ -609,3 +612,11 @@ flowchart TB
 观察：run `finished`、无 error，远端 Task 仍释放。意图比较先把同速率、相邻/重叠时段合并，避免
 `08:00-11:59 + 12:00-17:59` 与 `08:00-17:59` 被逐项索引配对成“缺失 + 值变更”；未判定残余、
 轮次偏差、未观察到的预期终态都落 `partial`，并在导出「判定原因」里写明具体阶段或 run 错误。
+
+**D24–D26 说明（2026-11-26）**：run `cf17307c` 的 pure A2A 决策在 `confirmed_intent` 上返回了对象，
+pydantic 校验失败但解析器只报“no parseable JSON”。现在 `ValidationError` 的字段/类型会进入日志、
+重试 prompt 和最终 `DecisionProviderError`；解析层对“只有一个字符串值”的 `confirmed_intent` /
+`feasibility_summary` 做窄归一，`filled_params` 同名键值不同则不归一。pure A2A 不套用 A2A-T 的
+`blocked_followup`：用例 28 的 A2A 期望 3 轮答复，正是从原始重叠请求出发的对话。NMS 500
+`Agent SSE lock already held` 是网管侧串行化，客户端已关闭自己的 SSE 响应，决策为不重试，只在错误
+文案中标注。

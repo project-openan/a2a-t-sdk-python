@@ -22,6 +22,7 @@ import sqlite3
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Protocol, runtime_checkable
 
@@ -34,6 +35,7 @@ from google.adk.sessions.base_session_service import BaseSessionService
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.genai import types
+from pydantic import ValidationError
 from shared.adk_tracing import TracePlugin
 from shared.json_text import iter_json_objects
 from shared.model_factory import build_traced_adk_model
@@ -122,6 +124,29 @@ DECISION_RETRY_PROMPT = (
     "Return exactly one JSON object with the decision fields and nothing else: no reasoning, "
     "markdown fences, or prose outside the JSON."
 )
+
+#: String fields of a decision. A model sometimes copies ``filled_params`` into one of them; the
+#: parser unwraps a single-value object instead of discarding an otherwise valid decision.
+_STRING_DECISION_FIELDS: Final[tuple[str, ...]] = (
+    "confirmed_intent",
+    "feasibility_summary",
+)
+
+
+def _decision_retry_prompt(problem: str = "") -> str:
+    """Build the corrective turn, naming the invalid field when the parser knows it.
+
+    A generic "no valid JSON" retry is useless for a model that did return JSON but put an object
+    in a string field: the model believes it is correct and repeats the same message. Naming the
+    field and its expected type is what makes the retry actionable.
+    """
+    detail = f" The invalid part was: {problem}." if problem else ""
+    return (
+        f"{DECISION_RETRY_PROMPT}{detail} confirmed_intent, feasibility_summary and "
+        "counter_proposal are JSON strings; filled_params and counter_params are JSON objects "
+        "mapping exact Task-T parameter names to strings."
+    )
+
 
 #: Corrective user turn sent once when a decision contradicts itself (for example ``reject`` with
 #: a filled plan). The model must choose one action; the provider never guesses which field it meant.
@@ -326,9 +351,13 @@ def build_decision_prompt(
         "negotiation did not change. On a feasibility proposal, accept the server's feasible "
         "alternative; the flow renders the agreed value itself.\n"
         "- A2A-T has no counter performative. On a target proposal, return accept with the corrected "
-        "target in confirmed_intent and filled_params.guaranteedThroughputTarget. On a feasibility "
-        "proposal, return accept with the accepted target in filled_params.guaranteedThroughputTarget "
-        "and feasibility_summary. Reject only when the request cannot be clarified or accepted.\n"
+        "target in confirmed_intent (a string) and the same target in "
+        "filled_params.guaranteedThroughputTarget. On a feasibility proposal, return accept with "
+        "the accepted target in filled_params.guaranteedThroughputTarget and feasibility_summary "
+        "(a string). Reject only when the request cannot be clarified or accepted.\n"
+        "- confirmed_intent, feasibility_summary and counter_proposal are JSON strings. "
+        "filled_params and counter_params are JSON objects mapping exact Task-T parameter names to "
+        "strings. Never put an object in a string field.\n"
         f"{pure_rule}"
         "- If the proposal raises several problems (for example a target overlap and a feasibility "
         "objection), answer all of them in this one decision; leave only problems the proposal "
@@ -656,15 +685,16 @@ class AdkDecisionProvider:
         if final_event is None:
             return self._fallback_or_raise("The ADK agent produced no final response.")
 
-        decision = _decision_from_event(final_event)
+        parsed = _decision_from_event(final_event)
+        decision = parsed.decision
         problem = (
             decision_consistency_problem(decision) if decision is not None else None
         )
         if decision is not None and problem is None:
             return decision
         if decision is None:
-            _log_unparseable_decision("decision model", final_event)
-            retry_prompt = DECISION_RETRY_PROMPT
+            _log_unparseable_decision("decision model", final_event, parsed.problem)
+            retry_prompt = _decision_retry_prompt(parsed.problem)
         else:
             _LOGGER.warning("decision model returned a self-contradictory decision: %s", problem)
             retry_prompt = DECISION_CONSISTENCY_PROMPT
@@ -673,15 +703,19 @@ class AdkDecisionProvider:
         # gateway may drop ``response_format``, and a model can slip between action and fields after
         # reasoning correctly. If the retry is still unusable, the caller gets the error.
         retry_event = await self._run_turn(session_id, retry_prompt)
+        retried_parsed = _DecisionParse(None)
         if retry_event is not None:
-            retried = _decision_from_event(retry_event)
+            retried_parsed = _decision_from_event(retry_event)
+            retried = retried_parsed.decision
             retried_problem = (
                 decision_consistency_problem(retried) if retried is not None else None
             )
             if retried is not None and retried_problem is None:
                 return retried
             if retried is None:
-                _log_unparseable_decision("decision retry", retry_event)
+                _log_unparseable_decision(
+                    "decision retry", retry_event, retried_parsed.problem
+                )
             else:
                 _LOGGER.warning(
                     "decision retry stayed self-contradictory: %s", retried_problem
@@ -691,7 +725,11 @@ class AdkDecisionProvider:
                 "The ADK agent produced a self-contradictory NegotiationDecision "
                 f"({problem})."
             )
-        return self._fallback_or_raise("The ADK agent produced no parseable NegotiationDecision.")
+        detail = retried_parsed.problem or parsed.problem
+        suffix = f" ({detail})" if detail else ""
+        return self._fallback_or_raise(
+            f"The ADK agent produced no parseable NegotiationDecision{suffix}."
+        )
 
     async def structure_answer(
         self,
@@ -735,11 +773,14 @@ class AdkDecisionProvider:
         )
         if final_event is None:
             return None
-        decision = _decision_from_event(final_event)
+        parsed = _decision_from_event(final_event)
+        decision = parsed.decision
         if decision is None:
-            retry_event = await self._run_turn(session_id, DECISION_RETRY_PROMPT)
+            retry_event = await self._run_turn(
+                session_id, _decision_retry_prompt(parsed.problem)
+            )
             if retry_event is not None:
-                decision = _decision_from_event(retry_event)
+                decision = _decision_from_event(retry_event).decision
         return _validated_manual_decision(propose, decision)
 
     async def _run_turn(self, session_id: str, text: str) -> AdkEvent | None:
@@ -798,11 +839,19 @@ def _is_tool_response(event: AdkEvent) -> bool:
     return any(part.function_response is not None for part in content.parts or ())
 
 
-def _log_unparseable_decision(label: str, event: AdkEvent) -> None:
-    """Log the raw model text of an unparseable decision (truncated for the log)."""
+def _log_unparseable_decision(label: str, event: AdkEvent, problem: str = "") -> None:
+    """Log why a model turn yielded no decision, plus its raw text (truncated).
+
+    The validation detail is the actionable part and must not be truncated: in the live run it
+    named ``confirmed_intent`` while the first 300 raw characters stopped before that field. Only
+    the raw copy is capped.
+    """
+    reason = f" ({problem})" if problem else ""
     raw = _event_text(event)
     if raw:
-        _LOGGER.warning("%s returned no parseable JSON: %s", label, raw[:300])
+        _LOGGER.warning("%s returned no usable NegotiationDecision%s: %s", label, reason, raw[:300])
+    else:
+        _LOGGER.warning("%s returned no usable NegotiationDecision%s", label, reason)
 
 
 def _event_text(event: AdkEvent) -> str:
@@ -843,36 +892,100 @@ def _validated_manual_decision(
     return decision
 
 
-def _decision_from_event(event: AdkEvent) -> NegotiationDecision | None:
-    """Read a ``NegotiationDecision`` from one ADK final event, ``None`` when absent."""
+@dataclass(frozen=True)
+class _DecisionParse:
+    """One model turn read as a decision, or the reason it could not be read."""
+
+    decision: NegotiationDecision | None
+    problem: str = ""
+
+
+def _decision_from_event(event: AdkEvent) -> _DecisionParse:
+    """Read a ``NegotiationDecision`` from one ADK final event.
+
+    ``problem`` explains a turn that carried a decision-shaped object the schema rejected (for
+    example a ``confirmed_intent`` object). It is kept so the retry prompt and the final error can
+    name the actual field instead of reporting a generic "no JSON".
+    """
     output = event.output
     if isinstance(output, NegotiationDecision):
-        return output
-    if isinstance(output, dict):
-        try:
-            return NegotiationDecision.model_validate(output)
-        except ValueError:
-            return None
+        return _DecisionParse(output)
+    if isinstance(output, Mapping):
+        return _parse_decision_payload(output)
     content = event.content
     if content is None:
-        return None
+        return _DecisionParse(None, "the final response carried no content")
+    problem = ""
     for part in content.parts or ():
         if not part.text:
             continue
         parsed = _parse_decision_json(part.text)
-        if parsed is not None:
+        if parsed.decision is not None:
             return parsed
-    return None
+        problem = parsed.problem or problem
+    return _DecisionParse(None, problem)
 
 
-def _parse_decision_json(text: str) -> NegotiationDecision | None:
+def _parse_decision_json(text: str) -> _DecisionParse:
     """Parse one JSON decision text, tolerating code fences and surrounding prose."""
+    problem = ""
     for payload, _raw in iter_json_objects(text):
-        try:
-            return NegotiationDecision.model_validate(payload)
-        except (ValueError, TypeError):
+        parsed = _parse_decision_payload(payload)
+        if parsed.decision is not None:
+            return parsed
+        problem = parsed.problem or problem
+    return _DecisionParse(None, problem)
+
+
+def _parse_decision_payload(payload: Mapping[str, object]) -> _DecisionParse:
+    """Validate one object after the narrow shape tolerance of :func:`_normalized_payload`."""
+    try:
+        return _DecisionParse(
+            NegotiationDecision.model_validate(_normalized_payload(payload))
+        )
+    except ValidationError as exc:
+        return _DecisionParse(None, _validation_problem(exc))
+
+
+def _normalized_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Unwrap a single-value object in a string field, when doing so is unambiguous.
+
+    A live model sometimes copies ``filled_params`` into ``confirmed_intent`` /
+    ``feasibility_summary``. When the object has exactly one string value, that value *is* the
+    string the schema asked for. If ``filled_params`` carries the same key with a different value,
+    the turn states two different plans; it is left invalid so the error names the field instead of
+    silently choosing one.
+    """
+    normalized = dict(payload)
+    filled = payload.get("filled_params")
+    filled_map = filled if isinstance(filled, Mapping) else {}
+    for field in _STRING_DECISION_FIELDS:
+        value = normalized.get(field)
+        if not isinstance(value, Mapping) or len(value) != 1:
             continue
-    return None
+        key, only = next(iter(value.items()))
+        if not isinstance(only, str) or not only.strip():
+            continue
+        if key in filled_map:
+            existing = filled_map[key]
+            if not isinstance(existing, str) or existing.strip() != only.strip():
+                continue
+        normalized[field] = only.strip()
+    return normalized
+
+
+def _validation_problem(exc: ValidationError) -> str:
+    """Render the first few validation errors as field + message + actual type."""
+    errors = exc.errors()
+    if not errors:
+        return str(exc)
+    parts: list[str] = []
+    for error in errors[:3]:
+        location = ".".join(str(part) for part in error.get("loc", ())) or "<root>"
+        message = str(error.get("msg") or "invalid value")
+        value = error.get("input")
+        parts.append(f"field '{location}': {message} (got {type(value).__name__})")
+    return "; ".join(parts)
 
 
 class ScriptedDecisionProvider:

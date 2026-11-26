@@ -138,6 +138,13 @@ class NmsProtocolError(NmsError):
 #: deduplicates retries does not apply the answer twice.
 STREAM_CONFLICT_RETRY_DELAYS: Final[tuple[float, ...]] = (2.0, 4.0)
 
+#: The vendor's HTTP 500 body when a context still has an SSE stream registered: ``Agent SSE lock
+#: already held``. The SSE transport closes its own response as soon as the pure flow sees
+#: ``INPUT_REQUIRED`` (``NmsSseTransport.send``), so there is nothing left for the client to close;
+#: the remaining serialization is vendor-side. Deliberately not retried (2026-11-26 decision): a
+#: retry could apply the same answer twice if the vendor processed it before releasing the lock.
+SSE_LOCK_ERROR_MARKER: Final[str] = "agent sse lock"
+
 
 def is_stream_conflict(exc: BaseException) -> bool:
     """Return whether one NMS error is the transient per-Task stream conflict."""
@@ -145,6 +152,13 @@ def is_stream_conflict(exc: BaseException) -> bool:
         return False
     message = str(exc)
     return "TASK_STREAM_CONFLICT" in message or "active stream" in message.lower()
+
+
+def _sse_lock_note(body: str) -> str:
+    """Return the vendor-lock explanation appended to an NMS error, or an empty string."""
+    if SSE_LOCK_ERROR_MARKER in body.lower():
+        return " (NMS-side SSE lock still held; the client does not retry)"
+    return ""
 
 
 def _http_error_detail(exc: httpx.HTTPError) -> str:
@@ -456,7 +470,8 @@ class NmsClient:
                             elapsed_seconds=time.monotonic() - started,
                         )
                         raise NmsProtocolError(
-                            f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}",
+                            f"NMS A2A request returned HTTP {response.status_code}: "
+                            f"{_excerpt(body)}{_sse_lock_note(body)}",
                             http_status=response.status_code,
                             retry_after=_retry_after_seconds(response),
                         )
@@ -591,7 +606,10 @@ class NmsClient:
                 url=url,
                 elapsed_seconds=time.monotonic() - started,
             )
-            message = f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}"
+            message = (
+                f"NMS A2A request returned HTTP {response.status_code}: {_excerpt(body)}"
+                f"{_sse_lock_note(body)}"
+            )
             self.record_error(
                 "NmsProtocolError",
                 message,

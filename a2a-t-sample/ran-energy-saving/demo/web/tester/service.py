@@ -1289,7 +1289,10 @@ class EvalBatchManager:
         #: Whether the original request was not intercepted, so the replacement must not run.
         interception_missed = False
         if item.protocol == PROTOCOL_A2A:
-            # OSP defines no SDK stages for pure A2A; only the runtime chain applies.
+            # OSP defines no SDK stages for pure A2A; only the runtime chain applies. The
+            # blocked_followup replacement belongs to the A2A-T pre-send gate: a pure request is
+            # free text with no Task-T to intercept, and the case's A2A dialogue expects the
+            # vendor's own overlap question before the client answers.
             stages = [stage for stage in stages if stage not in SDK_STAGE_ORDER]
         else:
             blocked_followup = is_blocked_case(case) and has_followup(case)

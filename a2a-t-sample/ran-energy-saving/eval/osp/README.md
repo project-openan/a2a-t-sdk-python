@@ -154,7 +154,8 @@ A2A 与 A2A-T 的预期结构化意图在这 100 条里完全相同，因此只�
 
 只有 `expect.protocols.a2a-t.validate: blocked` 的用例可以带这个字段。`input` 是拦截后由操作员
 补充/替换的请求原文；用例现有的 `expect.intent`、`task_t`、`negotiation` 描述的就是这条请求，
-不需要再写一份完整期望。
+不需要再写一份完整期望。**纯 A2A 不使用该字段**：pure 没有发送前 Task-T 校验，`expect.protocols.a2a`
+描述的是从原 `user_input` 出发的对话（例如用例 28 的重叠反问和 3 轮答复）。
 
 **全流程批次：一次 run，两段 gate。** A2A-T 的发送前校验属于每次 run 的必经阶段，补充请求是
 同一次 run 内的修正输入，不是第二次请求：

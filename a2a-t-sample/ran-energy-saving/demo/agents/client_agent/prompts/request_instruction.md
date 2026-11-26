@@ -93,9 +93,13 @@ after it:
 ```
 
 `action` is one of `accept`, `counter`, `reject`, `abort`. `counter` is only for a standard-A2A
-free-text answer; A2A-T negotiations always use `accept`, `reject` or `abort`. Include only the
-fields that apply to the action; **omit** the others. Never pass the string `"None"` for an object or list field — omit
-it instead.
+free-text answer; A2A-T negotiations always use `accept`, `reject` or `abort`.
+
+`rationale`, `counter_proposal`, `confirmed_intent` and `feasibility_summary` are JSON **strings**.
+`filled_params` and `counter_params` are JSON **objects** mapping exact Task-T parameter names to
+strings. Never put an object in a string field: `confirmed_intent` is the agreed target text, not a
+copy of `filled_params`. Include only the fields that apply to the action; **omit** the others.
+Never pass the string `"None"` for an object or list field — omit it instead.
 
 ## Output rules
 

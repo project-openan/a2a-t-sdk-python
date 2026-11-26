@@ -34,6 +34,7 @@ from protocol.decision_provider import (
     ManualDecisionProvider,
     NegotiationDecisionProvider,
     ScriptedDecisionProvider,
+    _decision_retry_prompt,
     build_decision_prompt,
     build_manual_answer_prompt,
     sweep_stale_sessions,
@@ -104,6 +105,24 @@ def test_build_decision_prompt_asks_for_every_problem_the_proposal_raises() -> N
     )
 
     assert "answer all of them in this one decision" in prompt
+
+
+def test_build_decision_prompt_states_the_string_and_object_fields() -> None:
+    prompt = build_decision_prompt(_view("target"), _session())
+
+    assert "confirmed_intent (a string)" in prompt
+    assert "filled_params and counter_params are JSON objects" in prompt
+    assert "Never put an object in a string field" in prompt
+
+
+def test_the_retry_prompt_names_the_invalid_field_and_expected_type() -> None:
+    prompt = _decision_retry_prompt(
+        "field 'confirmed_intent': Input should be a valid string (got dict)"
+    )
+
+    assert "confirmed_intent" in prompt
+    assert "valid string" in prompt
+    assert "are JSON strings" in prompt
 
 
 def test_build_decision_prompt_carries_the_conversation_context() -> None:
@@ -672,6 +691,49 @@ async def test_adk_provider_retries_once_when_the_model_returns_only_prose() -> 
 
     assert decision.action == "counter"
     assert decision.rationale == "Use a non-overlapping target."
+
+
+async def test_adk_provider_unwraps_a_single_value_confirmed_intent_object() -> None:
+    """The reported live shape: the model copied filled_params into a string field."""
+    target = "{08:00-11:00,10Mbps},{11:00-18:00,5Mbps}"
+    payload = json.dumps(
+        {
+            "action": "accept",
+            "rationale": "Split the overlapping windows at the stated boundary.",
+            "filled_params": {"guaranteedThroughputTarget": target},
+            "confirmed_intent": {"guaranteedThroughputTarget": target},
+        }
+    )
+    provider = AdkDecisionProvider(agent_factory=build_client_agent, model=_scripted_model(payload))
+
+    decision = await provider.respond(_view("target"), _session())
+
+    assert decision.action == "accept"
+    assert decision.confirmed_intent == target
+
+
+async def test_adk_provider_rejects_a_confirmed_intent_object_that_conflicts_with_filled_params() -> None:
+    """Two different stated plans must not be silently collapsed into one."""
+    payload = json.dumps(
+        {
+            "action": "accept",
+            "rationale": "Split the overlapping windows.",
+            "filled_params": {"guaranteedThroughputTarget": "{08:00-11:00,10Mbps}"},
+            "confirmed_intent": {"guaranteedThroughputTarget": "{08:00-11:00,5Mbps}"},
+        }
+    )
+    provider = AdkDecisionProvider(
+        agent_factory=build_client_agent,
+        model=_scripted_model(payload, payload),
+    )
+
+    with pytest.raises(DecisionProviderError) as raised:
+        await provider.respond(_view("target"), _session())
+
+    message = str(raised.value)
+    assert "confirmed_intent" in message
+    assert "valid string" in message
+    assert "got dict" in message
 
 
 async def test_adk_provider_uses_the_offline_fallback_when_the_model_returns_no_decision() -> None:

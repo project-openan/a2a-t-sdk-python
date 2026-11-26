@@ -26,6 +26,7 @@ from protocol.nms_client import (
     NmsSseTransport,
     NmsWebhookTransport,
     _frame_to_event,
+    _sse_lock_note,
 )
 from shared.config import SampleConfig
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
@@ -1698,6 +1699,15 @@ async def test_an_inbound_push_is_recorded_in_the_wire_log(tmp_path: Path) -> No
     assert records[-1]["source"] == "webhook"
     assert records[-1]["body"]["statusUpdate"]["taskId"] == "task-1"
     await client.aclose()
+
+
+def test_an_sse_lock_error_is_recorded_as_a_vendor_side_condition() -> None:
+    """The 500 SSE lock is vendor-side; the client records why it does not retry."""
+    note = _sse_lock_note('{"message":"Agent SSE lock already held"}')
+
+    assert "NMS-side SSE lock" in note
+    assert "does not retry" in note
+    assert _sse_lock_note('{"message":"boom"}') == ""
 
 
 class _ConflictThenReplyClient:
