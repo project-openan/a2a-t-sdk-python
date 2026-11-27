@@ -16,6 +16,12 @@ TRACE_ID = "0123456789abcdef0123456789abcdef"
 RUN_ID = "run-1"
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the process-wide 429 cooldown out of every test."""
+    monkeypatch.setattr(langfuse_columns, "_cooldown_until", 0.0)
+
+
 def _config() -> Config:
     return Config(host="http://langfuse", public_key="pk", secret_key="sk", host_source="env")
 
@@ -184,6 +190,85 @@ def test_a_missing_runs_dir_becomes_a_note_not_a_crash(tmp_path: Path) -> None:
             "Langfuse 指标未取到：导出时未提供 run 目录",
         )
     }
+
+
+def test_a_settled_cache_serves_the_cells_without_a_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+
+    def fake_export(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append((args, kwargs))
+        return {"metrics": _metrics()}
+
+    monkeypatch.setattr(langfuse_columns, "export_full", fake_export)
+    out_root = tmp_path / "run-1" / "langfuse-export"
+
+    first = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=out_root, settled=True
+    )
+    second = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=out_root
+    )
+
+    assert first == second == ([1261, 630, 2035, 3296, "是", 4200, 2, 9000, 1], "")
+    assert len(calls) == 1
+
+
+def test_an_unsettled_cache_is_refetched_and_upgraded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+
+    def fake_export(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append((args, kwargs))
+        metrics = _metrics()
+        metrics["tokens"] = {"input": len(calls), "output": 1, "total": len(calls) + 1}
+        return {"metrics": metrics}
+
+    monkeypatch.setattr(langfuse_columns, "export_full", fake_export)
+    out_root = tmp_path / "run-1" / "langfuse-export"
+
+    early, _ = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=out_root, settled=False
+    )
+    refreshed, note = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=out_root
+    )
+    cached, _ = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=out_root
+    )
+
+    assert early[0] == 1
+    assert refreshed[0] == 2
+    assert note == ""
+    assert cached == refreshed
+    assert len(calls) == 2
+
+
+def test_a_429_starts_a_shared_cooldown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[object] = []
+
+    def rate_limited(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append((args, kwargs))
+        raise RuntimeError("HTTP 429 Too Many Requests")
+
+    monkeypatch.setattr(langfuse_columns, "export_full", rate_limited)
+
+    _values, note = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=tmp_path / "a"
+    )
+    assert "429" in note
+    other_trace = "fedcba9876543210fedcba9876543210"
+    values, cooled = build_trace_columns(
+        _config(), run_id="run-2", trace_id=other_trace, out_root=tmp_path / "b"
+    )
+
+    assert values == [""] * len(TRACE_COLUMN_HEADERS)
+    assert "冷却中" in cooled
+    assert len(calls) == 1
 
 
 def test_a_slow_trace_times_out_without_failing_the_batch(

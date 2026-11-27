@@ -5,17 +5,36 @@ fetches the trace observations and derives the same metrics the observe console 
 export is fail-open — a missing trace id, an unavailable project, a network error or an
 unreadable metrics document yields nine empty cells plus one note on the report row, never an
 exception that would abort the workbook.
+
+A settled result is cached under ``runs/<runId>/langfuse-export/metrics.json`` so a second
+export (and the tester's background prefetch) never re-spends Langfuse quota on the same run.
+A fetch taken too soon after the run finished is cached as *unsettled* and refreshed on the
+next export; a 429 starts a process-wide cooldown instead of burning the per-trace budget.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import threading
+import time
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from langfuse_export.cli import export_full
 from langfuse_export.config import Config
+
+#: File name of the per-run metrics cache inside ``runs/<runId>/langfuse-export``.
+METRICS_CACHE_FILENAME: Final[str] = "metrics.json"
+
+#: Seconds a Langfuse 429 pauses every fetch (the public API admits 30 requests/minute).
+RATE_LIMIT_COOLDOWN_SECONDS: Final[float] = 60.0
+
+#: Wall-clock monotonic deadline of the shared 429 cooldown.
+_cooldown_until: float = 0.0
+_cooldown_lock: Final = threading.Lock()
 
 #: The nine columns appended after ``备注`` in the arbitration worksheet.
 TRACE_COLUMN_HEADERS: Final[tuple[str, ...]] = (
@@ -57,12 +76,17 @@ def build_trace_columns(
     run_id: str,
     trace_id: str,
     out_root: Path,
+    settled: bool = True,
 ) -> tuple[list[object], str]:
     """Return the nine Langfuse cells of one run plus an explanatory note.
 
     ``trace_id`` is the OTel/Langfuse trace id (``run.langfuse["traceId"]``), not the
     vendor-facing trace id of the first report column. A failure returns nine empty cells and
     the reason to append to the row's ``备注``; this function never raises.
+
+    A settled cache under ``out_root`` is served without a request. ``settled`` marks whether
+    the fetch happened long enough after the run finished for Langfuse to hold every span; an
+    unsettled result is cached but never served, so the next export refreshes it.
     """
     if config is None:
         return list(_EMPTY_ROW), _failure("未配置 Langfuse 凭据")
@@ -72,6 +96,12 @@ def build_trace_columns(
         return list(_EMPTY_ROW), _failure("Langfuse trace id 格式无效")
     if not run_id:
         return list(_EMPTY_ROW), _failure("缺少 run id，无法定位 Langfuse 导出目录")
+    cached = _read_cache(out_root, trace_id)
+    if cached is not None:
+        return cached
+    remaining = _cooldown_remaining()
+    if remaining > 0:
+        return list(_EMPTY_ROW), _failure(f"Langfuse 限流冷却中（剩余 {remaining} 秒）")
     try:
         result = export_full(
             config,
@@ -82,13 +112,86 @@ def build_trace_columns(
             expand_metadata=["detail"],
         )
     except Exception as exc:  # noqa: BLE001 - a report export must never fail on observability
-        return list(_EMPTY_ROW), _failure(f"{type(exc).__name__}: {exc}")
+        note = _failure(f"{type(exc).__name__}: {exc}")
+        _note_rate_limit(note)
+        return list(_EMPTY_ROW), note
     metrics = result.get("metrics") if isinstance(result, Mapping) else None
     if not isinstance(metrics, Mapping):
         warnings = result.get("warnings") if isinstance(result, Mapping) else None
         detail = "；".join(str(item) for item in warnings) if isinstance(warnings, list) else ""
-        return list(_EMPTY_ROW), _failure(detail or "导出结果缺少 metrics")
+        note = _failure(detail or "导出结果缺少 metrics")
+        _note_rate_limit(note)
+        return list(_EMPTY_ROW), note
+    _write_cache(out_root, trace_id, run_id, metrics, settled=settled)
     return _values(metrics), ""
+
+
+def _cache_path(out_root: Path) -> Path:
+    """Return the metrics cache file of one run."""
+    return Path(out_root) / METRICS_CACHE_FILENAME
+
+
+def _read_cache(out_root: Path, trace_id: str) -> tuple[list[object], str] | None:
+    """Return the cached cells when a settled cache belongs to this trace, else ``None``."""
+    path = _cache_path(out_root)
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, Mapping):
+        return None
+    if str(document.get("traceId") or "") != trace_id or document.get("settled") is not True:
+        return None
+    metrics = document.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return None
+    return _values(metrics), ""
+
+
+def _write_cache(
+    out_root: Path,
+    trace_id: str,
+    run_id: str,
+    metrics: Mapping[str, Any],
+    *,
+    settled: bool,
+) -> None:
+    """Write one run's metrics cache atomically; a cache failure never fails the export."""
+    document = {
+        "traceId": trace_id,
+        "runId": run_id,
+        "settled": settled,
+        "fetchedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+        "metrics": metrics,
+    }
+    path = _cache_path(out_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(document, ensure_ascii=False, default=str), encoding="utf-8"
+        )
+        temporary.replace(path)
+    except OSError:
+        # The cache is an optimization; an unwritable run directory must not fail the export.
+        return
+
+
+def _cooldown_remaining() -> int:
+    """Return the whole seconds left of the shared 429 cooldown, or ``0``."""
+    with _cooldown_lock:
+        remaining = _cooldown_until - time.monotonic()
+    return max(0, int(remaining))
+
+
+def _note_rate_limit(note: str) -> None:
+    """Start the shared cooldown when a failure is a Langfuse 429."""
+    lowered = note.lower()
+    if "429" not in lowered and "rate limit" not in lowered and "rate_limit" not in lowered:
+        return
+    global _cooldown_until
+    with _cooldown_lock:
+        _cooldown_until = time.monotonic() + RATE_LIMIT_COOLDOWN_SECONDS
 
 
 def _values(metrics: Mapping[str, Any]) -> list[object]:

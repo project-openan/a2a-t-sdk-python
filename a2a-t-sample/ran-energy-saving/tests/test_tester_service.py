@@ -48,6 +48,7 @@ from demo.web.tester.service import (
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
 from eval.osp.followup import followup_input, is_blocked_case
 from eval.osp.runner import load_cases
+from langfuse_export.config import Config
 from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import RunState
@@ -285,6 +286,11 @@ def _gate_traces(run: RunState, mode: str) -> list[dict[str, object]]:
         traces.append(rendered(correction, 2))
         traces.append(passed if mode == "block_then_pass" else blocked)
     return traces
+
+
+def _langfuse_config() -> Config:
+    """Return a dummy Langfuse config: the prefetch only passes it through."""
+    return Config(host="http://langfuse", public_key="pk", secret_key="sk", host_source="env")
 
 
 def _manager(
@@ -4214,3 +4220,91 @@ def test_an_old_batch_without_a_langfuse_trace_id_loads_as_empty(tmp_path: Path)
     reloaded = _manager(tmp_path, _FakeRuns(_finish))
     item = reloaded.get(batch_id)["items"][0]
     assert item["langfuseTraceId"] == ""
+
+
+async def test_a_finished_run_prefetches_its_langfuse_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str, Path, bool]] = []
+
+    def fake_build(
+        config: Any,
+        *,
+        run_id: str,
+        trace_id: str,
+        out_root: Path,
+        settled: bool = True,
+    ) -> tuple[list[object], str]:
+        calls.append((run_id, trace_id, out_root, settled))
+        return [], ""
+
+    monkeypatch.setattr(service, "build_trace_columns", fake_build)
+    monkeypatch.setattr(service, "TRACE_PREFETCH_DELAY_SECONDS", 0.0)
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    manager._trace_config = _langfuse_config()
+    trace_id = "0123456789abcdef0123456789abcdef"
+    run = SimpleNamespace(
+        run_id="run-1",
+        finished_at=time.monotonic() - service.TRACE_SETTLE_SECONDS - 1,
+        langfuse={"traceId": trace_id},
+    )
+
+    manager._schedule_trace_prefetch(run)  # type: ignore[arg-type]
+    await asyncio.gather(*list(manager._trace_prefetch_tasks))
+
+    assert calls == [
+        ("run-1", trace_id, tmp_path / "run-1" / "langfuse-export", True)
+    ]
+
+
+async def test_a_run_fetched_too_early_is_cached_unsettled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[bool] = []
+
+    def fake_build(
+        config: Any,
+        *,
+        run_id: str,
+        trace_id: str,
+        out_root: Path,
+        settled: bool = True,
+    ) -> tuple[list[object], str]:
+        calls.append(settled)
+        return [], ""
+
+    monkeypatch.setattr(service, "build_trace_columns", fake_build)
+    monkeypatch.setattr(service, "TRACE_PREFETCH_DELAY_SECONDS", 0.0)
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    manager._trace_config = _langfuse_config()
+    run = SimpleNamespace(
+        run_id="run-1",
+        finished_at=time.monotonic(),
+        langfuse={"traceId": "0123456789abcdef0123456789abcdef"},
+    )
+
+    manager._schedule_trace_prefetch(run)  # type: ignore[arg-type]
+    await asyncio.gather(*list(manager._trace_prefetch_tasks))
+
+    assert calls == [False]
+
+
+async def test_a_run_without_langfuse_credentials_is_not_prefetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        service, "build_trace_columns", lambda *args, **kwargs: calls.append(args)
+    )
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    run = SimpleNamespace(
+        run_id="run-1",
+        finished_at=time.monotonic(),
+        langfuse={"traceId": "0123456789abcdef0123456789abcdef"},
+    )
+
+    manager._schedule_trace_prefetch(run)  # type: ignore[arg-type]
+    await asyncio.gather(*list(manager._trace_prefetch_tasks))
+
+    assert calls == []
+    assert manager._trace_prefetch_tasks == set()

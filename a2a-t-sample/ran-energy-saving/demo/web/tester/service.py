@@ -67,6 +67,7 @@ from eval.osp.runner import (
 from eval.osp.runner import (
     STAGE_ORDER as SDK_STAGE_ORDER,
 )
+from langfuse_export.config import Config as LangfuseConfig
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import STATUS_FAILED, RunManager, RunState
 from protocol.run_metrics import build_run_metrics
@@ -88,8 +89,17 @@ from shared.trace import reset_task_sink, set_task_sink
 
 from demo.web.tester.decisions import pure_answers
 from demo.web.tester.export_view import build_answer, read_traceparent, verdict_reason
+from demo.web.tester.langfuse_columns import build_trace_columns
 
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
+
+#: Delay after a run finishes before its Langfuse columns are prefetched (OTel ingestion lag).
+TRACE_PREFETCH_DELAY_SECONDS: Final[float] = 5.0
+#: A fetch taken earlier than this after the run finished may miss late spans: it is cached but
+#: marked unsettled, so the next export refetches it.
+TRACE_SETTLE_SECONDS: Final[float] = 15.0
+#: Concurrent background Langfuse prefetches of one tester process.
+TRACE_PREFETCH_WORKERS: Final[int] = 2
 
 #: Every stage the console can run, in execution order.
 ALL_STAGES: Final[tuple[str, ...]] = (
@@ -560,13 +570,19 @@ class EvalBatchManager:
         judge: Any | None = None,
         judge_model_label: str = "",
         pure_hop: str = "",
+        trace_config: LangfuseConfig | None = None,
     ) -> None:
         self._runs = runs
         self._catalog = catalog
         self._protocol_defaults = protocol_defaults
         self._server_url = (server_url or "").rstrip("/")
         self._server_auth_token = server_auth_token
+        self._runs_dir = Path(runs_dir) if runs_dir is not None else None
         self._history_dir = (Path(runs_dir) / "tester") if runs_dir is not None else None
+        #: Langfuse credentials used to warm the per-run metrics cache after a run finishes.
+        self._trace_config = trace_config
+        self._trace_prefetch_tasks: set[asyncio.Task[None]] = set()
+        self._trace_prefetch_slots = asyncio.Semaphore(TRACE_PREFETCH_WORKERS)
         self._nms = nms
         self._language = language
         self._model_mode = model_mode
@@ -859,6 +875,11 @@ class EvalBatchManager:
 
     async def shutdown(self) -> None:
         """Cancel every running batch and release the Tasks its items still own."""
+        prefetches = [task for task in self._trace_prefetch_tasks if not task.done()]
+        for task in prefetches:
+            task.cancel()
+        if prefetches:
+            await asyncio.gather(*prefetches, return_exceptions=True)
         for batch_id, batch in list(self._batches.items()):
             if batch.status == BATCH_RUNNING:
                 await self.cancel(batch_id)
@@ -1500,6 +1521,9 @@ class EvalBatchManager:
             await self._collect_metrics(
                 item, run, case if interception_held else interception_case
             )
+            # Warm the Langfuse column cache off the item's critical path: the export then reads
+            # a local file instead of refetching every trace under a rate limit.
+            self._schedule_trace_prefetch(run)
             if interception_case is not None and not interception_held:
                 # The gate let the original request through, so the replacement never ran. The
                 # downstream evidence is recorded against the original, never judged against the
@@ -1523,6 +1547,48 @@ class EvalBatchManager:
                     item,
                     run,
                     reason=f"The tester ended observation at the '{batch.stop_after}' stage.",
+                )
+
+    def _schedule_trace_prefetch(self, run: RunState) -> None:
+        """Fetch one finished run's Langfuse columns in the background and cache them."""
+        if self._trace_config is None or self._runs_dir is None:
+            return
+        trace_id = _langfuse_trace_id(run)
+        if not trace_id:
+            return
+        task = asyncio.create_task(
+            self._prefetch_trace_columns(run.run_id, trace_id, run.finished_at),
+            name=f"tester-langfuse-prefetch-{run.run_id}",
+        )
+        self._trace_prefetch_tasks.add(task)
+        task.add_done_callback(self._trace_prefetch_tasks.discard)
+
+    async def _prefetch_trace_columns(
+        self, run_id: str, trace_id: str, finished_at: float | None
+    ) -> None:
+        """Wait for the ingestion lag, then fill the run's metrics cache under the shared slots.
+
+        ``settled`` tells the cache whether this fetch happened late enough after the run finished
+        to hold every span; an unsettled entry is never served, so the export refreshes it.
+        """
+        await asyncio.sleep(TRACE_PREFETCH_DELAY_SECONDS)
+        settled = finished_at is not None and time.monotonic() - finished_at >= TRACE_SETTLE_SECONDS
+        out_root = self._runs_dir / run_id / "langfuse-export" if self._runs_dir else None
+        if out_root is None:
+            return
+        async with self._trace_prefetch_slots:
+            try:
+                await asyncio.to_thread(
+                    build_trace_columns,
+                    self._trace_config,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    out_root=out_root,
+                    settled=settled,
+                )
+            except Exception:  # noqa: BLE001 - a cache warm-up must never disturb the batch
+                _LOGGER.debug(
+                    "tester Langfuse prefetch failed for run %s", run_id, exc_info=True
                 )
 
     async def _record_client_quality(

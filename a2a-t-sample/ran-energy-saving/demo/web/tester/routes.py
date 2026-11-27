@@ -52,9 +52,10 @@ CLIENT_COOKIE: Final[str] = "a2at_tester_client"
 #: Lifetime of the browser identity cookie, in seconds.
 CLIENT_COOKIE_MAX_AGE: Final[int] = 365 * 24 * 60 * 60
 
-#: Concurrent Langfuse trace exports of one report. One trace is a few HTTP calls plus a local
-#: metrics pass, so 8 keeps a 100-item batch around half a minute on a healthy network.
-TRACE_FETCH_WORKERS: Final[int] = 8
+#: Concurrent Langfuse trace exports of one report. Langfuse admits ~30 requests/minute and one
+#: trace is 4-6 HTTP calls, so two workers keep a batch under the limit; runs finished before the
+#: export are already served by their per-run cache.
+TRACE_FETCH_WORKERS: Final[int] = 2
 #: Per-trace budget of ``export_full`` (fetch observations + derive metrics + write the export
 #: dir). This is not the whole-batch budget; a slow batch may take several rounds of it.
 TRACE_FETCH_TIMEOUT_SECONDS: Final[float] = 30.0
@@ -103,6 +104,7 @@ def build_tester_routes(
         judge=judge,
         judge_model_label=judge_model_label,
         pure_hop=pure_hop,
+        trace_config=trace_config,
     )
 
     async def page(request: Request) -> Response:
