@@ -39,6 +39,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from eval.osp.catalog import CaseCatalog
+from langfuse_export.config import Config as LangfuseConfig
+from langfuse_export.config import ConfigError as LangfuseConfigError
+from langfuse_export.config import load_config as load_langfuse_config
 from protocol.client_runtime import MODE_AUTO
 from protocol.client_service import (
     STATUS_RUNNING,
@@ -429,6 +432,20 @@ def create_app(
     # The independent decision-quality judge is a separate model; an unconfigured process passes
     # None and the appendix records every semantic check as unjudged.
     tester_judge = build_judge_client(config) if config.judge_configured else None
+    # The tester report and the review console fetch Langfuse traces with the same credentials the
+    # client uses. The sample's `.env` is above the runs directory, so passing the loaded config
+    # avoids making them rediscover it (``langfuse_export`` only reads the cwd).
+    trace_config: LangfuseConfig | None = None
+    if config.langfuse_public_key and config.langfuse_secret_key:
+        try:
+            trace_config = load_langfuse_config(
+                host=config.langfuse_base_url,
+                public_key=config.langfuse_public_key,
+                secret_key=config.langfuse_secret_key,
+            )
+        except LangfuseConfigError as exc:
+            _LOGGER.warning("Langfuse trace fetch disabled: %s", exc)
+            trace_config = None
     tester_routes, tester_batches = build_tester_routes(
         runs=manager,
         protocols=advertised_protocols,
@@ -451,6 +468,7 @@ def create_app(
         judge=tester_judge,
         judge_model_label=config.judge_model if tester_judge is not None else "",
         pure_hop=config.pure_hop,
+        trace_config=trace_config,
     )
     run_console_routes = build_run_console_routes(
         runs=manager,
@@ -461,6 +479,7 @@ def create_app(
         language=config.language,
         run_dir=Path(config.run_dir) if config.run_dir else None,
     )
+
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
         del app

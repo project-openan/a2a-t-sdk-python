@@ -4167,3 +4167,50 @@ def test_an_old_v3_batch_loads_as_a_single_round(tmp_path: Path) -> None:
     assert snapshot["rounds"] == 1
     assert snapshot["currentRound"] == 1
     assert [item["round"] for item in snapshot["items"]] == [1]
+
+
+async def test_the_item_keeps_the_langfuse_trace_id_for_the_report(tmp_path: Path) -> None:
+    trace_id = "0123456789abcdef0123456789abcdef"
+
+    def builder(run: RunState) -> None:
+        _finish(run)
+        run.langfuse = {"enabled": True, "traceId": trace_id, "url": "https://lf/trace"}
+
+    manager = _manager(tmp_path, _FakeRuns(builder))
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        timeout_seconds=None,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    await _wait_status(manager, batch_id, "finished")
+
+    item = manager.get(batch_id)["items"][0]
+    assert item["langfuseTraceId"] == trace_id
+    # The first report column is the vendor-facing trace id, not the Langfuse one.
+    assert item["traceId"] != trace_id
+
+    persisted = json.loads((tmp_path / "tester" / f"{batch_id}.json").read_text(encoding="utf-8"))
+    assert persisted["items"][0]["langfuseTraceId"] == trace_id
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish))
+    assert reloaded.get(batch_id)["items"][0]["langfuseTraceId"] == trace_id
+
+
+def test_an_old_batch_without_a_langfuse_trace_id_loads_as_empty(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = _wide(
+        manager.create(case_ids=[1], protocols=[PROTOCOL_A2A_T], stop_after="validate")
+    )
+    batch_id = str(created["batchId"])
+    path = tmp_path / "tester" / f"{batch_id}.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    for item in document["items"]:
+        item.pop("langfuseTraceId", None)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    reloaded = _manager(tmp_path, _FakeRuns(_finish))
+    item = reloaded.get(batch_id)["items"][0]
+    assert item["langfuseTraceId"] == ""

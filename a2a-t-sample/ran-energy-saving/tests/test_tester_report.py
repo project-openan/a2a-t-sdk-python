@@ -46,6 +46,15 @@ REFERENCE_HEADERS: tuple[str, ...] = (
     "仲裁得分",
     "人工标记结果",
     "备注",
+    "输入token",
+    "输入缓存token",
+    "输出token",
+    "总token",
+    "是否触发协商",
+    "协商时延(ms)",
+    "协商轮次",
+    "端到端时延(ms)",
+    "客户端拦截次数",
 )
 
 
@@ -692,3 +701,67 @@ def test_a_batch_without_client_quality_keeps_the_four_existing_sheets() -> None
     workbook = load_workbook(BytesIO(write_report(_snapshot())))
 
     assert workbook.sheetnames == ["仲裁格式", "用例结果", "阶段差异", "汇总"]
+
+
+def _trace_sheet(
+    batch: dict[str, Any],
+    trace_columns: dict[str, tuple[list[object], str]],
+) -> tuple[list[tuple[object, ...]], Any]:
+    workbook = load_workbook(BytesIO(write_report(batch, trace_columns=trace_columns)))
+    return list(workbook["仲裁格式"].iter_rows(values_only=True)), workbook["仲裁格式"]
+
+
+def test_the_langfuse_columns_follow_the_note_column() -> None:
+    values: list[object] = [1261, 630, 2035, 3296, "是", 4200, 2, 9000, 1]
+    rows, sheet = _trace_sheet(_snapshot(), {"a" * 32: (values, "")})
+
+    row = rows[1]
+    assert len(row) == len(REFERENCE_HEADERS)
+    assert row[-9:] == tuple(values)
+    assert rows[0][-9:] == REFERENCE_HEADERS[-9:]
+    # The existing columns keep their letters and the note stays before the new block.
+    assert row[33] is None
+    assert sheet.cell(row=1, column=35).comment is not None
+    assert "Gross" in str(sheet.cell(row=1, column=35).comment.text)
+
+
+def test_a_trace_failure_joins_the_note_cell() -> None:
+    values: list[object] = [""] * 9
+    rows, __ = _trace_sheet(_snapshot(), {"a" * 32: (values, "Langfuse 指标未取到：boom")})
+
+    assert rows[1][33] == "Langfuse 指标未取到：boom"
+    assert rows[1][-9:] == (None,) * 9
+
+
+def test_a_run_without_trace_columns_keeps_blank_cells() -> None:
+    rows = _reference_sheet(_snapshot())
+
+    assert rows[1][-9:] == (None,) * 9
+    assert rows[1][33] is None
+
+
+def test_the_old_columns_are_unchanged_when_langfuse_is_not_requested() -> None:
+    plain = _reference_sheet(_snapshot())
+    rows, __ = _trace_sheet(_snapshot(), {"a" * 32: ([""] * 9, "")})
+
+    assert rows[1][:34] == plain[1][:34]
+
+
+def test_a_multi_round_report_keeps_round_second_and_langfuse_last() -> None:
+    values: list[object] = [1, 2, 3, 4, "否", "", 0, 5, 0]
+    batch = _multi_round_snapshot()
+    rows, __ = _trace_sheet(batch, {"a" * 32: (values, ""), "d" * 32: ([""] * 9, "缺失")})
+
+    assert rows[0][:3] == ("traceId", "协议", "轮次")
+    assert rows[0][-9:] == REFERENCE_HEADERS[-9:]
+    assert [row[2] for row in rows[1:]] == [1, 2]
+    assert rows[1][-9:] == (1, 2, 3, 4, "否", None, 0, 5, 0)
+    assert rows[2][-10] == "缺失"
+
+
+def test_every_langfuse_header_carries_its_definition() -> None:
+    __, sheet = _trace_sheet(_snapshot(), {})
+
+    commented = [cell.comment is not None for cell in sheet[1][-9:]]
+    assert commented == [True] * 9
+    assert "S3 + S4" in str(sheet.cell(row=1, column=40).comment.text)

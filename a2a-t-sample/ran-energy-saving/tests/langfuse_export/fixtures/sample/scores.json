@@ -1,0 +1,43 @@
+[
+  {
+    "id": "score_1",
+    "traceId": "9f2c1a7de4b34c0e8a5f2d1c6b9e3a70",
+    "name": "helpfulness",
+    "value": 0.86,
+    "dataType": "NUMERIC",
+    "source": "EVAL",
+    "timestamp": "2026-11-07T02:20:00.000Z",
+    "comment": "整体有帮助",
+    "subject": {
+      "kind": "trace",
+      "id": "9f2c1a7de4b34c0e8a5f2d1c6b9e3a70"
+    }
+  },
+  {
+    "id": "score_2",
+    "traceId": "9f2c1a7de4b34c0e8a5f2d1c6b9e3a70",
+    "name": "groundedness",
+    "value": true,
+    "dataType": "BOOLEAN",
+    "source": "EVAL",
+    "timestamp": "2026-11-07T02:20:01.000Z",
+    "subject": {
+      "kind": "trace",
+      "id": "9f2c1a7de4b34c0e8a5f2d1c6b9e3a70"
+    }
+  },
+  {
+    "id": "score_3",
+    "traceId": "9f2c1a7de4b34c0e8a5f2d1c6b9e3a70",
+    "name": "needs_review",
+    "value": "no",
+    "dataType": "CATEGORICAL",
+    "source": "ANNOTATION",
+    "timestamp": "2026-11-07T02:20:02.000Z",
+    "comment": "人工抽检通过",
+    "subject": {
+      "kind": "observation",
+      "id": "obs_a10000000000000000000007"
+    }
+  }
+]

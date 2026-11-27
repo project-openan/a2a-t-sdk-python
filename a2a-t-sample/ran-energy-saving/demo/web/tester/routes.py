@@ -10,15 +10,19 @@ import asyncio
 import json
 import uuid
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any, Final
 
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog, CatalogReloadError
+from langfuse_export.config import Config as LangfuseConfig
 from protocol.client_service import RunManager
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from demo.web.tester.langfuse_columns import TRACE_COLUMN_HEADERS, build_trace_columns
 from demo.web.tester.report import write_report
 from demo.web.tester.service import (
     ALL_STAGES,
@@ -48,6 +52,13 @@ CLIENT_COOKIE: Final[str] = "a2at_tester_client"
 #: Lifetime of the browser identity cookie, in seconds.
 CLIENT_COOKIE_MAX_AGE: Final[int] = 365 * 24 * 60 * 60
 
+#: Concurrent Langfuse trace exports of one report. One trace is a few HTTP calls plus a local
+#: metrics pass, so 8 keeps a 100-item batch around half a minute on a healthy network.
+TRACE_FETCH_WORKERS: Final[int] = 8
+#: Per-trace budget of ``export_full`` (fetch observations + derive metrics + write the export
+#: dir). This is not the whole-batch budget; a slow batch may take several rounds of it.
+TRACE_FETCH_TIMEOUT_SECONDS: Final[float] = 30.0
+
 
 def build_tester_routes(
     *,
@@ -70,6 +81,7 @@ def build_tester_routes(
     judge: Any | None = None,
     judge_model_label: str = "",
     pure_hop: str = "",
+    trace_config: LangfuseConfig | None = None,
 ) -> tuple[list[Route], EvalBatchManager]:
     """Build the tester routes and the process-level batch manager."""
     del scenarios_by_protocol, default_language
@@ -336,13 +348,36 @@ def build_tester_routes(
         )
 
     async def export_xlsx(request: Request) -> Response:
-        """Download the batch as an XLSX report."""
+        """Download the batch as an XLSX report.
+
+        ``langfuseColumns`` is ``auto`` (fetch when a project is configured), ``0`` (never fetch)
+        or ``1`` (fetch and report per-run failures); any other value is a 400, never a silent
+        fallback.
+        """
         batch_id = request.path_params["batch_id"]
         snapshot = batches.get(batch_id, owner=_client_id(request))
         if snapshot is None:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+        langfuse_columns = request.query_params.get("langfuseColumns", "auto")
+        if langfuse_columns not in {"auto", "0", "1"}:
+            return JSONResponse(
+                {
+                    "error": "langfuseColumns 只接受 auto、0 或 1。",
+                    "code": "invalid_langfuse_columns",
+                },
+                status_code=400,
+            )
+        trace_columns = None
+        if langfuse_columns == "1" or (langfuse_columns == "auto" and trace_config is not None):
+            trace_columns = await asyncio.to_thread(_trace_columns, snapshot, trace_config, runs_dir)
+        content = await asyncio.to_thread(
+            write_report,
+            snapshot,
+            runs_dir=runs_dir,
+            trace_columns=trace_columns,
+        )
         return Response(
-            write_report(snapshot, runs_dir=runs_dir),
+            content,
             media_type=XLSX_MEDIA_TYPE,
             headers={"Content-Disposition": f'attachment; filename="osp-tester-{batch_id}.xlsx"'},
         )
@@ -449,6 +484,82 @@ def _str_list(value: object, name: str) -> list[str]:
     if not result:
         raise ValueError(f"{name} 不能为空。")
     return result
+
+
+def _trace_columns(
+    snapshot: Mapping[str, Any],
+    config: LangfuseConfig | None,
+    runs_dir: Path | None,
+) -> dict[str, tuple[list[object], str]]:
+    """Fetch the Langfuse cells of every distinct run in one batch snapshot.
+
+    Runs are de-duplicated by ``runId`` (a multi-round batch repeats one run on several rows).
+    Every per-trace failure stays on that row; a failed fetch never aborts the workbook.
+    """
+    targets: dict[str, str] = {}
+    items = snapshot.get("items")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        run_id = str(item.get("runId") or "")
+        trace_id = str(item.get("langfuseTraceId") or "")
+        if run_id and run_id not in targets:
+            targets[run_id] = trace_id
+    if not targets:
+        return {}
+    if runs_dir is None:
+        empty = [""] * len(TRACE_COLUMN_HEADERS)
+        note = "Langfuse 指标未取到：导出时未提供 run 目录"
+        return {run_id: (list(empty), note) for run_id in targets}
+    with ThreadPoolExecutor(max_workers=min(TRACE_FETCH_WORKERS, len(targets))) as pool:
+        futures = {
+            pool.submit(
+                _trace_columns_with_timeout,
+                config,
+                run_id,
+                trace_id,
+                runs_dir / run_id / "langfuse-export",
+            ): run_id
+            for run_id, trace_id in targets.items()
+        }
+        collected: dict[str, tuple[list[object], str]] = {}
+        for future, run_id in futures.items():
+            try:
+                collected[run_id] = future.result()
+            except Exception as exc:  # noqa: BLE001 - one bad trace must not fail the report
+                collected[run_id] = (
+                    [""] * len(TRACE_COLUMN_HEADERS),
+                    f"Langfuse 指标未取到：{type(exc).__name__}: {exc}",
+                )
+        return collected
+
+
+def _trace_columns_with_timeout(
+    config: LangfuseConfig | None,
+    run_id: str,
+    trace_id: str,
+    out_root: Path,
+) -> tuple[list[object], str]:
+    """Run one export under the per-trace budget, leaving a note instead of raising."""
+    empty: list[object] = [""] * len(TRACE_COLUMN_HEADERS)
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(
+        build_trace_columns,
+        config,
+        run_id=run_id,
+        trace_id=trace_id,
+        out_root=out_root,
+    )
+    try:
+        return future.result(timeout=TRACE_FETCH_TIMEOUT_SECONDS)
+    except FuturesTimeoutError:
+        future.cancel()
+        return empty, f"Langfuse 指标未取到：单条 trace {TRACE_FETCH_TIMEOUT_SECONDS:g} 秒内未完成"
+    except Exception as exc:  # noqa: BLE001 - one bad trace must not fail the report
+        return empty, f"Langfuse 指标未取到：{type(exc).__name__}: {exc}"
+    finally:
+        # The export may still be blocked on a socket; do not hold the batch for it.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 __all__ = ["TESTER_DIR", "build_tester_routes"]

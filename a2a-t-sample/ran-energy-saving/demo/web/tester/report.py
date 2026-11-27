@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -30,6 +31,11 @@ from demo.web.tester.export_view import (
     result_label,
     score_for,
     verdict_reason,
+)
+from demo.web.tester.langfuse_columns import (
+    TRACE_COLUMN_HEADERS,
+    TRACE_COLUMN_NOTES,
+    TRACE_COLUMN_WIDTHS,
 )
 from demo.web.wire_records import read_wire_records
 
@@ -80,6 +86,7 @@ _REFERENCE_HEADERS: Final[tuple[str, ...]] = (
     "仲裁得分",
     "人工标记结果",
     "备注",
+    *TRACE_COLUMN_HEADERS,
 )
 
 #: Excel's hard limit of one cell's text length.
@@ -108,13 +115,25 @@ _NO_INTENT_NOTE: Final[str] = "本批次未采集意图"
 _REBUILT_TRACE_NOTE: Final[str] = "traceparent 为重建值"
 
 
-def write_report(batch: Mapping[str, Any], *, runs_dir: Path | None = None) -> bytes:
+#: Per-run Langfuse cells (``runId -> (nine values, note)``). The route fills it before calling
+#: ``write_report``; keeping it outside this module keeps the report a pure function of its input.
+TraceColumns = Mapping[str, tuple[Sequence[object], str]]
+
+
+def write_report(
+    batch: Mapping[str, Any],
+    *,
+    runs_dir: Path | None = None,
+    trace_columns: TraceColumns | None = None,
+) -> bytes:
     """Build the XLSX report of one batch snapshot.
 
     Args:
         batch: The batch snapshot served to the UI.
         runs_dir: Directory holding ``<runId>/wire*.jsonl``, used for the interaction column.
             ``None`` keeps the report exportable when only the snapshot is available.
+        trace_columns: Langfuse metrics per run id. ``None`` leaves the nine columns blank, which
+            keeps the workbook structure stable when observability is off or not requested.
     """
     rounds = _rounds_of(batch)
     multi = rounds > 1
@@ -122,7 +141,14 @@ def write_report(batch: Mapping[str, Any], *, runs_dir: Path | None = None) -> b
     reference = workbook.active
     reference.title = "仲裁格式"
     overflow: list[tuple[Mapping[str, Any], list[str]]] = []
-    _write_reference_sheet(reference, batch, multi=multi, runs_dir=runs_dir, overflow=overflow)
+    _write_reference_sheet(
+        reference,
+        batch,
+        multi=multi,
+        runs_dir=runs_dir,
+        overflow=overflow,
+        trace_columns=trace_columns,
+    )
     results = workbook.create_sheet("用例结果")
     headers: list[str] = [
         "用例编号",
@@ -437,6 +463,7 @@ def _write_reference_sheet(
     multi: bool,
     runs_dir: Path | None,
     overflow: list[tuple[Mapping[str, Any], list[str]]],
+    trace_columns: TraceColumns | None,
 ) -> None:
     """Write the arbitration worksheet: one row per batch item, reference column order.
 
@@ -448,6 +475,7 @@ def _write_reference_sheet(
         headers.insert(2, "轮次")
     sheet.append(headers)
     _style_header(sheet)
+    _annotate_trace_headers(sheet, headers)
     items = batch.get("items")
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, Mapping):
@@ -456,6 +484,7 @@ def _write_reference_sheet(
         oversized = len(wire_text) > _MAX_CELL_CHARS
         shown = _truncated_wire(wire_text) if oversized else wire_text
         row = _reference_row(item, wire_text=shown)
+        _append_trace_cells(row, item, trace_columns)
         if multi:
             row.insert(2, item.get("round", 1))
         sheet.append([_cell(value) for value in row])
@@ -464,10 +493,47 @@ def _write_reference_sheet(
     widths = [
         34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 90, 50,
         16, 14, 10, 10, 10, 12, 12, 10, 10, 10, 10, 10, 12, 40,
+        *TRACE_COLUMN_WIDTHS,
     ]
     if multi:
         widths.insert(2, 6)
     _set_widths(sheet, tuple(widths))
+
+
+def _append_trace_cells(
+    row: list[object],
+    item: Mapping[str, Any],
+    trace_columns: TraceColumns | None,
+) -> None:
+    """Append the nine Langfuse cells after ``备注`` and merge their note into it.
+
+    ``_reference_row`` always ends with ``备注``; the trace block stays after it so the existing
+    column letters (A–AH) do not move. A per-run failure note joins the same cell.
+    """
+    values: Sequence[object] = ("",) * len(TRACE_COLUMN_HEADERS)
+    note = ""
+    if trace_columns is not None:
+        run_id = str(item.get("runId") or "")
+        entry = trace_columns.get(run_id)
+        if entry is not None:
+            values, note = entry
+    note_index = len(row) - 1
+    if note:
+        existing = str(row[note_index] or "")
+        row[note_index] = f"{existing}；{note}" if existing else note
+    row.extend(values)
+
+
+def _annotate_trace_headers(sheet: Worksheet, headers: list[str]) -> None:
+    """Explain the Langfuse-specific number definitions where they differ from the sheet."""
+    start = headers.index(TRACE_COLUMN_HEADERS[0])
+    for offset, note in enumerate(TRACE_COLUMN_NOTES):
+        if not note:
+            continue
+        comment = Comment(note, "tester")
+        comment.width = 320
+        comment.height = 90
+        sheet.cell(row=1, column=start + offset + 1).comment = comment
 
 
 def _rounds_of(batch: Mapping[str, Any]) -> int:

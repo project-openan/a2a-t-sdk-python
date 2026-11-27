@@ -504,6 +504,45 @@ async def test_the_batch_exports_json_and_xlsx(client: httpx.AsyncClient) -> Non
     assert workbook.content.startswith(b"PK")
 
 
+async def test_the_export_rejects_an_unknown_langfuse_switch(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/tester/batches",
+        json={"caseIds": [1], "protocols": ["a2a-t"], "stopAfter": "validate", "approval": "approve"},
+    )
+    batch_id = created.json()["batchId"]
+
+    rejected = await client.get(
+        f"/api/tester/batches/{batch_id}/export.xlsx", params={"langfuseColumns": "yes"}
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["code"] == "invalid_langfuse_columns"
+
+
+async def test_auto_skips_the_fetch_without_langfuse_credentials(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from demo.web.tester import routes as tester_routes
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("without credentials the auto mode must not fetch")
+
+    monkeypatch.setattr(tester_routes, "_trace_columns", fail)
+    created = await client.post(
+        "/api/tester/batches",
+        json={"caseIds": [1], "protocols": ["a2a-t"], "stopAfter": "validate", "approval": "approve"},
+    )
+    batch_id = created.json()["batchId"]
+
+    automatic = await client.get(f"/api/tester/batches/{batch_id}/export.xlsx")
+    off = await client.get(
+        f"/api/tester/batches/{batch_id}/export.xlsx", params={"langfuseColumns": "0"}
+    )
+
+    assert automatic.status_code == 200
+    assert off.status_code == 200
+
+
 #: Cookie the tester page uses to keep each browser's batches apart.
 CLIENT_COOKIE = "a2at_tester_client"
 
