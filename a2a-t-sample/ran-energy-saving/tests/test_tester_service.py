@@ -2692,7 +2692,7 @@ async def test_the_sdk_stages_build_their_client_from_the_ui_env_path(
     """The preflight and the run must read the same .env, or they resolve different models."""
     seen: list[Path | None] = []
 
-    def fake_build_client(env_path: Path | None = None, *, model_mode: str | None = None) -> Any:
+    def fake_build_client(env_path: Path | None = None) -> Any:
         seen.append(env_path)
         return _PromptClient(), tmp_path / "sdk-env"
 

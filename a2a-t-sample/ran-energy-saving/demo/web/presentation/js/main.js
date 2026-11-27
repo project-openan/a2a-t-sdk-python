@@ -271,7 +271,6 @@ const ui = {
   //: Identity of the run currently on the stage, so the finished frame can adopt it as the chain.
   currentChain: null,
   protocol: "a2a-t",
-  compareSaved: null,
   resultRevealed: null,
   resultCard: null,
   resultCardRun: null,
@@ -2217,14 +2216,13 @@ function renderResult() {
   if (!ui.view.finished && !ui.view.taskCompleted && !ui.view.report) return;
   if (ui.view.twoPhase && !ui.view.modifyPhaseStarted) return;
   const cardKey = `${ui.view.runId || ""}:${ui.view.phaseIndex}`;
-  // The ending (and the comparison card) is built once per phase and re-appended on later
-  // renders; building it again would reset the scroll and any click target in the card.
+  // The ending card is built once per phase and re-appended on later renders; building it again
+  // would reset the scroll and any click target in the card.
   if (ui.resultCard === null || ui.resultCardRun !== cardKey) {
     const built = buildResultCard();
     if (built === null) return;
     ui.resultCard = built;
     ui.resultCardRun = cardKey;
-    ui.compareSaved = null;
   }
   els.sayDetail.hidden = false;
   els.sayDetail.append(ui.resultCard);
@@ -2503,9 +2501,9 @@ function renderProtocol() {
         ? ui.copy.protocol.pure
         : ui.copy.protocol.a2at;
   }
-  // The deployment decides the pure-A2A topology: the local demo has three hops (OSS → RAN →
-  // MIE), the vendor NMS is a black box the OSS Agent addresses directly, and the direct pure hop
-  // calls that NMS itself.
+  // The deployment decides the pure-A2A topology: the local demo calls the local RAN Agent, the
+  // vendor NMS is a black box the client agent addresses directly, and the direct pure hop calls
+  // that NMS itself.
   const nms = Boolean(ui.meta?.nmsTasksEnabled);
   const direct = pure && hopOf() === "nms";
   const hint = pure
@@ -2534,7 +2532,7 @@ function renderProtocol() {
   if (els.tabWire) els.tabWire.hidden = pure && !nms;
 
   // The stage carries protocol-specific labels outside the copy registry (the SVG channel and
-  // the MIE role). Keep them consistent with the selected request form.
+  // the plan-review role). Keep them consistent with the selected request form.
   const setText = (id, value) => {
     const node = document.getElementById(id);
     if (node) node.textContent = value;

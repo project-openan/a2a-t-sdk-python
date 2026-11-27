@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from eval.osp.runner import CaseOutcome, build_client, load_cases, run_case, select_cases
+from eval.osp.runner import CaseOutcome, build_client_with_env, load_cases, run_case, select_cases
 from shared.config import SAMPLE_ENV_PREFIXES
 
 #: Captured at import: pytest imports the module during collection, before the sample conftest
@@ -74,7 +74,8 @@ def live_client() -> Any:
     os.environ.update(env_at_import)
     env_path = os.environ.get("A2AT_OSP_LIVE_ENV", "").strip()
     try:
-        return build_client(Path(env_path) if env_path else None, model_mode="live")
+        client, _env_dir = build_client_with_env(Path(env_path) if env_path else None)
+        return client
     finally:
         # Nothing else in this module reads the environment; leave the process as the sample
         # conftest expects it.

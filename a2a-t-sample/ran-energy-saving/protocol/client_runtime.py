@@ -744,8 +744,8 @@ class ClientRuntime:
                         call_timeout_seconds=self.config.http_timeout_seconds,
                         event_sink=event_sink,
                         trace_sink=sink,
-                        # A direct hop continues the vendor Task; the proxy hop continues the
-                        # OSS Agent's outer Task and lets it forward to its binding.
+                        # A direct hop continues the vendor Task; the local hop continues the
+                        # client agent's outer Task and lets it forward to its binding.
                         task_id=(target_task_id if direct_hop else target_server_task_id)
                         if modify_mode
                         else None,

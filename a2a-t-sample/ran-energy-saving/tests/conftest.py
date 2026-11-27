@@ -56,18 +56,13 @@ _SLOW_MODULES: frozenset[str] = frozenset(
     {
         "test_client_runtime",
         "test_demo_boundary",
-        "test_mie_agent",
         "test_net_proxy_integration",
-        "test_observe_page",
-        "test_oss_agent",
         "test_pure_integration",
         "test_run_demo",
-        "test_scenarios",
         "test_tester_console",
         "test_tester_service",
         "test_transports",
         "test_web_presentation",
-        "test_web_static",
         "test_web_ui",
     }
 )

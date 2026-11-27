@@ -185,8 +185,8 @@ async def _annotate_server_tasks(
 ) -> None:
     """Add the pure-A2A outer Task ids to the picker rows.
 
-    In pure mode a picker row names the OSS Agent's downstream Task. The A2A peer the page may
-    continue is the OSS outer Task, and every pure run that observed the downstream already
+    In pure mode a picker row names the client agent's downstream Task. The A2A peer the page may
+    continue is the outer Task, and every pure run that observed the downstream already
     recorded both identities in the client store. Joining them here keeps the vendor task id (used
     for the NMS state checks) next to the id the A2A message must carry.
     """
@@ -258,8 +258,8 @@ def create_app(
         protocols: interaction protocols the page may switch between; defaults to ``(protocol,)``.
             ``("a2a-t", "pure")`` exposes both request forms of the same agent.
         nms_enabled: whether the deployment talks to the vendor NMS; when ``None``, the process
-            discovery mode decides. It selects each protocol's default hop (A2A-T direct to the
-            NMS, standard A2A through the OSS Agent).
+            discovery mode decides. It selects each protocol's default hop (A2A-T and standard
+            A2A both direct to the NMS on a vendor deployment, otherwise to the local RAN Agent).
         tester_prompt_client: optional SDK prompt client injected into the tester's SDK stages
             (tests use a fake; production builds the real client lazily).
 
@@ -317,15 +317,14 @@ def create_app(
         default_discovery, SUPPORTED_DISCOVERY_MODES, config_discovery, "discovery"
     )
     # One agent serves both request forms, but the deployment decides the hop: A2A-T calls the
-    # vendor NMS directly (or discovers the local RAN Agent), while standard A2A calls the vendor
-    # NMS directly on a vendor deployment and the RAN Agent locally. `A2AT_SAMPLE_PURE_HOP=oss`
-    # is the deprecated proxy opt-in; the hop is deployment-level and validated at startup.
+    # vendor NMS directly (or discovers the local RAN Agent), while standard A2A does the same.
+    # The hop is deployment-level and validated at startup.
     resolved_nms = (config.discovery == DISCOVERY_NMS) if nms_enabled is None else nms_enabled
     pure_hop_nms = config.pure_hop == PURE_HOP_NMS
     if pure_hop_nms and not resolved_nms:
         raise ValueError(
             "A2AT_SAMPLE_PURE_HOP=nms requires the nms discovery; a direct standard-A2A client "
-            "has no OSS Agent to discover"
+            "has no vendor endpoint to discover"
         )
     protocol_defaults: dict[str, dict[str, str]] = {
         PROTOCOL_A2A_T: {
@@ -336,7 +335,7 @@ def create_app(
         PROTOCOL_PURE: {
             "discovery": DISCOVERY_NMS if pure_hop_nms else DISCOVERY_DIRECT,
             # The direct hop talks to the vendor with the deployment transport (webhook on the
-            # real NMS); the proxy hop keeps its historical SSE form.
+            # real NMS); the local hop keeps its historical SSE form.
             "transport": resolved_default_transport if pure_hop_nms else TRANSPORT_SSE,
         },
     }
@@ -723,7 +722,7 @@ def create_app(
                     status_code=400,
                 )
             # The picker always reads the vendor NMS from this process, while a pure run's own hop
-            # is the OSS Agent (direct). What matters is that the page can validate the vendor
+            # is the client agent (direct). What matters is that the page can validate the vendor
             # Task; an A2A-T run additionally continues that same Task directly.
             if config.discovery != DISCOVERY_NMS or (protocol == PROTOCOL_A2A_T and discovery != DISCOVERY_NMS):
                 return JSONResponse(
@@ -773,7 +772,7 @@ def create_app(
                 )
             if protocol == PROTOCOL_PURE and discovery == DISCOVERY_NMS:
                 # A direct standard-A2A Modify addresses the vendor Task itself: targetTaskId is
-                # the wire taskId, and there is no OSS outer Task to name.
+                # the wire taskId, and there is no outer Task to name.
                 if resolved_server_task:
                     return JSONResponse(
                         {
@@ -788,7 +787,7 @@ def create_app(
             elif protocol == PROTOCOL_PURE:
                 # The vendor Task is only the picker's identity. The message must continue the
                 # A2A peer's outer Task, and only a pure run that observed this vendor Task knows
-                # that id. Refuse rather than send a message that OSS would treat as a new Task.
+                # that id. Refuse rather than send a message the peer would treat as a new Task.
                 if not resolved_server_task:
                     return JSONResponse(
                         {

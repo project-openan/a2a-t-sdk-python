@@ -13,19 +13,11 @@ network:
     Task-T is generated (``pass``). There is no second model call.
 
 ``send``, ``negotiate`` and ``final`` need the full runtime and are deliberately outside this
-runner; use the presentation, the tester console or the benchmark for those stages.
-
-Usage::
-
-    PYTHONPATH=. python -m eval.osp.runner --all
-    PYTHONPATH=. python -m eval.osp.runner --ids 1,40,46,49 --stop-after validate --verbose
+runner; use the presentation or the tester console for those stages.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -39,7 +31,6 @@ from shared.trace import trace_stage
 
 from eval.osp.compare import Diff, compare_task_t
 from eval.osp.conditions import case_client_conditions
-from eval.osp.detail import render_failures
 from eval.osp.expectations import slot_error_evidence
 from eval.osp.followup import (
     MISSED_INTERCEPTION_NOTE,
@@ -542,17 +533,10 @@ def _append_note(note: str, extra: str) -> str:
     return f"{note}; {extra}" if note else extra
 
 
-def build_client(env_path: Path | None = None) -> EvalPromptClient:
-    """Build the real SDK client from the sample configuration."""
-    client, _ = build_client_with_env(env_path)
-    return client
-
-
 def build_client_with_env(env_path: Path | None = None) -> tuple[EvalPromptClient, Path]:
     """Build the client and return the temporary SDK env directory it was built from.
 
-    Callers that pool clients own those directories and must remove them; :func:`build_client`
-    drops the directory the way the historical helper did.
+    Callers that pool clients own those directories and must remove them.
     """
     from a2a_t.client.a2at_client import A2ATClient
     from protocol.client_runtime import prepare_client_sdk_env
@@ -607,6 +591,11 @@ def build_report(
     }
 
 
+def _now_iso() -> str:
+    """Return the current UTC time in ISO 8601 form."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def _print_outcome(outcome: CaseOutcome, *, verbose: bool) -> None:
     label = "PASS" if outcome.passed else "FAIL"
     stage_text = " ".join(f"{stage.stage}={stage.status}" for stage in outcome.stages)
@@ -626,96 +615,3 @@ def _print_outcome(outcome: CaseOutcome, *, verbose: bool) -> None:
             print(f"      {stage.stage}: {stage.message}")
         for diff in stage.diffs:
             print(f"      {diff.path}: expected={diff.expected!r} actual={diff.actual!r}")
-
-
-def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases-dir", type=Path, default=DEFAULT_CASES_DIR)
-    parser.add_argument(
-        "--ids",
-        default="",
-        help="comma-separated case ids; empty (with --all) runs every case",
-    )
-    parser.add_argument("--all", action="store_true", help="run every case (the default)")
-    parser.add_argument(
-        "--stop-after",
-        choices=STAGE_ORDER,
-        default="validate",
-        help="last SDK stage to execute; send/negotiate/final need the full runtime",
-    )
-    parser.add_argument("--env", type=Path, default=None, help="sample .env used to build the SDK client")
-    parser.add_argument(
-        "--model-mode",
-        choices=("live", "offline"),
-        default=None,
-        help="override A2AT_SAMPLE_MODEL_MODE for this run",
-    )
-    parser.add_argument("--out", type=Path, default=None, help="JSON report path")
-    parser.add_argument(
-        "--detail",
-        type=Path,
-        default=None,
-        help="Markdown detail report of the failing cases (operator text, expectations, diffs)",
-    )
-    parser.add_argument("--no-write", action="store_true", help="do not write a JSON report")
-    parser.add_argument("--verbose", action="store_true", help="print every diff")
-    return parser.parse_args(argv)
-
-
-def _parse_ids(value: str) -> list[int]:
-    if not value.strip():
-        return []
-    try:
-        return [int(part.strip()) for part in value.split(",") if part.strip()]
-    except ValueError as exc:
-        raise SystemExit(f"invalid --ids: {value!r}") from exc
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(argv)
-    try:
-        cases = select_cases(load_cases(args.cases_dir), _parse_ids(args.ids))
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    if not cases:
-        print("error: no cases selected", file=sys.stderr)
-        return 2
-
-    client = build_client(args.env, model_mode=args.model_mode)
-    started_at = _now_iso()
-    outcomes: list[CaseOutcome] = []
-    for case in cases:
-        outcome = run_case(case, client, stop_after=args.stop_after)
-        outcomes.append(outcome)
-        _print_outcome(outcome, verbose=args.verbose)
-
-    report = build_report(outcomes, stop_after=args.stop_after, started_at=started_at)
-    if args.detail is not None:
-        args.detail.parent.mkdir(parents=True, exist_ok=True)
-        args.detail.write_text(
-            render_failures(report, {int(case["id"]): case for case in cases}),
-            encoding="utf-8",
-        )
-        print(f"detail: {args.detail}")
-    if not args.no_write:
-        target = args.out or (DEFAULT_REPORT_DIR / f"{started_at.replace(':', '')}.json")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"report: {target}")
-
-    summary = report["summary"]
-    if not isinstance(summary, Mapping):
-        return 1
-    return 0 if summary.get("failed") == 0 and summary.get("error") == 0 else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

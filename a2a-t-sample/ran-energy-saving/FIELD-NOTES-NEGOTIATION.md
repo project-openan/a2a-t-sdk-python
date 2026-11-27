@@ -106,9 +106,8 @@ Do not paste only `state` / `timestamp`. Confirm:
 
 **Steps**
 
-1. Prepare a Task actually in `TASK_STATE_WORKING`:
-   - real NMS: pick a `WORKING` row in the Running-tasks picker; or
-   - local simulator: `A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` keeps a new Task `WORKING`.
+1. Prepare a Task actually in `TASK_STATE_WORKING`: pick a `WORKING` row in the Running-tasks
+   picker.
 2. Record `targetTaskId` / `contextId` and the selection time.
 3. Send the **same** infeasible request as the failing run (e.g. 10 Mbps with an 08:00–18:00 outage).
 4. Record:
@@ -161,7 +160,6 @@ For a Task that stays `SUBMITTED` for a long time, record:
 ### B2 timestamps and stall detection
 
 - Task list / single-Task reads expose a usable `updatedAt` / `timestamp`;
-- the simulator exposes it too, so offline tests cover it;
 - the threshold is configurable and applies to `SUBMITTED` only; do not reject a legitimate long
   `WORKING` Task by age.
 
@@ -180,7 +178,6 @@ For a Task that stays `SUBMITTED` for a long time, record:
 ### B5 regression
 
 - the normal Create → WORKING → Modify → COMPLETED two-phase path still works;
-- the offline `--nms-sim` Modify case passes;
 - the full sample suite passes (take the count from `pytest`, do not copy a doc).
 
 ---

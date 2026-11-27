@@ -60,4 +60,4 @@ curl -X POST http://127.0.0.1:8080/api/tester/batches \
 
 - 新增/修改用例后，跑一遍离线单元测试与一次 live 探针，确认期望与模型行为一致。
 - 不写死运维原文之外的业务值；Task-T 只来自 operator 原文。
-- `expectations-overlay.yaml` 的本地覆盖不进入交付仓库。
+- 交付仓库不带覆盖文件；本地 `expectations-overlay.yaml` 若存在会在加载时合并，不要提交。

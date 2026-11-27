@@ -17,7 +17,7 @@ import copy
 import hashlib
 import logging
 import threading
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -136,8 +136,6 @@ class CaseCatalog:
         cases_dir: Path = DEFAULT_CASES_DIR,
         *,
         overlay_path: Path | None = None,
-        annotation_overlay: Callable[[], OverlayBlocks] | None = None,
-        annotation_token: Callable[[], str] | None = None,
     ) -> None:
         resolved_cases = Path(cases_dir)
         self._cases_dir = resolved_cases
@@ -150,10 +148,6 @@ class CaseCatalog:
                 else resolved_cases.parent / "expectations-overlay.yaml"
             )
         )
-        #: Optional live source of hand-authored values (the annotation database). It is merged
-        #: after the YAML overlay, so the operator's latest confirmation wins without an export.
-        self._annotation_overlay = annotation_overlay
-        self._annotation_token = annotation_token
         self._reload_lock = threading.Lock()
         self._snapshot = self._build_snapshot()
 
@@ -214,23 +208,13 @@ class CaseCatalog:
             _load_overlay(self._overlay_path),
             source=f"overlay {self._overlay_path}",
         )
-        token = ""
-        if self._annotation_overlay is not None:
-            try:
-                blocks = self._annotation_overlay()
-            except Exception as exc:  # noqa: BLE001 - a broken live source must not kill the corpus
-                _LOGGER.warning("annotation overlay could not be read: %s", exc)
-                blocks = {}
-            _apply_overlay(cases, blocks, lenient=True, source="annotation store")
-            if self._annotation_token is not None:
-                token = self._annotation_token()
         summaries = {case_id: self._summarize(document) for case_id, document in cases.items()}
         return _CatalogSnapshot(
             cases=cases,
             summaries=summaries,
             signature=signature,
             loaded_at=_now_iso(),
-            version=_version(signature, token),
+            version=_version(signature),
         )
 
     def filter(
@@ -445,10 +429,9 @@ def _merge_case(
         negotiation_message_expectation(case, protocol)
 
 
-def _version(signature: tuple[tuple[str, int, int], ...], token: str = "") -> str:
+def _version(signature: tuple[tuple[str, int, int], ...]) -> str:
     """Return the short stable version id of one corpus + overlay fingerprint."""
-    material = repr(signature) + (f"\nannotation:{token}" if token else "")
-    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
     return digest[:12]
 
 

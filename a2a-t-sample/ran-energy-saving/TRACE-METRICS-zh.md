@@ -40,8 +40,8 @@ A2A-T run 发布 `propose` / `accept` / `reject` / `abort` 决策及轮次。标
 - `accuracy`：终态与报告是否存在。真机 run **不**比较演示录制序列与目标值，只保留终态与报告
   存在性作为 ground truth。
 
-文档写入 `runs/client-state.sqlite3`，由 `/api/runs/<id>/metrics` 与 `/api/metrics/*` 暴露，
-并由测试台导出 CSV/xlsx。协议对比页与 observe 控制台不在交付范围内。
+文档写入 `runs/client-state.sqlite3`，并由测试台导出 CSV/xlsx。本交付不提供独立的指标控制台
+或协议对比页。
 
 ## 5. Langfuse
 

@@ -69,7 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "the deployment uses the vendor NMS; the standard-A2A hop is owned by "
-            "A2AT_SAMPLE_PURE_HOP (nms vendor direct by default, oss proxy only if set)"
+            "A2AT_SAMPLE_PURE_HOP (direct local RAN Agent by default, nms for the vendor)"
         ),
     )
     return parser

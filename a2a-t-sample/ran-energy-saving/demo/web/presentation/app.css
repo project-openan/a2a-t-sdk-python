@@ -812,16 +812,6 @@ body.resizing-y { cursor: row-resize; user-select: none; }
 .result-card { margin-top: 7px; border-top: 1px solid var(--g700); padding-top: 7px; }
 .result-title { font-size: 13px; margin: 0 0 2px; }
 .result-reason { margin: 0; font-size: 12px; }
-.compare { margin-top: 10px; border-top: 1px dashed var(--g300); padding-top: 7px; }
-.compare-title { margin: 0 0 5px; font-size: 12.5px; }
-.compare-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-.compare-table th,
-.compare-table td { text-align: left; vertical-align: top; padding: 3px 6px; border-bottom: 1px solid var(--g100); }
-.compare-table thead th,
-.compare-table tr:first-child th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--g500); }
-.compare-table th { font-weight: 700; white-space: nowrap; }
-.compare-table td { color: var(--g700); }
-.compare-hint { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; font-size: 11.5px; color: var(--g500); }
 .pure-metrics { margin-top: 10px; border-top: 1px dashed var(--g300); padding-top: 7px; }
 .pure-metrics-title { margin: 0 0 5px; font-size: 12.5px; }
 .pure-metric { display: flex; justify-content: space-between; gap: 12px; font-size: 11.5px; color: var(--g700); padding: 2px 0; }

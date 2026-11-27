@@ -60,8 +60,7 @@ SUPPORTED_PURE_FOLLOWUPS = (PURE_FOLLOWUP_BOTH, PURE_FOLLOWUP_TASK, PURE_FOLLOWU
 
 #: Hop a standard A2A (``pure``) client takes. ``direct`` calls the local RAN Agent; ``nms``
 #: calls the vendor directly so a plain Create/Modify/answer sequence addresses the vendor's own
-#: Task; ``oss`` keeps the deprecated proxy topology (UI -> OSS Agent -> downstream) as an
-#: explicit opt-in. The hop is deployment-level and validated at startup.
+#: Task. The hop is deployment-level and validated at startup.
 PURE_HOP_DIRECT = "direct"
 PURE_HOP_NMS = "nms"
 SUPPORTED_PURE_HOPS = (PURE_HOP_DIRECT, PURE_HOP_NMS)
@@ -119,7 +118,7 @@ RUNS_DIR_ENV_KEY = "A2AT_SAMPLE_RUNS_DIR"
 RUN_DIR_ENV_KEY = "A2AT_SAMPLE_RUN_DIR"
 #: Which conversation fields a pure A2A follow-up carries (``both`` / ``task`` / ``context``).
 PURE_FOLLOWUP_ENV_KEY = "A2AT_SAMPLE_PURE_FOLLOWUP"
-#: Hop a standard A2A client takes: ``oss`` (proxy, default) or ``nms`` (vendor direct).
+#: Hop a standard A2A client takes: ``direct`` (local RAN Agent) or ``nms`` (vendor direct).
 PURE_HOP_ENV_KEY = "A2AT_SAMPLE_PURE_HOP"
 PURE_MESSAGE_MODE_ENV_KEY = "A2AT_SAMPLE_PURE_MESSAGE_MODE"
 HTTP_TIMEOUT_ENV_KEY = "A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS"
@@ -158,12 +157,10 @@ SERVER_AUTH_TOKEN_ENV_KEY = "A2AT_SAMPLE_SERVER_AUTH_TOKEN"
 #: Server-side protocol mode (``a2a-t`` / ``a2a`` / ``both``). The launcher also writes it into the
 #: per-run ``.env``; manual starts must read the same file instead of only ``os.environ``.
 PROTOCOL_MODE_ENV_KEY = "A2AT_SAMPLE_PROTOCOL_MODE"
-#: OSS Agent bind/advertised address.
-#: Cross-process trace emitter of the server/OSS hops. The launcher owns these values per run.
+#: Cross-process trace emitter of the server/client-agent hops. The launcher owns these values per run.
 TRACE_URL_ENV_KEY = "A2AT_SAMPLE_TRACE_URL"
 TRACE_TOKEN_ENV_KEY = "A2AT_SAMPLE_TRACE_TOKEN"
 TRACE_DIR_ENV_KEY = "A2AT_SAMPLE_TRACE_DIR"
-#: Local RAN Agent endpoint used by the OSS hop in the three-hop topology.
 #: Days a terminal downstream binding (and its outer Task) is kept before cleanup.
 TASK_RETENTION_DAYS_ENV_KEY = "A2AT_SAMPLE_TASK_RETENTION_DAYS"
 
@@ -393,10 +390,8 @@ def _pure_followup(values: dict[str, str | None]) -> str:
 def _pure_hop(values: dict[str, str | None], discovery: str) -> str:
     """Resolve the hop of a standard A2A request, rejecting an unsupported value.
 
-    A vendor-NMS deployment defaults to the direct hop: the OSS role is the client, so the NMS
-    Task is the only Task. A local deployment defaults to the direct RAN Agent hop: the UI is the
-    agent layer, so adding the OSS proxy would measure the proxy rather than the protocol. The
-    OSS hop stays available as an explicit, deprecated opt-in.
+    A vendor-NMS deployment defaults to the direct hop: the client agent is the only agent layer,
+    so the NMS Task is the only Task. A local deployment defaults to the direct RAN Agent hop.
     """
     explicit = _env_value(values, PURE_HOP_ENV_KEY, "").strip().lower()
     if explicit:
@@ -657,7 +652,7 @@ class SampleConfig:
         run_dir: launcher-owned directory with the child-process logs; empty disables the console's
             process-log source.
         pure_followup: conversation fields of a pure A2A follow-up (``both`` / ``task`` / ``context``).
-        pure_hop: hop of a standard A2A request (``oss`` proxy / ``nms`` vendor direct).
+        pure_hop: hop of a standard A2A request (``direct`` local RAN Agent / ``nms`` vendor direct).
         gateway_task_db_path: Absolute SQLite path of the inbound gateway Task store and its push
             notification registrations; ``None`` keeps both in memory.
         auth_token: bearer token required by the Web UI API and the inbound gateway; empty keeps

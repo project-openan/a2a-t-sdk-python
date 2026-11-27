@@ -47,7 +47,6 @@ import {
   validationCard,
 } from "../../demo/web/presentation/js/decisions.js";
 import { copyFor, scenarioPhase, scenarioUseCase } from "../../demo/web/presentation/copy.js";
-import { buildRecord, compareRows, outcomeText } from "../../demo/web/presentation/js/compare.js";
 import { buildWireModel } from "../../demo/web/presentation/js/wire.js";
 
 // The wire-model builder creates detached nodes; no page is rendered in this harness.
@@ -1337,54 +1336,6 @@ assert.equal(synthetic.summary, "round 1 · information");
 
 const real = { kind: "message_sent", seq: 3 };
 assert.equal(entryOfRow({ entry: real }), real);
-
-// --- Plain A2A mode ------------------------------------------------------
-
-const plainView = createState();
-applyFrame(plainView, {
-  type: "run_started",
-  runId: "r6",
-  scenario: "information",
-  mode: "auto",
-  protocol: "plain",
-});
-assert.equal(plainView.protocol, "plain");
-applyFrame(
-  plainView,
-  event({
-    seq: 1,
-    entryType: "event",
-    kind: "status",
-    phase: "execution",
-    state: "TASK_STATE_REJECTED",
-    summary: "The request does not define the time-segmented guaranteed throughput target.",
-  }),
-);
-applyFrame(plainView, finished("task_rejected"));
-assert.equal(stageOf(plainView), "plainRejected");
-const plainRecord = buildRecord(plainView);
-assert.equal(plainRecord.protocol, "plain");
-assert.equal(plainRecord.rounds, 0);
-assert.equal(plainRecord.finalState, "task_rejected");
-assert.match(plainRecord.detail, /time-segmented/);
-
-const a2atView = createState();
-applyFrame(a2atView, { type: "run_started", runId: "r7", scenario: "information", mode: "auto" });
-applyFrame(a2atView, proposal(2, 1));
-applyFrame(a2atView, decision(3, "accept", 1));
-applyFrame(a2atView, finished("task_completed", { target_rate: 30 }));
-const a2atRecord = buildRecord(a2atView);
-assert.equal(a2atRecord.protocol, "a2at");
-assert.equal(a2atRecord.rounds, 1);
-assert.equal(a2atRecord.resolution, "accepted");
-
-const comparison = compareRows(copy, a2atRecord, plainRecord);
-assert.equal(comparison.length, 4);
-assert.equal(comparison[0].label, copy.compare.intent);
-assert.match(comparison[1].a2at, /1/);
-assert.equal(comparison[1].plain, copy.compare.notApplicable);
-assert.match(comparison[3].plain, /拒绝/);
-assert.match(outcomeText(copy, a2atRecord), /30/);
 
 // --- Pure A2A three-hop mode ---------------------------------------------
 

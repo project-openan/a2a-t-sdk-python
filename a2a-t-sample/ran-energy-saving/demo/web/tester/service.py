@@ -228,7 +228,7 @@ _NO_SERVER_INTENT_MESSAGE: Final[str] = (
     "下游的 TASK_STATE_SUBMITTED 报文没有结构化意图，意图阶段只记录。"
 )
 
-#: Message of the intent stage on a pure-A2A proxy hop: the OSS Agent owns the outer Task and
+#: Message of the intent stage on a pure-A2A local hop: the client agent owns the outer Task and
 #: its business intent payload has a different key set, so only a direct vendor payload is judged.
 _A2A_PROXY_SERVER_INTENT_MESSAGE: Final[str] = (
     "A2A 非直连厂商链路返回的意图只记录，不据此判定。"
@@ -1542,8 +1542,8 @@ class EvalBatchManager:
             # A Modify continues an existing Task. The corpus says nothing about where that Task
             # came from, so the tester pairs every Modify row with one explicit baseline Create
             # (see ``_baseline_request``) and continues the Task it produced. A2A-T and a direct
-            # standard-A2A hop both continue the vendor Task; only the proxy hop continues the
-            # OSS Agent's outer Task, which is the Task id that hop owns.
+            # standard-A2A hop both continue the vendor Task; only the local hop continues the
+            # client agent's outer Task, which is the Task id that hop owns.
             baseline = await self._seed_baseline(batch, index, item, runtime_protocol, case)
             if baseline is None:
                 if item.cancel_requested:
@@ -1959,7 +1959,7 @@ class EvalBatchManager:
         """Poll until the baseline Task reaches the state a Modify can continue from.
 
         A2A-T and a direct standard-A2A hop continue the vendor Task, which the vendor reports as
-        ``SUBMITTED`` on acceptance. The proxy hop continues the OSS Agent's outer Task, which must
+        ``SUBMITTED`` on acceptance. The local hop continues the client agent's outer Task, which must
         be ``WORKING``: ``COMPLETED`` is terminal (the A2A layer rejects the continuation) and
         ``INPUT_REQUIRED`` would route the Modify text as an answer to the pending question.
 
@@ -2620,8 +2620,8 @@ class EvalBatchManager:
             else []
         )
         if item.protocol == PROTOCOL_A2A and run.discovery != DISCOVERY_NMS:
-            # The OSS proxy owns a different business-intent payload; judge only a direct vendor
-            # payload so a proxy hop never turns a case red on a key set it cannot reproduce.
+            # The local hop owns a different business-intent payload; judge only a direct vendor
+            # payload so a local hop never turns a case red on a key set it cannot reproduce.
             stage.status = STAGE_RECORDED
             stage.message = _A2A_PROXY_SERVER_INTENT_MESSAGE
             return
@@ -3810,7 +3810,7 @@ def _baseline_accepted_states(protocol: str, discovery: str = "") -> frozenset[s
     ``COMPLETED`` is excluded on purpose even though it is an acceptance signal for a Create:
     the A2A layer rejects a message addressed to a terminal Task. A direct hop sees the vendor
     Task itself, so the vendor's ``SUBMITTED`` already means "accepted and continuable"; the
-    proxy hop sees the OSS outer Task, which is ``WORKING`` from the first acknowledgement.
+    local hop sees the client agent's outer Task, which is ``WORKING`` from the first acknowledgement.
     """
     if protocol == RUNTIME_A2A_T or discovery == DISCOVERY_NMS:
         return frozenset({TASK_STATE_SUBMITTED, TASK_STATE_WORKING})
@@ -3854,8 +3854,8 @@ def _baseline_continuable(
 ) -> bool:
     """Return whether one baseline run has a Task a Modify can really continue.
 
-    On the proxy hop the outer Task reports ``WORKING`` as soon as the OSS Agent acknowledges it,
-    before the downstream Create is sent. A downstream failure (the field's HTTP 500
+    On the local hop the outer Task reports ``WORKING`` as soon as the client agent acknowledges
+    it, before the downstream Create is sent. A downstream failure (the field's HTTP 500
     ``Running task limit reached``) then leaves a non-existent Task behind. The outer↔inner
     binding is the evidence that the downstream actually accepted the Create.
 

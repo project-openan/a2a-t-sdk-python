@@ -100,9 +100,7 @@ GET /a2a/json/tasks/<healthy-task-id>     # 对照
 
 **步骤**
 
-1. 准备一个确实处于 `TASK_STATE_WORKING` 的 Task：
-   - 真机：用 Running-tasks picker 选 `WORKING`；或
-   - 本地模拟器：`A2AT_SAMPLE_NMS_SIM_HOLD_WORKING=1` 创建一个会保持 `WORKING` 的 Task。
+1. 准备一个确实处于 `TASK_STATE_WORKING` 的 Task：用 Running-tasks picker 选 `WORKING`。
 2. 记录 `targetTaskId` / `contextId` 和选中时间。
 3. 发送与失败 run **完全相同**的不可行请求（例：10 Mbps + 08:00-18:00 停电）。
 4. 记录：
@@ -171,7 +169,6 @@ GET /a2a/json/tasks/<healthy-task-id>     # 对照
 ### B5 回归
 
 - 正常 Create → WORKING → Modify → COMPLETED 两阶段链路不退化；
-- 离线模拟器 `--nms-sim` 的 Modify 用例通过；
 - 全量样例测试通过（数量以 `pytest` 输出为准，不要照抄文档）。
 
 ---

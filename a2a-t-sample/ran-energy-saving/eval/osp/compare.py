@@ -244,7 +244,7 @@ def free_text_tokens(text: str) -> frozenset[str]:
     """Return the word-order-insensitive tokens of a message that states no business fact.
 
     Used as the fallback comparison for a short plain-language expectation (for example the
-    simulator's ``Not feasible, please confirm``): every expected token must appear in the
+    vendor's ``Not feasible, please confirm``): every expected token must appear in the
     observed text.
     """
     value = unicodedata.normalize("NFKC", str(text or "")).lower()

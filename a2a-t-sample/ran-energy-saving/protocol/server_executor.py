@@ -889,8 +889,8 @@ class LangGraphTaskExecutor(AgentExecutor):
                             )
                         # The apply/modify result is already reported as a status notification.
                         # Do not publish a second, duplicate artifact for it in A2A-T mode; the
-                        # pure three-hop comparison keeps it because its presentation drives the
-                        # execution beat from the relayed artifact.
+                        # pure mode keeps it because its presentation drives the execution beat
+                        # from the relayed artifact.
                         duplicate_apply = (
                             name in (APPLY_TOOL_NAME, MODIFY_TOOL_NAME)
                             and not self._is_pure(context)

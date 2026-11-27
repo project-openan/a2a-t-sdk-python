@@ -42,9 +42,8 @@ decision agent is the author; the deterministic flow owns the performative and t
 - `accuracy`: terminal state and report presence. For a real-NMS run the recorded demo sequence
   and target are **not** compared; only the terminal state and report presence remain ground truth.
 
-The document is stored in `runs/client-state.sqlite3`, exposed by `/api/runs/<id>/metrics` and
-`/api/metrics/*`, and exported as CSV/xlsx by the tester. The protocol-comparison page and the
-headless observe console are not part of this delivery.
+The document is stored in `runs/client-state.sqlite3` and exported as CSV/xlsx by the tester.
+There is no separate metrics console or comparison page in this delivery.
 
 ## 5. Langfuse
 
