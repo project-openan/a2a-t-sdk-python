@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 import pytest
+from a2a_t.core.errors.catalog import ErrorCatalog
+from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
 from demo.web.app import create_app
 from demo.web.tester.decisions import a2at_decisions, pure_answers
 from demo.web.tester.service import (
@@ -114,18 +116,42 @@ CASES: dict[int, dict[str, Any]] = {case["id"]: case for case in load_cases()}
 
 
 class FakePromptClient:
-    """SDK double returning the expected Task-T and intent of each case."""
+    """SDK double returning the expected Task-T and intent of each case.
 
-    def __init__(self, *, fail_ids: frozenset[int] = frozenset()) -> None:
+    ``warn_ids`` renders a wrong Task-T, which the tester reports as a warning. ``block_ids``
+    raises the SDK slot-extraction failure, which really fails a case that expects no block.
+    """
+
+    def __init__(
+        self,
+        *,
+        warn_ids: frozenset[int] = frozenset(),
+        block_ids: frozenset[int] = frozenset(),
+    ) -> None:
         self._by_text = {case["user_input"]: case for case in CASES.values()}
-        self._fail_ids = fail_ids
+        self._warn_ids = warn_ids
+        self._block_ids = block_ids
         self._last_id: int | None = None
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object:
         case = self._by_text[text]
         self._last_id = int(case["id"])
+        if self._last_id in self._block_ids:
+            raise PromptGenerationError(
+                ErrorCatalog.SLOT_NOT_PROVIDED,
+                {"slot_label": "Area"},
+                message="blocked by test",
+                failed_parameters=[
+                    SlotValidationError(
+                        slot_name="task_object",
+                        code="slot.not_provided",
+                        message="blocked by test",
+                        facts={"slot_label": "Area"},
+                    )
+                ],
+            )
         task_t = str(case["expect"]["protocols"]["a2a-t"]["task_t"])
-        if self._last_id in self._fail_ids:
+        if self._last_id in self._warn_ids:
             task_t = task_t.replace("A2ATestRegion", "WrongRegion", 1)
         return SimpleNamespace(prompt_text=task_t, template_uri=template_uri)
 
@@ -462,7 +488,7 @@ async def test_retry_rebuilds_only_the_failed_items(
         finished_grace_seconds=0.0,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
         nms_enabled=False,
-        tester_prompt_client=FakePromptClient(fail_ids=frozenset({1})),
+        tester_prompt_client=FakePromptClient(block_ids=frozenset({1})),
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
@@ -483,6 +509,47 @@ async def test_retry_rebuilds_only_the_failed_items(
         retried = await http.post(f"/api/tester/batches/{batch_id}/retry")
         assert retried.status_code == 201
         assert [item["caseId"] for item in retried.json()["items"]] == [1]
+
+
+async def test_a_task_t_mismatch_makes_the_row_partial_and_is_not_retried(
+    offline_config: SampleConfig,
+    runtime_factory: Callable[..., Any],
+    tmp_path: Path,
+) -> None:
+    """A Task-T difference is a warning: it must not fail the case nor be rebuilt by retry."""
+    app = create_app(
+        offline_config,
+        runs_dir=tmp_path,
+        runtime_factory=runtime_factory,
+        finished_grace_seconds=0.0,
+        protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
+        nms_enabled=False,
+        tester_prompt_client=FakePromptClient(warn_ids=frozenset({1})),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        created = await http.post(
+            "/api/tester/batches",
+            json={
+                "caseIds": [1, 2],
+                "protocols": ["a2a-t"],
+                "stopAfter": "validate",
+                "approval": "approve",
+                "timeoutSeconds": 60,
+            },
+        )
+        batch_id = created.json()["batchId"]
+        await http.post(f"/api/tester/batches/{batch_id}/start")
+        finished = await _wait_batch(http, batch_id)
+        assert finished["summary"]["failed"] == 0
+        assert finished["summary"]["passed"] == 1
+        assert finished["summary"]["partial"] == 1
+        item = next(row for row in finished["items"] if row["caseId"] == 1)
+        assert item["status"] == "partial"
+        assert item["stages"]["task_t"]["status"] == "warning"
+        assert item["stages"]["task_t"]["diffs"]
+        retried = await http.post(f"/api/tester/batches/{batch_id}/retry")
+        assert retried.status_code == 409
 
 
 async def test_the_batch_exports_json_and_xlsx(client: httpx.AsyncClient) -> None:

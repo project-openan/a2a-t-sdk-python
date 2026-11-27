@@ -265,8 +265,10 @@ _NO_EXPECTED_INTENT_MESSAGE: Final[str] = "用例没有期望意图，只记录�
 _SERVER_INTENT_MISMATCH_MESSAGE: Final[str] = "服务端意图理解结果与期望不一致。"
 _INTENT_UNJUDGED_MESSAGE: Final[str] = "未判定，转人工复核。"
 
-#: Message of a failed full-flow Task-T stage: the run rendered a different Task-T.
-_TASK_T_MISMATCH_MESSAGE: Final[str] = "Task-T 与期望不一致。"
+#: Message of a Task-T stage whose rendering differs from the case. The difference is a warning:
+#: the case verdict follows the downstream's own reading (``serverIntent``), never our rendering,
+#: because some corpus expectations are looser or stricter than what the vendor really accepts.
+_TASK_T_MISMATCH_MESSAGE: Final[str] = "Task-T 与期望不一致（告警，不作为用例失败依据）。"
 
 #: Message of a failed validation stage: the run blocked or sent a different verdict.
 _VALIDATION_MISMATCH_MESSAGE: Final[str] = "拦截结论与期望不一致。"
@@ -1544,11 +1546,19 @@ class EvalBatchManager:
             )
             protocol = "" if stage.stage == "intent" else PROTOCOL_A2A_T
             result = _apply_assertion(judge, protocol, stage.stage, result)
-            if stage.stage == "task_t" and negotiation_expected:
-                # The case's Task-T is the post-negotiation one; the SDK runner only sees the
-                # initial request, so comparing them would be a false failure.
-                result.status = STAGE_RECORDED
-                result.message = _NEGOTIATED_TASK_T_MESSAGE
+            if stage.stage == "task_t":
+                if negotiation_expected:
+                    # The case's Task-T is the post-negotiation one; the SDK runner only sees the
+                    # initial request, so comparing them would be a false failure.
+                    result.status = STAGE_RECORDED
+                    result.message = _NEGOTIATED_TASK_T_MESSAGE
+                elif result.status == STAGE_FAILED:
+                    # A Task-T difference is a warning for the reviewer, not a failed case: the
+                    # case verdict follows the downstream's own reading of the Task-T, not our
+                    # rendering of it. ``eval/osp`` keeps its own failure semantics because
+                    # Task-T accuracy is what that report measures.
+                    result.status = STAGE_WARNING
+                    result.message = _TASK_T_MISMATCH_MESSAGE
             results[stage.stage] = result
         interception: dict[str, StageResult] | None = None
         if outcome.interception is not None:
@@ -2746,8 +2756,10 @@ class EvalBatchManager:
 
         A full-flow item skips the SDK preflight, so its Task-T is generated inside the run. The
         ``task_prompt_rendered`` span carries the prompt the SDK rendered and sent; comparing it
-        with the case restores the section rows an SDK-only batch gets, without a model call. A case
-        whose expectation is the post-negotiation Task-T, or that turns the assertion off, stays
+        with the case restores the section rows an SDK-only batch gets, without a model call. A
+        difference is a warning, never a failed case: whether the case failed is decided by the
+        downstream's own reading (``serverIntent``), not by our rendering. A case whose
+        expectation is the post-negotiation Task-T, or that turns the assertion off, stays
         record-only. Missing evidence creates no stage rather than a fabricated one.
         """
         if item.protocol != PROTOCOL_A2A_T or "task_t" in item.stages or case is None:
@@ -2773,7 +2785,7 @@ class EvalBatchManager:
             result.status = STAGE_RECORDED
             result.message = _ASSERTION_OFF_MESSAGE
         elif diffs:
-            result.status = STAGE_FAILED
+            result.status = STAGE_WARNING
             result.message = _TASK_T_MISMATCH_MESSAGE
         item.stages["task_t"] = result
 

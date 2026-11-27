@@ -2119,7 +2119,9 @@ async def test_a_full_flow_item_gets_its_validation_stage(tmp_path: Path) -> Non
     assert stage["actual"] == "pass"
 
 
-async def test_a_full_flow_task_t_mismatch_fails_the_task_t_stage(tmp_path: Path) -> None:
+async def test_a_full_flow_task_t_mismatch_warns_without_failing_the_case(
+    tmp_path: Path,
+) -> None:
     task_t = CASES[1]["expect"]["protocols"]["a2a-t"]["task_t"]
     changed = task_t.replace("720p video", "1080p video")
 
@@ -2137,9 +2139,13 @@ async def test_a_full_flow_task_t_mismatch_fails_the_task_t_stage(tmp_path: Path
     await manager.start(str(created["batchId"]))
     finished = await _wait_status(manager, str(created["batchId"]), "finished")
 
-    stage = finished["items"][0]["stages"]["task_t"]
-    assert stage["status"] == STAGE_FAILED
+    item = finished["items"][0]
+    stage = item["stages"]["task_t"]
+    assert stage["status"] == STAGE_WARNING
     assert stage["diffs"]
+    # Only the Task-T rendering differs; no server intent contradicted the case, so the row is
+    # yellow (partial), never failed.
+    assert item["status"] == CASE_PARTIAL
 
 
 async def _run_item_with_server_intent(
