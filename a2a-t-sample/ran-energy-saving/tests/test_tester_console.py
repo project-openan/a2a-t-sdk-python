@@ -382,7 +382,7 @@ class _HangingRuntime:
         """Release the runtime."""
 
 
-async def test_rerun_is_rejected_while_the_batch_is_running(
+async def test_rerun_is_rejected_while_that_items_run_is_still_running(
     offline_config: SampleConfig,
     tmp_path: Path,
 ) -> None:

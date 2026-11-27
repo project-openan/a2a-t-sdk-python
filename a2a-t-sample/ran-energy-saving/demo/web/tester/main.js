@@ -691,12 +691,15 @@ function renderResults() {
         .map((item, index) => [item, index])
         .filter(([item]) => String(item.round || 1) === state.roundFilter)
     : items.map((item, index) => [item, index]);
+  // Reruns queued while the batch still runs; each row stays clickable unless it is in this list.
+  const rerunQueue = Array.isArray(batch.rerunQueue) ? batch.rerunQueue : [];
   $("empty-state").hidden = visible.length > 0;
   if (!items.length) $("empty-state").textContent = "该批次没有运行项。";
   else if (!visible.length) $("empty-state").textContent = "该轮次没有运行项。";
 
   visible.forEach(([item, index]) => {
     const row = document.createElement("tr");
+    const queued = rerunQueue.includes(index);
     if (item.status === "running") row.className = "running";
     const number = el("td", "num", index + 1);
     const id = el("td", "", item.caseId === 0 ? "scratch" : String(item.caseId).padStart(2, "0"));
@@ -707,6 +710,7 @@ function renderResults() {
     stages.append(stageChips(item, batch.stopAfter));
     const status = document.createElement("td");
     status.append(badge(item.status));
+    if (queued) status.append(document.createTextNode(" "), badge("waiting", "排队中"));
     const duration = el("td", "metric", durationText(item.durationMs));
     const tokens = el("td", "metric", tokenText(item.tokens));
     const runs = document.createElement("td");
@@ -749,7 +753,16 @@ function renderResults() {
     detail.type = "button";
     detail.addEventListener("click", () => openDrawer(item, index));
     actions.append(document.createTextNode(" · "), detail);
-    if (batch.status === "running" && (item.status === "running" || item.status === "pending")) {
+    if (queued) {
+      const drop = el("button", "link-button", "取消排队");
+      drop.type = "button";
+      drop.title = "从重跑队列移除，保留上一次结果";
+      drop.addEventListener("click", () => cancelItem(index));
+      actions.append(document.createTextNode(" · "), drop);
+    } else if (
+      batch.status === "running"
+      && (item.status === "running" || item.status === "pending")
+    ) {
       // One item at a time: the rest of the batch keeps running.
       const cancel = el("button", "link-button", "取消");
       cancel.type = "button";
@@ -757,9 +770,13 @@ function renderResults() {
       cancel.addEventListener("click", () => cancelItem(index));
       actions.append(document.createTextNode(" · "), cancel);
     }
+    // A finished row may be rerun while the rest of the batch still runs; a pending or running
+    // row would be executed twice, and a queued row is already waiting.
     const rerun = el("button", "link-button", "重跑");
     rerun.type = "button";
-    rerun.disabled = batch.status === "running";
+    rerun.disabled = queued
+      || item.status === "running"
+      || (item.status === "pending" && batch.status === "running");
     rerun.addEventListener("click", () => rerunItem(index));
     actions.append(document.createTextNode(" · "), rerun);
     row.append(
@@ -771,8 +788,9 @@ function renderResults() {
 
   const summary = batch.summary || {};
   const concurrencyNote = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
+  const queuedNote = rerunQueue.length ? ` · 排队重跑 ${rerunQueue.length}` : "";
   const roundNote = multi ? roundSummaryNote(batch) : "";
-  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}${concurrencyNote}${roundNote}`;
+  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}${concurrencyNote}${queuedNote}${roundNote}`;
   const running = batch.status === "running";
   const retryable = (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0) > 0;
   $("start-button").hidden = running;

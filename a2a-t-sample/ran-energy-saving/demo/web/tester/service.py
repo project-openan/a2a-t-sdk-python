@@ -26,6 +26,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -530,11 +531,26 @@ class _Batch:
     finished_at: str | None = None
     current_index: int | None = None
     #: Items executing right now, in start order. Maintained by both execution paths so
-    #: cancellation has one implementation and the UI can show every running row.
+    #: cancellation has one implementation and the UI can show every running row. The main pass
+    #: and the rerun queue both contribute to it.
     active_indices: list[int] = field(default_factory=list)
+    #: Item indices waiting to be re-executed. A rerun may be queued while the main pass still
+    #: runs; it shares the batch's slot pool, so it starts at the next free slot.
+    rerun_queue: deque[int] = field(default_factory=deque)
+    #: Indices whose previous remote Task is being released before they join ``rerun_queue``;
+    #: keeps a double click from queueing the same item twice.
+    rerun_pending: set[int] = field(default_factory=set)
+    #: True while the rerun drainer owns work.
+    rerun_active: bool = False
+    #: True while the main pass (the selected item list) is executing.
+    main_active: bool = False
+    #: Per-batch slot pool shared by the main pass and the rerun queue (size = concurrency).
+    slots: asyncio.Semaphore | None = field(default=None, repr=False)
     cancel_requested: bool = False
     error: str | None = None
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: The rerun drainer task; separate from ``task`` so both lanes can coexist.
+    rerun_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
 def _stops_on_a_vendor_defect(error: str | None) -> bool:
@@ -820,6 +836,8 @@ class EvalBatchManager:
             raise ValueError("该批次已经执行过。")
         batch.status = BATCH_RUNNING
         batch.started_at = _now_iso()
+        batch.main_active = True
+        self._ensure_slots(batch)
         self._persist(batch)
         batch.task = asyncio.create_task(self._run_batch(batch), name=f"tester-{batch_id}")
         await asyncio.sleep(0)
@@ -834,6 +852,8 @@ class EvalBatchManager:
         if batch is None or batch.status != BATCH_RUNNING:
             return False
         batch.cancel_requested = True
+        # A queued rerun has not started yet; dropping it is enough. Its previous result stays.
+        batch.rerun_queue.clear()
         # Snapshot the active items: workers append and remove entries while the cancellations
         # below await, so iterating the live list would skip items.
         active = [
@@ -842,8 +862,9 @@ class EvalBatchManager:
             if 0 <= index < len(batch.items)
         ]
         await asyncio.gather(*(self._cancel_item_runs(item) for item in active))
-        if batch.task is not None and not batch.task.done():
-            batch.task.cancel()
+        for task in (batch.task, batch.rerun_task):
+            if task is not None and not task.done():
+                task.cancel()
         self._persist(batch)
         return True
 
@@ -864,6 +885,12 @@ class EvalBatchManager:
         if batch.status != BATCH_RUNNING:
             raise ValueError("该批次不在执行中。")
         item = batch.items[index]
+        if index in batch.rerun_queue:
+            # A queued rerun has not started; removing it leaves the previous result intact.
+            batch.rerun_queue.remove(index)
+            item.cancel_requested = False
+            self._persist(batch)
+            return {"cancelled": True, "batchId": batch.batch_id, "index": index, "queued": True}
         if item.status not in {CASE_PENDING, CASE_RUNNING}:
             raise ValueError("该用例已经结束。")
         item.cancel_requested = True
@@ -898,9 +925,10 @@ class EvalBatchManager:
                 await self.cancel(batch_id)
         # Let every cancelled batch coroutine unwind before the pool and its temp dirs go away.
         pending = [
-            batch.task
+            task
             for batch in self._batches.values()
-            if batch.task is not None and not batch.task.done()
+            for task in (batch.task, batch.rerun_task)
+            if task is not None and not task.done()
         ]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -934,6 +962,10 @@ class EvalBatchManager:
         batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
+        if batch.status == BATCH_RUNNING:
+            # A rerun queue may still be running or the main pass is not done; retrying the whole
+            # set now would create a duplicate batch and double the quota it consumes.
+            raise ValueError("该批次仍在执行中。")
         selected = [
             item
             for item in batch.items
@@ -1037,24 +1069,118 @@ class EvalBatchManager:
     async def rerun_item(
         self, batch_id: str, index: int, *, owner: str = ""
     ) -> dict[str, object]:
-        """Rerun one item in place with a fresh run identity.
+        """Queue one item for re-execution with a fresh run identity.
 
-        Only a batch that is not running can be rerun. The previous attempt is kept in
-        ``item.attempts`` so the drawer can still open its wire log.
+        A rerun may be queued while the main pass still runs: it shares the batch's slot pool, so
+        it starts at the next free slot and never lifts the batch above ``concurrency`` active
+        items. Only an item that already reached a terminal result can be rerun; a pending or
+        running item would be executed twice. The previous attempt stays in ``item.attempts``.
         """
         batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
-        if batch.status == BATCH_RUNNING:
-            raise ValueError("该批次仍在执行中。")
         if index < 0 or index >= len(batch.items):
             raise ValueError("用例下标无效。")
         item = batch.items[index]
-        # The previous attempt may still hold a remote Task; release it before the new identity
-        # starts, so a rerun never doubles the quota the batch consumes.
-        await self._release_item_runs(
-            item, reason="The tester replaced this run with a new attempt."
-        )
+        if item.status == CASE_RUNNING:
+            raise ValueError("该用例还在执行中，不能重跑。")
+        if item.status == CASE_PENDING and batch.status == BATCH_RUNNING:
+            # The main pass has not reached this row yet; rerunning it now would execute it twice.
+            raise ValueError("该用例尚未执行，不能重跑。")
+        if index in batch.rerun_queue or index in batch.rerun_pending:
+            raise ValueError("该用例已经在重跑队列中。")
+        # A stale flag from an earlier cancel must not swallow this request; only a cancel that
+        # arrives during the release below aborts the enqueue.
+        item.cancel_requested = False
+        batch.rerun_pending.add(index)
+        try:
+            # The previous attempt may still hold a remote Task; release it before the new
+            # identity starts, so a rerun never doubles the quota the batch consumes.
+            await self._release_item_runs(
+                item, reason="The tester replaced this run with a new attempt."
+            )
+        finally:
+            batch.rerun_pending.discard(index)
+        if item.cancel_requested:
+            # The row was cancelled while its previous Task was being released.
+            item.cancel_requested = False
+            return self._snapshot(batch)
+        batch.rerun_queue.append(index)
+        if batch.status != BATCH_RUNNING:
+            batch.status = BATCH_RUNNING
+            batch.cancel_requested = False
+            batch.finished_at = None
+            batch.error = None
+        self._ensure_slots(batch)
+        if not batch.rerun_active:
+            batch.rerun_active = True
+            batch.rerun_task = asyncio.create_task(
+                self._run_rerun_queue(batch), name=f"tester-{batch_id}-rerun"
+            )
+        self._persist(batch)
+        await asyncio.sleep(0)
+        return self._snapshot(batch)
+
+    async def _run_rerun_queue(self, batch: _Batch) -> None:
+        """Drain the rerun queue, sharing the main pass's slot pool and completion gate.
+
+        A worker takes an item out of the queue only after it holds a slot, so a queued rerun
+        stays visible as ``排队中`` while the main pass (or another rerun) occupies the pool.
+        """
+
+        async def worker() -> None:
+            while not batch.cancel_requested:
+                if not batch.rerun_queue:
+                    return
+                async with self._batch_slot(batch):
+                    if batch.cancel_requested:
+                        return
+                    index = self._pop_rerun(batch)
+                    if index is None:
+                        return
+                    item = batch.items[index]
+                    self._begin_rerun(batch, item)
+                    batch.active_indices.append(index)
+                    batch.current_index = index
+                    batch.active_concurrency = min(
+                        batch.concurrency, len(batch.active_indices)
+                    )
+                    try:
+                        # The item may use the pool whenever the batch has more than one slot:
+                        # the main pass may be using the others, and the global serial lock
+                        # would make this rerun wait for unrelated batches.
+                        await self._run_item(
+                            batch, index, item, concurrent=batch.concurrency > 1
+                        )
+                    finally:
+                        if index in batch.active_indices:
+                            batch.active_indices.remove(index)
+                        batch.current_index = (
+                            batch.active_indices[0] if batch.active_indices else None
+                        )
+
+        try:
+            await asyncio.gather(
+                *(worker() for _ in range(max(1, batch.concurrency)))
+            )
+        except asyncio.CancelledError:
+            self._mark_pending_cancelled(batch)
+            raise
+        finally:
+            batch.rerun_active = False
+            batch.rerun_task = None
+            self._finish_batch_if_idle(batch)
+
+    def _pop_rerun(self, batch: _Batch) -> int | None:
+        """Return the next rerun index that was not cancelled, ``None`` when the queue is empty."""
+        while batch.rerun_queue:
+            index = batch.rerun_queue.popleft()
+            if 0 <= index < len(batch.items) and not batch.items[index].cancel_requested:
+                return index
+        return None
+
+    def _begin_rerun(self, batch: _Batch, item: CaseItem) -> None:
+        """Record the previous attempt and reset the row before the queued rerun starts."""
         item.attempts.append(
             {
                 "runId": item.run_id,
@@ -1086,28 +1212,43 @@ class EvalBatchManager:
         item.client_quality = None
         item.intent_verdict = None
         item.needs_review = False
-        batch.status = BATCH_RUNNING
-        batch.cancel_requested = False
-        batch.active_indices = []
-        batch.finished_at = None
-        batch.error = None
-        self._persist(batch)
-        batch.task = asyncio.create_task(
-            self._run_batch(batch, [index]), name=f"tester-{batch_id}-rerun-{index}"
-        )
-        await asyncio.sleep(0)
-        return self._snapshot(batch)
 
-    async def _run_batch(
-        self, batch: _Batch, indices: Sequence[int] | None = None
-    ) -> None:
-        selected = list(range(len(batch.items))) if indices is None else list(indices)
-        # A single-item run is sequential even on a batch configured for more: one item has
-        # nothing to overlap with, so it keeps the historical client and counter behaviour.
-        concurrent = indices is None and batch.concurrency > 1 and len(selected) > 1
-        # A rerun touches one row; a single-round batch keeps the historical single group, so the
-        # loop below is a no-op wrapper around exactly the previous execution path.
-        groups = [selected] if indices is not None else _round_groups(batch, selected)
+    def _ensure_slots(self, batch: _Batch) -> None:
+        """Create the per-batch slot pool the main pass and the rerun queue share."""
+        if batch.slots is None:
+            batch.slots = asyncio.Semaphore(max(1, batch.concurrency))
+
+    @asynccontextmanager
+    async def _batch_slot(self, batch: _Batch):
+        """Hold one batch slot while one item executes, releasing it on cancellation too."""
+        self._ensure_slots(batch)
+        slots = batch.slots
+        assert slots is not None
+        await slots.acquire()
+        try:
+            yield
+        finally:
+            slots.release()
+
+    def _finish_batch_if_idle(self, batch: _Batch) -> None:
+        """Finish the batch only when both execution lanes are done and nothing is queued."""
+        if batch.status != BATCH_RUNNING:
+            return
+        if batch.main_active or batch.rerun_active or batch.rerun_queue:
+            return
+        batch.status = BATCH_CANCELLED if batch.cancel_requested else BATCH_FINISHED
+        batch.finished_at = _now_iso()
+        batch.active_indices = []
+        batch.current_index = None
+        batch.active_concurrency = 1
+        batch.slots = None
+        self._persist(batch)
+
+    async def _run_batch(self, batch: _Batch) -> None:
+        """Run the selected items once, round by round; the rerun queue runs beside it."""
+        selected = list(range(len(batch.items)))
+        concurrent = batch.concurrency > 1 and len(selected) > 1
+        groups = _round_groups(batch, selected)
         batch.active_concurrency = batch.concurrency if concurrent else 1
         try:
             for group in groups:
@@ -1118,31 +1259,27 @@ class EvalBatchManager:
                 group_concurrent = concurrent and len(group) > 1
                 batch.active_concurrency = batch.concurrency if group_concurrent else 1
                 if group_concurrent:
-                    await self._run_items_concurrently(batch, group)
+                    await self._run_items_concurrently(batch, group, concurrent=True)
                 else:
-                    await self._run_items_sequentially(batch, group)
+                    await self._run_items_sequentially(
+                        batch, group, concurrent=group_concurrent
+                    )
         except asyncio.CancelledError:
             self._mark_pending_cancelled(batch)
-            batch.status = BATCH_CANCELLED
-            batch.finished_at = _now_iso()
             raise
-        else:
-            if batch.cancel_requested:
-                self._mark_pending_cancelled(batch)
-                batch.status = BATCH_CANCELLED
-            else:
-                batch.status = BATCH_FINISHED
-            batch.finished_at = _now_iso()
         finally:
+            batch.main_active = False
             batch.current_index = None
-            batch.active_indices = []
-            self._persist(batch)
+            self._finish_batch_if_idle(batch)
 
-    async def _run_items_sequentially(self, batch: _Batch, selected: Sequence[int]) -> None:
-        """Run the selected items one after another: the historical batch behaviour.
+    async def _run_items_sequentially(
+        self, batch: _Batch, selected: Sequence[int], *, concurrent: bool = False
+    ) -> None:
+        """Run the selected items one after another, holding one shared batch slot each.
 
         Kept separate from :meth:`_run_items_concurrently` so a single-item batch always takes
-        exactly the code path it always took; the only addition is the per-item cancel check.
+        exactly the code path it always took; the only addition is the per-item cancel check and
+        the slot acquisition a rerun may be waiting on.
         """
         for index in selected:
             if batch.cancel_requested:
@@ -1152,14 +1289,25 @@ class EvalBatchManager:
                 # Cancelled while queued: it must not start, and the batch keeps going.
                 _mark_item_cancelled(item)
                 continue
-            batch.current_index = index
-            batch.active_indices = [index]
-            try:
-                await self._run_item(batch, index, item)
-            finally:
-                batch.active_indices = []
+            async with self._batch_slot(batch):
+                # A cancel may arrive while the item waited for a shared slot.
+                if item.cancel_requested:
+                    _mark_item_cancelled(item)
+                    continue
+                batch.active_indices.append(index)
+                batch.current_index = index
+                try:
+                    await self._run_item(batch, index, item, concurrent=concurrent)
+                finally:
+                    if index in batch.active_indices:
+                        batch.active_indices.remove(index)
+                    batch.current_index = (
+                        batch.active_indices[0] if batch.active_indices else None
+                    )
 
-    async def _run_items_concurrently(self, batch: _Batch, selected: Sequence[int]) -> None:
+    async def _run_items_concurrently(
+        self, batch: _Batch, selected: Sequence[int], *, concurrent: bool = True
+    ) -> None:
         """Run up to ``batch.concurrency`` items at once, taking them in catalog order."""
         pending = deque(selected)
 
@@ -1173,16 +1321,22 @@ class EvalBatchManager:
                 if item.cancel_requested:
                     _mark_item_cancelled(item)
                     continue
-                batch.active_indices.append(index)
-                try:
-                    await self._run_item(batch, index, item)
-                finally:
-                    if index in batch.active_indices:
-                        batch.active_indices.remove(index)
-                    # ``currentIndex`` stays meaningful for older consumers of the snapshot.
-                    batch.current_index = (
-                        batch.active_indices[0] if batch.active_indices else None
-                    )
+                async with self._batch_slot(batch):
+                    # A cancel may arrive while the item waited for a shared slot.
+                    if item.cancel_requested:
+                        _mark_item_cancelled(item)
+                        continue
+                    batch.active_indices.append(index)
+                    batch.current_index = index
+                    try:
+                        await self._run_item(batch, index, item, concurrent=concurrent)
+                    finally:
+                        if index in batch.active_indices:
+                            batch.active_indices.remove(index)
+                        # ``currentIndex`` stays meaningful for older consumers of the snapshot.
+                        batch.current_index = (
+                            batch.active_indices[0] if batch.active_indices else None
+                        )
 
         workers = max(1, min(batch.concurrency, len(selected)))
         await asyncio.gather(*(worker() for _ in range(workers)))
@@ -1193,14 +1347,16 @@ class EvalBatchManager:
                 item.status = CASE_CANCELLED
                 item.error = "批次已取消。"
 
-    async def _run_item(self, batch: _Batch, index: int, item: CaseItem) -> None:
+    async def _run_item(
+        self, batch: _Batch, index: int, item: CaseItem, *, concurrent: bool = False
+    ) -> None:
         item.status = CASE_RUNNING
         started = time.monotonic()
         try:
             if item.scratch is not None:
                 await self._run_scratch(batch, index, item)
             else:
-                await self._run_case_item(batch, index, item)
+                await self._run_case_item(batch, index, item, concurrent=concurrent)
         except asyncio.CancelledError:
             item.status = CASE_CANCELLED
             item.error = "批次已取消。"
@@ -1222,7 +1378,9 @@ class EvalBatchManager:
                 item.status = self._item_status(item)
             self._persist(batch)
 
-    async def _run_case_item(self, batch: _Batch, index: int, item: CaseItem) -> None:
+    async def _run_case_item(
+        self, batch: _Batch, index: int, item: CaseItem, *, concurrent: bool = False
+    ) -> None:
         case = self._catalog.get(item.case_id)
         if case is None:
             item.status = CASE_ERROR
@@ -1263,7 +1421,7 @@ class EvalBatchManager:
                     batch.stop_after,
                     batch.decision_mode,
                     outcome_case=effective_case if blocked_followup else None,
-                    concurrent=batch.active_concurrency > 1,
+                    concurrent=concurrent,
                 )
                 interception_missed = blocked_followup and not _interception_held(item)
         # The run executes the operator's original request; a correction is a later input of it.
@@ -3231,6 +3389,11 @@ class EvalBatchManager:
             # hides it when ``total`` is zero.
             "crossRound": _cross_round(batch.items),
             "activeIndices": list(batch.active_indices),
+            # Reruns may be queued while the main pass still runs; the console marks those rows
+            # and keeps their buttons usable instead of disabling the whole table.
+            "rerunQueue": list(batch.rerun_queue),
+            "rerunActive": batch.rerun_active,
+            "mainActive": batch.main_active,
             "transport": batch.transport,
             "discovery": batch.discovery,
             "resolvedRunner": {
@@ -3575,6 +3738,7 @@ def _status_batch(batch: _Batch) -> dict[str, object]:
         "done": finished,
         "total": len(items),
         "active": active,
+        "queued": len(batch.rerun_queue),
         "concurrency": batch.active_concurrency,
         "keepTasks": batch.keep_tasks,
         "stopAfter": batch.stop_after,

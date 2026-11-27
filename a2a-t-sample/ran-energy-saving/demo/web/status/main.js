@@ -137,6 +137,7 @@ function renderBatches(batches) {
   for (const batch of batches) {
     const progress = batch.total
       ? `${batch.done}/${batch.total} · ${Math.round((batch.done / batch.total) * 100)}%`
+        + (batch.queued ? ` · 排队重跑 ${batch.queued}` : "")
       : "—";
     const mode = document.createDocumentFragment();
     mode.append(el("div", "", `${batch.decisionMode || "?"} · ${batch.negotiationSource || "?"}`));

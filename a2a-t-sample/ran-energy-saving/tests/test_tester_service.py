@@ -1382,6 +1382,167 @@ async def test_rerun_is_rejected_while_running(tmp_path: Path) -> None:
             await task
 
 
+async def test_a_rerun_can_be_queued_while_the_main_batch_still_runs(
+    tmp_path: Path,
+) -> None:
+    """The failed row of one pass can be rerun before the whole batch finishes."""
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=10,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    first_run = await _wait_item_run(manager, batch_id, 0)
+    runs.open_gate(first_run)
+    await _wait_item_status(manager, batch_id, 0, CASE_PASSED)
+    second_run = await _wait_item_run(manager, batch_id, 1)
+
+    queued = await manager.rerun_item(batch_id, 0)
+
+    assert queued["status"] == "running"
+    # The single slot is held by item 1, so the rerun is visibly waiting, not silently claimed.
+    assert queued["rerunQueue"] == [0]
+
+    runs.open_gate(second_run)
+    rerun_run = await _wait_item_run(manager, batch_id, 0, different_from=first_run)
+    runs.open_gate(rerun_run)
+    finished = await _wait_status(manager, batch_id, "finished")
+
+    item = finished["items"][0]
+    assert item["status"] == CASE_PASSED
+    assert item["attempts"][0]["runId"] == first_run
+    assert item["runId"] == rerun_run
+
+
+async def test_two_reruns_can_be_queued_without_waiting_for_the_first(
+    tmp_path: Path,
+) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=10,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    first_releaser = asyncio.create_task(
+        _release_all_until_finished(manager, runs, batch_id)
+    )
+    first = await _wait_status(manager, batch_id, "finished")
+    await first_releaser
+    first_run_ids = [item["runId"] for item in first["items"]]
+
+    await manager.rerun_item(batch_id, 0)
+    await _wait_item_status(manager, batch_id, 0, CASE_RUNNING)
+    second = await manager.rerun_item(batch_id, 1)
+
+    assert second["rerunQueue"] == [1]
+
+    releaser = asyncio.create_task(_release_all_until_finished(manager, runs, batch_id))
+    finished = await _wait_status(manager, batch_id, "finished")
+    await releaser
+
+    for index, run_id in enumerate(first_run_ids):
+        assert finished["items"][index]["attempts"][0]["runId"] == run_id
+    assert finished["items"][0]["runId"] != first_run_ids[0]
+    assert finished["items"][1]["runId"] != first_run_ids[1]
+
+
+async def test_a_queued_rerun_can_be_dropped_before_it_starts(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=10,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    first_run = await _wait_item_run(manager, batch_id, 0)
+    runs.open_gate(first_run)
+    await _wait_item_status(manager, batch_id, 0, CASE_PASSED)
+    second_run = await _wait_item_run(manager, batch_id, 1)
+    await manager.rerun_item(batch_id, 0)
+
+    dropped = await manager.cancel_item(batch_id, 0)
+
+    assert dropped["queued"] is True
+    batch = manager._batches[batch_id]
+    assert list(batch.rerun_queue) == []
+    assert batch.items[0].run_id == first_run
+    assert batch.items[0].status == CASE_PASSED
+
+    runs.open_gate(second_run)
+    finished = await _wait_status(manager, batch_id, "finished")
+    assert finished["items"][0]["runId"] == first_run
+
+
+async def test_retry_is_refused_while_a_rerun_queue_is_running(tmp_path: Path) -> None:
+    runs = _GatedRuns()
+    manager = _manager(tmp_path, runs)
+    created = manager.create(
+        case_ids=[1, 2],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="final",
+        approval=None,
+        timeout_seconds=10,
+    )
+    batch_id = str(created["batchId"])
+    await manager.start(batch_id)
+    first_run = await _wait_item_run(manager, batch_id, 0)
+    runs.open_gate(first_run)
+    await _wait_item_status(manager, batch_id, 0, CASE_PASSED)
+    second_run = await _wait_item_run(manager, batch_id, 1)
+    await manager.rerun_item(batch_id, 0)
+
+    with pytest.raises(ValueError, match="执行中"):
+        await manager.retry(batch_id)
+
+    runs.open_gate(second_run)
+    releaser = asyncio.create_task(_release_all_until_finished(manager, runs, batch_id))
+    await _wait_status(manager, batch_id, "finished")
+    await releaser
+
+
+async def test_a_queued_sdk_rerun_uses_the_client_pool_when_concurrent(
+    tmp_path: Path,
+) -> None:
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    created = manager.create(
+        case_ids=[1, 2],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        concurrency=2,
+    )
+    batch_id = str(created["batchId"])
+    for item in manager._batches[batch_id].items:
+        item.status = CASE_FAILED
+    seen: list[bool] = []
+    original = manager._run_sdk_stages
+
+    async def recording(*args: Any, **kwargs: Any) -> Any:
+        seen.append(bool(kwargs.get("concurrent")))
+        return await original(*args, **kwargs)
+
+    manager._run_sdk_stages = recording  # type: ignore[method-assign]
+
+    await manager.rerun_item(batch_id, 0)
+    await manager.rerun_item(batch_id, 1)
+    await _wait_status(manager, batch_id, "finished")
+
+    assert seen == [True, True]
+
+
 def test_partial_status_counts_waiting_stages(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_finish))
     created = manager.create(
@@ -2530,6 +2691,9 @@ async def test_a_rerun_clears_the_previous_arbitration_evidence(tmp_path: Path) 
 
     try:
         await manager.rerun_item(batch_id, 0)
+        # A queued rerun keeps the previous row visible until it actually starts; the evidence
+        # belongs to the attempt that produced it, so it must be gone once the new one runs.
+        await _wait_item_status(manager, batch_id, 0, CASE_RUNNING)
         assert item.trace_id == ""
         assert item.intent is None
         assert item.intent_meta == {}
@@ -3240,6 +3404,26 @@ async def _wait_item_status(
     raise AssertionError(f"item {index} of {batch_id} did not reach {expected}")
 
 
+async def _wait_item_run(
+    manager: EvalBatchManager,
+    batch_id: str,
+    index: int,
+    *,
+    different_from: str = "",
+    timeout: float = 10.0,
+) -> str:
+    """Wait for an item's run id to appear (or change) and return it."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        snapshot = manager.get(batch_id)
+        assert snapshot is not None
+        run_id = str(snapshot["items"][index]["runId"] or "")
+        if run_id and run_id != different_from:
+            return run_id
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"item {index} of {batch_id} did not start a run")
+
+
 async def _wait_in_flight(runs: _GatedRuns, expected: int, timeout: float = 10.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -3247,6 +3431,23 @@ async def _wait_in_flight(runs: _GatedRuns, expected: int, timeout: float = 10.0
             return
         await asyncio.sleep(0.01)
     raise AssertionError(f"only {runs.in_flight} runs were in flight, expected {expected}")
+
+
+async def _release_all_until_finished(
+    manager: EvalBatchManager,
+    runs: _GatedRuns,
+    batch_id: str,
+    timeout: float = 10.0,
+) -> None:
+    """Open every run gate as it appears until the batch reaches ``finished``."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        runs.open_all()
+        snapshot = manager.get(batch_id)
+        if snapshot is None or snapshot["status"] == "finished":
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"batch {batch_id} did not finish")
 
 
 def test_concurrency_defaults_to_one_and_rejects_out_of_range(tmp_path: Path) -> None:
