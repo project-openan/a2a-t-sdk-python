@@ -13,7 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def _child_env() -> dict[str, str]:
     """Return the process environment with the sample root on ``PYTHONPATH``."""
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(PROJECT_ROOT), existing) if part
+    )
     return env
 
 

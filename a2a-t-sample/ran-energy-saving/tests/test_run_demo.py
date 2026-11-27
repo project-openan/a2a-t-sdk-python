@@ -113,7 +113,10 @@ def test_run_state_and_data_directories_are_configurable(tmp_path: Path) -> None
     env = dict(os.environ)
     env["A2AT_SAMPLE_RUN_DIR"] = str(tmp_path / "state")
     env["A2AT_SAMPLE_RUNS_DIR"] = str(tmp_path / "data")
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    sample_root = str(Path(__file__).resolve().parents[1])
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (sample_root, env.get("PYTHONPATH")) if part
+    )
     result = subprocess.run(
         [
             sys.executable,
