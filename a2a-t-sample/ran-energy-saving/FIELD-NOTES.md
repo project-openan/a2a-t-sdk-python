@@ -25,7 +25,7 @@ the OSS proxy, MIE approval and the observation consoles no longer apply.
 | UI starts, gateway does not | gateway public URL and `--gateway-port` availability |
 | NMS pushes never arrive | `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL`, firewall/NAT, receiver port |
 | Run ends before the NMS Task | long-task tracking and the poll interval budget |
-| Task-T rejected before sending | operator text, SDK validation error code, model endpoint |
+| Task-T blocked by slot extraction | operator text, `slot.*` error code, model endpoint |
 | Task stuck in `SUBMITTED` | vendor status push/subscription; wire log shows whether a push arrived |
 
 ## Rules

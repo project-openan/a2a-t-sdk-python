@@ -8,14 +8,14 @@
 | 方 | 组成 | 说明 |
 |---|---|---|
 | 测试台 `/tester` | 用例目录、批次执行、阶段判定、xlsx 报告 | 只负责驱动与取证 |
-| 客户端 agent | client agent、协议层、发送前校验 | 我们的产品；既驱动被测方，也单独评估决策质量 |
+| 客户端 agent | client agent、协议层、slot 抽取门 | 我们的产品；既驱动被测方，也单独评估决策质量 |
 | 真机网管 | 厂商实现 | 被测系统 |
 
 ## 2. 执行链
 
 ```
 选择用例/协议 → 创建批次 → 逐项启动 client run
-  → SDK Task-T 生成与校验（send 前）
+  → SDK slot 抽取 / Task-T 生成（send 前；slot.* 失败即拦截）
   → A2A-T / 标准 A2A 协商（client agent 作答）
   → accepted / working / final 观察
   → 采集 wire、trace、阶段结论 → xlsx 报告
@@ -30,7 +30,19 @@
 xlsx 包含：用例结果、阶段明细、意图对比、客户端决策质量表、拦截证据、批次计划（环境/模型/
 原则版本/NMS 版本）与跨轮稳定性。报告中的 wire 证据必须逐帧原文，不得截断。
 
-## 4. 边界
+- R 列是本次 run 的原始交互记录（请求行、头、body、每条 SSE/推送），同时写入 interaction sheet；
+  轨迹列是逐帧摘要。超过 Excel 单元格上限时 R 列截断并指向 interaction sheet。
+- 配置了 Langfuse 时，表尾追加九列 token/协商指标（AI–AQ）；未配置或抓取失败时留空并在备注说明。
+- Task-T 与用例期望不一致只记为 warning；用例结论以服务端 `serverIntent` 为准。
+
+## 4. 状态与重跑
+
+- `/status`（`/api/status`）是跨浏览器的只读视图：运行中的批次、SDK 池占用、持有远端 Task 的 run、
+  detached run 与进程启动时间。它不提供取消操作。
+- 批次运行中可以对已结束的单条用例重跑；重跑与主轮共享 `batch.concurrency` 槽位，不会重复执行
+  未结束的行。
+
+## 5. 边界
 
 - 测试台不修改用例语料，不改写运维原文。
 - 测试台不替客户端做协议决策；判定只比较观察结果与期望。

@@ -1,7 +1,7 @@
 # RAN energy saving — A2A-T client for real-NMS integration
 
 This sample is the client side of a RAN energy-saving integration: an ADK agent reads the
-operator's request, the A2A-T SDK produces and validates the Task-T, and the client negotiates
+operator's request, the A2A-T SDK produces the Task-T, and the client negotiates
 with the vendor NMS (or with the local reference RAN server) until the Task is accepted and
 executed. Every decision is model-driven; there is no scripted/offline decision mode.
 
@@ -59,7 +59,8 @@ python run_demo.py --nms --ui --gateway \
 
 ```bash
 python run_demo.py --ui            # local RAN server + UI, direct AgentCard discovery
-python run_demo.py --stop          # stop the launcher-owned processes
+python run_demo.py --stop          # stop only this instance's owned processes
+python run_demo.py --stop --reclaim-port  # also reclaim this instance's orphaned Web UI
 ```
 
 ## 2. What the client does
@@ -67,7 +68,8 @@ python run_demo.py --stop          # stop the launcher-owned processes
 1. Reads the operator request with the ADK intent layer (display and approval 1 only).
 2. Lets the SDK produce the Task-T from the operator's **original text**; the sample never
    rewrites the request or guesses slots.
-3. Validates the Task-T before sending (`A2AT_SAMPLE_PRE_SEND_VALIDATION`).
+3. Runs the SDK slot extraction; a `slot.*` failure blocks before a Task-T exists, and a
+   generated Task-T is recorded as local passing evidence (no second validation call).
 4. Negotiates with the NMS: information / target / feasibility rounds, with the client ADK agent
    producing every reply and decision.
 5. Sends the accepted request, follows the Task to its terminal state (including long tasks),

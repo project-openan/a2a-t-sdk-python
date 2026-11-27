@@ -1,6 +1,6 @@
 # RAN 节能 —— 面向真机网管集成的 A2A-T 客户端
 
-本样例是 RAN 节能集成的**客户端**：ADK agent 读取运维人员请求，A2A-T SDK 生成并校验 Task-T，
+本样例是 RAN 节能集成的**客户端**：ADK agent 读取运维人员请求，A2A-T SDK 生成 Task-T，
 客户端与厂商网管（或本地参考 RAN 服务端）协商，直到任务被接受并执行。所有决策均由模型产生，
 不再提供 scripted / offline 决策模式。
 
@@ -56,14 +56,16 @@ python run_demo.py --nms --ui --gateway \
 
 ```bash
 python run_demo.py --ui            # 本地 RAN 服务端 + UI，AgentCard 直连发现
-python run_demo.py --stop          # 停止启动器管理的进程
+python run_demo.py --stop          # 只停本实例启动的进程
+python run_demo.py --stop --reclaim-port  # 另回收本实例遗留的 Web UI
 ```
 
 ## 2. 客户端链路
 
 1. ADK intent 层读取运维请求（仅用于展示与 approval 1）。
 2. SDK 从**运维原文**生成 Task-T，样例不重写请求、不猜测 slot。
-3. 发送前校验 Task-T（`A2AT_SAMPLE_PRE_SEND_VALIDATION`）。
+3. 执行 SDK slot 抽取；`slot.*` 失败在 Task-T 生成前拦截，生成的 Task-T 只记录为本地通过证据
+   （不再做第二次校验调用）。
 4. 与网管协商：information / target / feasibility，客户端 ADK agent 负责每一次答复与决策。
 5. 发送已接受请求，跟踪 Task 到终态（含长任务），发布报告。
 

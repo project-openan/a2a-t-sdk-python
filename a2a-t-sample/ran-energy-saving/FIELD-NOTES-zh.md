@@ -24,7 +24,7 @@
 | UI 起来了，gateway 没起来 | gateway 公网 URL 与 `--gateway-port` 是否可用 |
 | 收不到网管推送 | `A2AT_SAMPLE_WEBHOOK_PUBLIC_URL`、防火墙/NAT、接收端口 |
 | run 在网管 Task 之前结束 | 长任务跟踪与轮询配额 |
-| Task-T 发送前被拒 | 运维原文、SDK 校验错误码、模型端点 |
+| Task-T 抽取被拦截 | 运维原文、`slot.*` 错误码、模型端点 |
 | Task 停在 `SUBMITTED` | 厂商状态推送/订阅；wire 日志确认是否收到推送 |
 
 ## 规则

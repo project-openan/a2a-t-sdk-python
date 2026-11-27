@@ -6,7 +6,7 @@
 |---|---|---|
 | 客户端流程 | `protocol/client_flow.py` | 发送、协商、决策、Task 生命周期 |
 | 客户端 agent | `shared/adk_tracing.py` | ADK 决策与意图轮次 |
-| SDK 结构化调用 | `shared/traced_llm.py` | Task-T slot 抽取与内容校验 |
+| SDK 结构化调用 | `shared/traced_llm.py` | Task-T slot 抽取 |
 | 本地服务端 | `protocol/server_executor.py` | planner 轮次、工具调用、Task 状态 |
 | gateway | `protocol/client_gateway.py` | 入站 Task 映射 |
 

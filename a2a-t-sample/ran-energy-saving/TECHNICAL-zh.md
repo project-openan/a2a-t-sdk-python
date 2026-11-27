@@ -16,7 +16,8 @@ OSS 代理、MIE 审批以及内部观测/审核控制台的说明已不再适�
 
 ## 2. 协议链路
 
-- **A2A-T**：Task-T + Negotiation-T 扩展。SDK 从运维原文生成 Task-T 并校验，客户端 agent 应答
+- **A2A-T**：Task-T + Negotiation-T 扩展。SDK 从运维原文抽取 slot 并生成 Task-T；`slot.*`
+  失败在 Task-T 生成前拦截，客户端 agent 应答
   information / target / feasibility 提案。
 - **标准 A2A**：普通消息 + `TASK_STATE_INPUT_REQUIRED` 续传。两条链路使用同一个决策 agent 和
   同一套 run/task 存储。
@@ -27,7 +28,8 @@ OSS 代理、MIE 审批以及内部观测/审核控制台的说明已不再适�
 
 1. **intent 层**（`demo/agents/intent_agent`）：仅用于展示与 approval 1，不重写请求、不生成
    Task-T 业务值。
-2. **SDK slot 抽取与校验**：Task-T 与结构化校验结论的唯一来源。
+2. **SDK slot 抽取**：Task-T 的唯一来源；抽取失败在 Task-T 生成前拦截，生成成功只记录为本地
+   通过证据，不再做第二次内容校验。
 3. **客户端决策 agent**（`demo/agents/client_agent`）：依据服务端提案、运维原文与冻结的协商
    原则，产生协商答复及 accept/reject/abort 决策。
 4. **确定性规则**决定协议正确性：performative、轮次、Task 生命周期、终态与前置条件。模型不拥有

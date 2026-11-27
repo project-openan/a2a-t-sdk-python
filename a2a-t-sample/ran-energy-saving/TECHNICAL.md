@@ -18,9 +18,9 @@ inbound surface; it does not proxy the Web UI.
 
 ## 2. Protocol paths
 
-- **A2A-T**: Task-T + Negotiation-T extension. The SDK generates the Task-T from the operator's
-  original text, validates it, and the client agent answers information/target/feasibility
-  proposals.
+- **A2A-T**: Task-T + Negotiation-T extension. The SDK extracts the slots and generates the
+  Task-T from the operator's original text; a `slot.*` failure blocks before a Task-T exists, and
+  the client agent answers information/target/feasibility proposals.
 - **standard A2A**: a plain message and `TASK_STATE_INPUT_REQUIRED` continuation. Both paths use
   the same decision agent and the same run/task stores.
 - The pure hop is **direct**: `UI → NMS` or `UI → local server`. The deprecated

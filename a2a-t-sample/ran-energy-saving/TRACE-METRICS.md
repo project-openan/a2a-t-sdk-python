@@ -6,7 +6,7 @@
 |---|---|---|
 | Client flow | `protocol/client_flow.py` | send, negotiation, decision, Task lifecycle |
 | Client agent | `shared/adk_tracing.py` | ADK decision and intent turns |
-| SDK structured calls | `shared/traced_llm.py` | Task-T slot extraction and content validation |
+| SDK structured calls | `shared/traced_llm.py` | Task-T slot extraction |
 | Local server | `protocol/server_executor.py` | planner turns, tool calls, Task states |
 | Gateway | `protocol/client_gateway.py` | inbound Task mapping |
 
