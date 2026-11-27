@@ -13,7 +13,7 @@ from typing import Any
 
 from protocol.client_runtime import MODE_CONFIRM, MODE_MANUAL, build_client_runtime
 from protocol.pre_task_negotiation import TaskTPrecheck
-from shared.config import DISCOVERY_NMS, INTENT_MODE_PROCESSED, SampleConfig
+from shared.config import INTENT_MODE_PROCESSED, SampleConfig
 from shared.run_constants import PROTOCOL_A2A_T, PROTOCOL_PURE
 
 _LOGGER = logging.getLogger("ran_energy_saving.composition")
@@ -76,12 +76,10 @@ async def build_demo_runtime(
                 mode=mode,
                 timeout_seconds=config.manual_decision_timeout_seconds,
             )
-        elif pure_reply_source == "agent" or discovery == DISCOVERY_NMS:
-            # The direct vendor hop has no OSS Agent to draft a recommendation, so automatic mode
-            # negotiates itself: a deterministic plan when the request implies the value, otherwise
-            # the decision agent, with the confirmation card as the operator fallback. A tester
-            # agent run asks for the same agency on every direct hop, so the A2A and A2A-T rows
-            # take their decisions from the same client without the process policy in between.
+        else:
+            # Automatic mode has no OSS Agent to draft a recommendation, so the client agent
+            # answers the vendor's question itself. A tester run keeps its own case conditions as
+            # the acceptance ground; every other run lets the process policy apply.
             from protocol.decision_provider import AdkDecisionProvider
             from shared.model_factory import build_traced_adk_model
 
@@ -97,22 +95,14 @@ async def build_demo_runtime(
                 agent_factory=client_agent_factory,
                 policy=policy,
             )
-            # Automatic mode has no operator to hand the question to. A value the client cannot
-            # ground is asked of the NMS (which owns the inventory) and refused after three
-            # unanswered questions; the pure answer object owns that budget.
+            # A value the client cannot ground is asked of the NMS (which owns the inventory) and
+            # refused after three unanswered questions; the pure answer object owns that budget.
             pure_answer = build_auto_pure_answer(
                 provider,
                 policy,
                 request_text=run_spec.user_request,
                 apply_client_policy=pure_reply_source != "agent",
             )
-        else:
-            from demo.pure_policy import pure_answer_from_recommendation
-
-            def pure_answer_from_policy(event: dict[str, object]) -> str:
-                return pure_answer_from_recommendation(event, config.language)
-
-            pure_answer = pure_answer_from_policy
     else:
         pure_answer = None
 

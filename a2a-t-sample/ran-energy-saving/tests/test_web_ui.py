@@ -204,7 +204,6 @@ class FakeRuntime:
         enforce_required_fields: bool = False,
         require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
-        reply_only_accept: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -212,7 +211,6 @@ class FakeRuntime:
         target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
         del validate_before_send, enforce_required_fields, require_rate_target, site_level_rate_optional
-        del reply_only_accept
         self.run_id = run_id
         self.user_request = user_request
         self.conversation_context = conversation_context

@@ -692,7 +692,6 @@ def test_the_client_quality_appendix_is_exported_as_its_own_sheet() -> None:
 def test_the_agent_pure_reply_reference_is_exported_as_its_own_sheet() -> None:
     """The P column is not lost when the agent authors the A2A reply: it stays as reference."""
     batch = _snapshot()
-    batch["negotiationSource"] = "agent"
     batch["items"][0]["protocol"] = "a2a"
     batch["items"][0]["refs"] = {
         "clientReplies": ["The region is A2ATestRegion.", "The target is 10Mbps."]
@@ -707,17 +706,6 @@ def test_the_agent_pure_reply_reference_is_exported_as_its_own_sheet() -> None:
     assert rows[2] == (1, "a2a", 2, "The target is 10Mbps.")
 
 
-def test_a_script_batch_does_not_export_the_reply_reference() -> None:
-    """The script source replays P; exporting it again would duplicate the case."""
-    batch = _snapshot()
-    batch["negotiationSource"] = "script"
-    batch["items"][0]["refs"] = {"clientReplies": ["The region is A2ATestRegion."]}
-
-    workbook = load_workbook(BytesIO(write_report(batch)))
-
-    assert "客户端答复参考" not in workbook.sheetnames
-
-
 def test_the_batch_plan_is_exported_as_its_own_sheet() -> None:
     """One batch's models, principles version and environment must travel with the report."""
     batch = _snapshot()
@@ -728,7 +716,6 @@ def test_the_batch_plan_is_exported_as_its_own_sheet() -> None:
         "judgeModel": "judge-model",
         "principlesVersion": "2026-11-23.1",
         "nmsVersion": "NMS-1.2",
-        "decisionSource": "agent",
         "stopAfter": "accepted",
         "rounds": 1,
     }
@@ -742,7 +729,6 @@ def test_the_batch_plan_is_exported_as_its_own_sheet() -> None:
     assert plan["判定模型"] == "judge-model"
     assert plan["协商原则版本"] == "2026-11-23.1"
     assert plan["NMS 版本"] == "NMS-1.2"
-    assert plan["协商答复来源"] == "agent"
 
 
 def test_a_batch_without_client_quality_keeps_the_four_existing_sheets() -> None:

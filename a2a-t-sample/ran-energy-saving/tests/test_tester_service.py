@@ -864,18 +864,6 @@ async def test_an_a2a_t_run_uses_the_auto_decision_mode(tmp_path: Path) -> None:
     assert "decisionMode" not in created
 
 
-def test_an_unknown_negotiation_source_is_rejected(tmp_path: Path) -> None:
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
-
-    with pytest.raises(ValueError):
-        manager.create(
-            case_ids=[1],
-            protocols=[PROTOCOL_A2A_T],
-            stop_after="validate",
-            negotiation_source="human",
-        )
-
-
 async def test_an_agent_negotiation_case_runs_in_auto_mode(tmp_path: Path) -> None:
     """The agent source must not force MODE_SCRIPTED and must not carry a decision script."""
     manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
@@ -883,7 +871,6 @@ async def test_an_agent_negotiation_case_runs_in_auto_mode(tmp_path: Path) -> No
         case_ids=[51],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -901,7 +888,6 @@ async def test_a_non_negotiation_agent_case_keeps_its_normal_mode(tmp_path: Path
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -919,7 +905,6 @@ async def test_an_agent_pure_case_does_not_replay_the_p_column(tmp_path: Path) -
         case_ids=[51],
         protocols=[PROTOCOL_A2A],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -944,7 +929,6 @@ async def test_a_pure_item_reads_its_own_expectation_block(tmp_path: Path) -> No
         case_ids=[3],
         protocols=[PROTOCOL_A2A],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -972,7 +956,6 @@ async def test_an_agent_pure_item_gets_its_client_quality(tmp_path: Path) -> Non
         case_ids=[51],
         protocols=[PROTOCOL_A2A],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -1002,7 +985,6 @@ async def test_an_agent_negotiation_item_gets_its_client_quality(tmp_path: Path)
         case_ids=[51],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -1031,7 +1013,6 @@ async def test_client_quality_never_changes_the_item_status(tmp_path: Path) -> N
         case_ids=[51],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -1055,7 +1036,6 @@ async def test_an_unavailable_judge_leaves_the_item_green(tmp_path: Path) -> Non
         case_ids=[51],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        negotiation_source="agent",
     )
 
     await manager.start(str(created["batchId"]))
@@ -1081,14 +1061,12 @@ def test_the_snapshot_records_the_batch_plan(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="accepted",
-        negotiation_source="agent",
         nms_version="NMS-1.2",
     )
 
     assert created["nmsVersion"] == "NMS-1.2"
     plan = created["plan"]
     assert plan["protocols"] == [PROTOCOL_A2A_T]
-    assert plan["decisionSource"] == "agent"
     assert plan["negotiationModel"] == "negotiation-model"
     assert plan["judgeModel"] == "judge-model"
     assert plan["principlesVersion"] == created["principlesVersion"]
@@ -1104,24 +1082,6 @@ def test_the_snapshot_records_the_batch_plan(tmp_path: Path) -> None:
     assert reloaded is not None
     assert reloaded["nmsVersion"] == "NMS-1.2"
     assert reloaded["plan"]["judgeModel"] == "judge-model"
-
-
-def test_a_batch_round_trips_the_negotiation_source(tmp_path: Path) -> None:
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
-    created = manager.create(
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="validate",
-        negotiation_source="agent",
-    )
-
-    assert created["schema"] == "osp-tester/v5"
-    assert created["negotiationSource"] == "agent"
-    reloaded = _manager(tmp_path, _FakeRuns(_finish), model_mode="live").get(
-        str(created["batchId"])
-    )
-    assert reloaded is not None
-    assert reloaded["negotiationSource"] == "agent"
 
 
 def test_a_persisted_batch_without_a_stage_loads_as_accepted(tmp_path: Path) -> None:
@@ -1158,7 +1118,6 @@ def test_create_freezes_the_shared_principles(tmp_path: Path) -> None:
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="validate",
-        negotiation_source="agent",
     )
 
     assert created["principlesVersion"]

@@ -900,7 +900,6 @@ class RunManager:
         prepared_task_t: str | None = None,
         prepared_filled: Mapping[str, object] | None = None,
         correction: str | None = None,
-        negotiation_source: str | None = None,
         client_conditions: str | None = None,
         negotiation_principles: str | None = None,
         principles_version: str | None = None,
@@ -942,19 +941,15 @@ class RunManager:
             correction: a repaired operator request applied when the run's own pre-send gate
                 blocks. The run keeps the original text as its request and continues after the
                 correction; a second block is terminal. ``None`` ends a blocked run as before.
-            negotiation_source: who authors a tester negotiation reply: ``agent`` (the live
-                decision agent) or ``script`` (the replayed case reply). Every other run and
-                every unset value keeps the historical script semantics.
             client_conditions: optional case-level acceptance conditions shown to the agent.
             negotiation_principles: body of the shared client negotiation principles.
             principles_version: version identifier of those principles.
 
         Raises:
             RunConflictError: when the same conversation already has an active run.
-            ValueError: when ``intent_mode`` or ``negotiation_source`` is unsupported.
+            ValueError: when ``intent_mode`` is unsupported.
         """
         resolved_source = normalize_run_source(source)
-        resolved_negotiation_source = _resolve_negotiation_source(negotiation_source)
         resolved_client_conditions = (client_conditions or "").strip()
         resolved_negotiation_principles = (negotiation_principles or "").strip()
         resolved_principles_version = (principles_version or "").strip()
@@ -1087,14 +1082,13 @@ class RunManager:
             prepared_task_t=prepared_task_t,
             prepared_filled=dict(prepared_filled) if prepared_filled else None,
             correction_request=correction.strip() if isinstance(correction, str) and correction.strip() else None,
-            negotiation_source=resolved_negotiation_source,
             client_conditions=resolved_client_conditions,
             negotiation_principles=resolved_negotiation_principles,
             principles_version=resolved_principles_version,
         )
-        # An agent-authored tester reply is the client's own decision: it must see the basis and
-        # must not be rewritten by the process policy. Every other run keeps both defaults.
-        if _is_tester_source(run.source) and run.negotiation_source == "agent":
+        # A tester run's reply is the client agent's own decision: it must see the basis and must
+        # not be rewritten by the process policy. Every other run keeps both defaults.
+        if _is_tester_source(run.source):
             run.decision_basis = DecisionBasis(
                 principles=run.negotiation_principles,
                 principles_version=run.principles_version,
@@ -1709,9 +1703,10 @@ class RunManager:
             if run.prepared_task_t:
                 runtime_kwargs["prepared_task_t"] = run.prepared_task_t
                 runtime_kwargs["prepared_filled"] = run.prepared_filled
-            if run.protocol == PROTOCOL_PURE and run.negotiation_source == "agent":
-                # The runtime factory must build an agent-backed pure answer instead of the
-                # recorded/deterministic one; this is test-side input, not a protocol fact.
+            if run.protocol == PROTOCOL_PURE and _is_tester_source(run.source):
+                # A tester pure run asks the client agent for its answer instead of letting the
+                # process policy apply the case conditions; this is test-side input, not a
+                # protocol fact.
                 runtime_kwargs["pure_reply_source"] = "agent"
             run.runtime = await self._runtime_factory(
                 # This manager keeps an incomplete remote Task active in the background, so the
@@ -1726,7 +1721,7 @@ class RunManager:
                 run_id=run.run_id,
                 **runtime_kwargs,
             )
-            if run.negotiation_source == "agent":
+            if run.decision_basis is not None:
                 # The decision basis is test-side input, not a protocol fact. Record the exact
                 # text and hash once per run so the client-quality judge can explain a decision.
                 run.emit_trace(
@@ -1814,9 +1809,6 @@ class RunManager:
                 target_context_id=run.target_context_id,
                 target_server_task_id=run.target_server_task_id,
                 target_server_context_id=run.target_server_context_id,
-                reply_only_accept=(
-                    _is_tester_source(run.source) and run.negotiation_source == "script"
-                ),
             )
             if run.pending_decision and not run.cancel_requested:
                 # A provider that returns while the operator is still being waited for would let
@@ -2326,20 +2318,6 @@ def _format_conversation_context(turns: list[Any]) -> str:
         lines.append(line)
         total += len(line) + 1
     return "\n".join(lines)
-
-
-def _resolve_negotiation_source(negotiation_source: str | None) -> str:
-    """Return the negotiation reply author of a run, defaulting to the historical script.
-
-    ``script`` keeps every existing caller byte-identical; ``agent`` lets the live decision agent
-    author the reply. An unknown value is a caller bug, not something to guess at.
-    """
-    value = negotiation_source.strip() if isinstance(negotiation_source, str) else ""
-    if not value:
-        return "script"
-    if value not in {"agent", "script"}:
-        raise ValueError(f"unknown negotiation_source {negotiation_source!r}")
-    return value
 
 
 def _is_tester_source(source: Mapping[str, object]) -> bool:

@@ -527,24 +527,6 @@ async def test_a_prepared_task_t_is_sent_without_regenerating_or_revalidating_it
     assert prepared in metadata.values()
 
 
-async def test_a_tester_script_exhaustion_ends_the_run_with_a_reason() -> None:
-    """A case column with fewer rounds than the vendor asks must not fail the run."""
-    transport = ScriptedTransport([[propose_event("information", 1)], _task_completed_batch()])
-
-    result = await run_client_flow(
-        prompt_client=FakePromptClient(),
-        transport=transport,
-        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((), graceful_exhaustion=True),
-        language="en-US",
-    )
-
-    assert result.final_state == FINAL_STATE_INCOMPLETE
-    assert result.error is not None
-    assert "第 1 轮" in result.error
-    assert len(transport.requests) == 1
-
-
 async def test_a_scenario_script_exhaustion_still_fails_loudly() -> None:
     """The catalog's own scripts keep the historical contract: drift is an error."""
     with pytest.raises(DecisionProviderError):
@@ -1133,96 +1115,6 @@ async def test_a_summary_that_contradicts_the_agreed_target_is_replaced() -> Non
     assert "{08:00-18:00,2Mbps}" in content.feasibility_summary
 
 
-async def test_a_scripted_summary_is_sent_verbatim_even_when_it_contradicts_the_target() -> None:
-    """A scripted provider replays case data: its summary is the reply, not flow wording."""
-    summary = "Accepted the rate reduction to {08:00~18:00,10Mbps}."
-    decision = NegotiationDecision(
-        action="accept",
-        rationale="Accept the reduced rate.",
-        filled_params={"guaranteedThroughputTarget": "{08:00-18:00,2Mbps}"},
-        feasibility_summary=summary,
-    )
-    prompt_client = FakePromptClient()
-    await run_client_flow(
-        prompt_client=prompt_client,
-        transport=ScriptedTransport([[propose_event("feasibility", 1)], _task_completed_batch()]),
-        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((decision,)),
-        language="en-US",
-        intent_fields=_INTENT_FIELDS,
-        verbatim_decision_text=True,
-    )
-
-    content = prompt_client.accept_data[0].content
-    assert isinstance(content, FeasibilityEndingContent)
-    assert content.feasibility_summary == summary
-
-
-async def test_a_reply_only_accept_sends_the_authored_summary_without_a_refilled_task_t() -> None:
-    """A tester replays a case reply: the accept is that reply, with no derived target."""
-    summary = "Reduce throughput target from 10Mbps to 2Mbps for the power outage period."
-    decision = NegotiationDecision(
-        action="accept",
-        rationale=summary,
-        feasibility_summary=summary,
-    )
-    prompt_client = FakePromptClient()
-    transport = ScriptedTransport(
-        [
-            [
-                propose_event(
-                    "feasibility",
-                    1,
-                    content="Proposal: Reduce rate target to 2Mbps or less.",
-                )
-            ],
-            _task_completed_batch(),
-        ]
-    )
-    await run_client_flow(
-        prompt_client=prompt_client,
-        transport=transport,
-        user_request=SCENARIO_FEASIBILITY_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((decision,)),
-        language="en-US",
-        intent_fields={**_INTENT_FIELDS, "guaranteedThroughputTarget": "{08:00~18:00,10Mbps}"},
-        reply_only_accept=True,
-    )
-
-    assert prompt_client.refill_data == []
-    # Only the initial extraction runs; the accept adds no Task-T prompt of its own.
-    assert prompt_client.task_prompts == [SCENARIO_FEASIBILITY_SPEC.user_request["en-US"]]
-    metadata = transport.requests[1].message.metadata
-    assert TASK_T_EXTENSION_URI not in (MessageToDict(metadata) if metadata else {})
-    content = prompt_client.accept_data[0].content
-    assert isinstance(content, FeasibilityEndingContent)
-    assert content.feasibility_summary == summary
-
-
-async def test_a_reply_only_target_accept_sends_the_authored_confirmation_only() -> None:
-    """A target accept from a tester carries the case reply and no refilled Task-T either."""
-    confirmation = "Accept the target negotiation."
-    decision = NegotiationDecision(action="accept", rationale=confirmation, confirmed_intent=confirmation)
-    prompt_client = FakePromptClient()
-    transport = ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()])
-    await run_client_flow(
-        prompt_client=prompt_client,
-        transport=transport,
-        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((decision,)),
-        language="en-US",
-        intent_fields=_INTENT_FIELDS,
-        reply_only_accept=True,
-    )
-
-    assert prompt_client.refill_data == []
-    metadata = transport.requests[1].message.metadata
-    assert TASK_T_EXTENSION_URI not in (MessageToDict(metadata) if metadata else {})
-    content = prompt_client.accept_data[0].content
-    assert isinstance(content, TargetEndingContent)
-    assert content.confirmed_intent == confirmation
-
-
 async def test_a_summary_that_already_names_the_target_is_not_duplicated() -> None:
     """The agreed value is added only when the hand-written summary omits it."""
     decision = NegotiationDecision(
@@ -1624,31 +1516,6 @@ async def test_a_target_intent_mentioning_the_baseline_rate_is_kept() -> None:
     assert isinstance(content, TargetEndingContent)
     assert "Reduced the target from" in (content.confirmed_intent or "")
     assert "2Mbps" in (content.confirmed_intent or "")
-
-
-async def test_a_scripted_target_confirmation_is_sent_verbatim() -> None:
-    """A scripted confirmed intent is the reply text even when it names another rate."""
-    confirmation = "The engineer confirms {00:00~06:00,5Mbps}."
-    decision = NegotiationDecision(
-        action="accept",
-        rationale="Confirm the adjusted target.",
-        filled_params={"guaranteedThroughputTarget": "{00:00-06:00,2Mbps}"},
-        confirmed_intent=confirmation,
-    )
-    prompt_client = FakePromptClient()
-    await run_client_flow(
-        prompt_client=prompt_client,
-        transport=ScriptedTransport([[propose_event("target", 1)], _task_completed_batch()]),
-        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider((decision,)),
-        language="en-US",
-        intent_fields=_INTENT_FIELDS,
-        verbatim_decision_text=True,
-    )
-
-    content = prompt_client.accept_data[0].content
-    assert isinstance(content, TargetEndingContent)
-    assert content.confirmed_intent == confirmation
 
 
 async def test_a_target_accept_names_a_target_that_did_not_change() -> None:

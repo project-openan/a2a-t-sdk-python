@@ -16,7 +16,7 @@ import pytest
 from a2a_t.core.errors.catalog import ErrorCatalog
 from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
 from demo.web.app import create_app
-from demo.web.tester.decisions import a2at_decisions, pure_answers
+from demo.web.tester.decisions import pure_answers
 from demo.web.tester.service import (
     DEFAULT_CONCURRENCY,
     DEFAULT_ROUNDS,
@@ -54,7 +54,6 @@ class _PassRuntime:
         enforce_required_fields: bool = False,
         require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
-        reply_only_accept: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -74,7 +73,6 @@ class _PassRuntime:
             enforce_required_fields,
             require_rate_target,
             site_level_rate_optional,
-            reply_only_accept,
             run_mode,
             target_task_id,
             target_context_id,
@@ -769,77 +767,7 @@ def test_the_start_button_stays_available_after_a_batch_finished() -> None:
     assert not re.search(r'\$\("start-button"\)\.hidden\s*=\s*!draft', js)
 
 
-def test_a2at_decision_parser_keeps_target_and_feasibility_order() -> None:
-    """A vendor reply may carry both sections in one round; keep their order."""
-    case = {
-        "expect": {
-            "protocols": {
-                "a2a-t": {
-                    "negotiation": {
-                        "rounds": [
-                            "## Target Negotiation Result\n\nAccept\n\n"
-                            "## Target Negotiation Result in Detail\n\n"
-                            "08:00-12:00→10Mbps, 12:00-18:00→5Mbps.\n\n"
-                            "## Feasibility Negotiation Result\n\nAccept\n\n"
-                            "## Feasibility Negotiation Result in Detail\n\n"
-                            "Reduce throughput target from 5Mbps to 2Mbps for the power outage period."
-                        ]
-                    }
-                }
-            }
-        }
-    }
-
-    decisions = a2at_decisions(case)
-
-    assert len(decisions) == 2
-    assert "10Mbps" in str(decisions[0].confirmed_intent)
-    assert decisions[1].feasibility_summary.startswith("Reduce throughput target")
-
-
-def test_a2at_decision_parser_follows_the_refreshed_case_26() -> None:
-    """The refreshed R column only has a feasibility answer; no target decision is expected."""
-    decisions = a2at_decisions(CASES[26])
-
-    assert len(decisions) == 1
-    assert "2Mbps" in str(decisions[0].feasibility_summary)
-
-
-def test_a2at_decision_parser_reads_a_feasibility_reply() -> None:
-    decisions = a2at_decisions(CASES[32])
-    assert len(decisions) == 1
-    assert "Reduce throughput target" in str(decisions[0].feasibility_summary)
-
-
-@pytest.mark.parametrize(
-    "reply",
-    [
-        "Reduce throughput target from 10Mbps to 2Mbps for the power outage period.",
-        "Reduce throughput target from 5Mbps to 2Mbps for the power outage period.",
-        "LNR_KPI_7745 reduces its throughput target from 10 Mbps to 2 Mbps during the power outage.",
-        "Agree to reduce the target from 5Mbps to 2Mbps.",
-    ],
-)
-def test_a2at_decision_parser_accepts_a_bare_natural_language_reply(reply: str) -> None:
-    """The refreshed corpus' Q column is a bare reply; it is still one accept decision."""
-    case = {
-        "expect": {
-            "protocols": {
-                "a2a-t": {"negotiation": {"expected": True, "rounds": [reply]}}
-            }
-        }
-    }
-
-    decisions = a2at_decisions(case)
-
-    assert len(decisions) == 1
-    assert decisions[0].action == "accept"
-    assert decisions[0].rationale == reply
-    assert decisions[0].confirmed_intent == reply
-    assert decisions[0].feasibility_summary == reply
-
-
-def test_pure_answers_replay_the_p_column() -> None:
+def test_pure_answers_expose_the_p_column() -> None:
     answers = pure_answers(CASES[1])
     assert len(answers) == 1
     assert "Set the guaranteed throughput targets" in answers[0]
@@ -918,7 +846,7 @@ def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
         "drawer-tab-result",
         "drawer-tab-trace",
         "drawer-tab-case",
-        "config-negotiation-source",
+        "config-stop-after",
         "config-working-timeout",
     ):
         assert re.search(rf'id="{element_id}"', page), element_id

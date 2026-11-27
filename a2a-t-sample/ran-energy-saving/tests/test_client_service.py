@@ -65,7 +65,6 @@ class FakeRuntime:
         self.decision_entered = asyncio.Event()
         self.trace_id = ""
         self.downstream_trace_id = ""
-        self.reply_only_accept = False
         self.correction_provider: CorrectionProvider | None = None
         self.decision_basis: object | None = None
         self.apply_client_policy = True
@@ -92,7 +91,6 @@ class FakeRuntime:
         enforce_required_fields: bool = False,
         require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
-        reply_only_accept: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -102,7 +100,6 @@ class FakeRuntime:
         decision_basis: object | None = None,
         apply_client_policy: bool = True,
     ) -> ClientFlowResult:
-        self.reply_only_accept = reply_only_accept
         self.correction_provider = correction_provider
         self.decision_basis = decision_basis
         self.apply_client_policy = apply_client_policy
@@ -988,58 +985,6 @@ async def test_a_presentation_attempt_owns_the_chain_trace(
     await _finish(manager, retry.run_id)
 
 
-async def test_a_tester_run_sends_the_authored_reply_only(
-    tmp_path: Path,
-    offline_config: SampleConfig,
-) -> None:
-    """A tester case replays its own reply, so the accept must not be derived or refilled."""
-    manager, _, runtimes = _manager(tmp_path, offline_config)
-    run = await manager.start(
-        "information",
-        "auto",
-        "sse",
-        source={"kind": "tester", "channel": "tester-console"},
-    )
-    await _finish(manager, run.run_id)
-
-    assert runtimes[0].reply_only_accept is True
-
-
-async def test_a_presentation_run_keeps_the_refilled_task_t(
-    tmp_path: Path,
-    offline_config: SampleConfig,
-) -> None:
-    """Only the tester replays case data; the page keeps the derived accept Task-T."""
-    manager, _, runtimes = _manager(tmp_path, offline_config)
-    run = await manager.start(
-        "information",
-        "auto",
-        "sse",
-        source={"kind": "presentation"},
-    )
-    await _finish(manager, run.run_id)
-
-    assert runtimes[0].reply_only_accept is False
-
-
-async def test_a_tester_agent_run_keeps_the_derived_accept(
-    tmp_path: Path,
-    offline_config: SampleConfig,
-) -> None:
-    """An agent-authored tester reply is not a replayed case script: the accept is derived."""
-    manager, _, runtimes = _manager(tmp_path, offline_config)
-    run = await manager.start(
-        "information",
-        "auto",
-        "sse",
-        source={"kind": "tester", "channel": "tester-console"},
-        negotiation_source="agent",
-    )
-    await _finish(manager, run.run_id)
-
-    assert runtimes[0].reply_only_accept is False
-
-
 async def test_the_run_records_the_negotiation_basis(
     tmp_path: Path,
     offline_config: SampleConfig,
@@ -1050,14 +995,12 @@ async def test_the_run_records_the_negotiation_basis(
         "auto",
         "sse",
         source={"kind": "tester", "channel": "tester-console"},
-        negotiation_source="agent",
         client_conditions="低于 2Mbps 不能接受。",
         negotiation_principles="全局协商原则正文",
         principles_version="2026-11-23.1",
     )
     await _finish(manager, run.run_id)
 
-    assert run.negotiation_source == "agent"
     assert run.client_conditions == "低于 2Mbps 不能接受。"
     assert run.negotiation_principles == "全局协商原则正文"
     assert run.principles_version == "2026-11-23.1"
@@ -1076,7 +1019,6 @@ async def test_an_agent_run_hands_the_basis_and_no_client_policy_to_the_runtime(
         "auto",
         "sse",
         source={"kind": "tester", "channel": "tester-console"},
-        negotiation_source="agent",
         client_conditions="条件",
         negotiation_principles="原则",
         principles_version="v1",
@@ -1091,7 +1033,7 @@ async def test_an_agent_run_hands_the_basis_and_no_client_policy_to_the_runtime(
     assert runtime.apply_client_policy is False
 
 
-async def test_a_script_run_keeps_the_client_policy_and_sends_no_basis(
+async def test_a_non_tester_run_keeps_the_client_policy_and_sends_no_basis(
     tmp_path: Path,
     offline_config: SampleConfig,
 ) -> None:
@@ -1100,8 +1042,7 @@ async def test_a_script_run_keeps_the_client_policy_and_sends_no_basis(
         "information",
         "auto",
         "sse",
-        source={"kind": "tester", "channel": "tester-console"},
-        negotiation_source="script",
+        source={"kind": "presentation", "channel": "web"},
     )
     await _finish(manager, run.run_id)
 

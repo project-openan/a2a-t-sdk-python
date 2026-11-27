@@ -84,7 +84,6 @@ class FakeRuntime:
         enforce_required_fields: bool = False,
         require_rate_target: bool = True,
         site_level_rate_optional: bool = False,
-        reply_only_accept: bool = False,
         run_mode: str = "create",
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -92,7 +91,7 @@ class FakeRuntime:
         target_server_context_id: str | None = None,
     ) -> ClientFlowResult:
         del on_intent_ready, trace_sink, activity_sink, run_id, validate_before_send, enforce_required_fields
-        del require_rate_target, site_level_rate_optional, reply_only_accept, run_mode
+        del require_rate_target, site_level_rate_optional, run_mode
         del target_task_id, target_context_id
         del target_server_task_id, target_server_context_id
         self.user_request = user_request

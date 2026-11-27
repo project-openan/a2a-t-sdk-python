@@ -120,7 +120,6 @@ from shared.trace import (
 from protocol.client_policy import ClientPolicy, agreed_target_value, apply_automated_decision
 from protocol.decision_provider import (
     AdkDecisionProvider,
-    DecisionProviderError,
     DecisionTimeoutError,
     NegotiationDecisionProvider,
     current_decision_basis,
@@ -218,13 +217,6 @@ _ERROR_DECISION_WAIT: Final[str] = (
     "The decision provider stopped waiting without a decision; nothing was sent and the run "
     "failed (wiring error)."
 )
-#: Unfinished-run reason of a per-run decision script that ran out before the vendor stopped.
-_DECISIONS_EXHAUSTED_REASON: Final[str] = (
-    "第 {round} 轮协商没有可用的决策答复（用例提供的协商回复已耗尽）；"
-    "未再作答，Task 仍停在下游等待。"
-)
-
-
 class ClientFlowError(RuntimeError):
     """Raised when the server sends content the client flow cannot handle."""
 
@@ -675,8 +667,6 @@ async def run_client_flow(
     conversation_context: str | None = None,
     single_extension_per_message: bool = False,
     infer_missing_negotiation_kind: bool = False,
-    reply_only_accept: bool = False,
-    verbatim_decision_text: bool = False,
     client_policy: ClientPolicy | None = None,
     apply_client_policy: bool = True,
     run_mode: str = RUN_MODE_CREATE,
@@ -732,15 +722,6 @@ async def run_client_flow(
             field on the proposal that continues a negotiation; without this the run fails hard.
             A body without a known heading still fails, because guessing the kind would pick the
             wrong decision prompt and reply template.
-        reply_only_accept: Build the accept from the decision's authored reply alone. A tester
-            replays a case, so the accept is that reply rendered by the template: no target is
-            derived from the proposal, nothing is refilled into a Task-T, and no Task-T metadata
-            travels with the accept. Model-authored decisions keep the derivation.
-        verbatim_decision_text: Send the decision's ``confirmed_intent`` /
-            ``feasibility_summary`` exactly as authored. A scripted provider replays case data,
-            so the accept must not reword it or replace a reply that names a rate the flow did not
-            derive; the template still wraps the text. Model-authored decisions keep the
-            contradiction check, so an invented rate cannot go out as the agreement.
         client_policy: Client acceptance limits applied to an automatic decision. The flow never
             invents an entity value and never accepts a plan below the configured throughput floor;
             in automatic mode it also accepts a feasible server alternative the model rejected.
@@ -1246,21 +1227,6 @@ async def run_client_flow(
                 # The provider loop normally only notifies the page. Reaching here means the wait
                 # sink was never installed; refuse to send an abort the operator never chose.
                 raise ClientFlowError(_ERROR_DECISION_WAIT) from exc
-            except DecisionProviderError as exc:
-                if not _allows_graceful_exhaustion(provider):
-                    raise
-                # A case-supplied script ran out: the vendor asked one more round than the case
-                # recorded. Stop answering, say why, and keep the evidence already received.
-                result.error = _DECISIONS_EXHAUSTED_REASON.format(round=session.round)
-                emit_trace(
-                    "decision_unavailable",
-                    phase=PHASE_NEGOTIATION,
-                    title="Decision script exhausted; question left unanswered",
-                    round_number=session.round,
-                    context_id=context_id,
-                    detail={"reason": result.error, "provider": type(exc).__name__},
-                )
-                return finish(FINAL_STATE_INCOMPLETE)
             policy_outcome = None
             if _requires_auto_verification(provider) and apply_client_policy:
                 decision, policy_outcome = apply_automated_decision(
@@ -1442,8 +1408,6 @@ async def run_client_flow(
                 intent_fields=intent_fields,
                 call_timeout_seconds=call_timeout_seconds,
                 single_extension_per_message=single_extension_per_message,
-                reply_only_accept=reply_only_accept,
-                verbatim_decision_text=verbatim_decision_text,
                 task_id=task_id,
                 dropped=dropped_values,
             )
@@ -1700,15 +1664,6 @@ def _match_area_option(
     return contained
 
 
-def _allows_graceful_exhaustion(provider: object) -> bool:
-    """Return whether an exhausted script is a recorded reason instead of a run failure.
-
-    Only the provider the caller scripted for one run (the tester's case column) opts in; the
-    scenario catalogue keeps failing loudly when the server drifts from its script.
-    """
-    return bool(getattr(provider, "graceful_exhaustion", False))
-
-
 def _requires_auto_verification(provider: NegotiationDecisionProvider) -> bool:
     """Return whether this provider's ACCEPT is an automatic decision that must be verified.
 
@@ -1887,8 +1842,6 @@ async def _build_accept_request(
     intent_fields: Mapping[str, object] | None,
     call_timeout_seconds: float,
     single_extension_per_message: bool,
-    reply_only_accept: bool,
-    verbatim_decision_text: bool,
     task_id: str | None = None,
     dropped: list[str] | None = None,
 ) -> tuple[SendMessageRequest, ClientCallContext]:
@@ -1899,30 +1852,18 @@ async def _build_accept_request(
     through an LLM extraction; a degenerate text made the extraction return an empty required
     field, which the SDK classifies as a non-retryable failure and which aborted live runs. The
     from-text path stays only as a fallback for content this flow cannot type.
-
-    ``reply_only_accept`` is the tester's mode: the decision replays a case, so the accept is that
-    reply and nothing else. No target is derived, no Task-T is refilled and none is attached to
-    the message.
     """
     filled = _accept_filled_values(kind, decision, baseline, intent_fields, dropped=dropped)
     # The interactive page sends one operator text, not structured params. On the local demo hop
     # the accept must also carry an agreed Task-T, so map the answer onto the fields the server
     # itself offered (or a canonical target the operator typed); never invent a value.
     operator_fields: dict[str, object] = {}
-    if (
-        kind is NegotiationKind.INFORMATION
-        and not single_extension_per_message
-        and not reply_only_accept
-    ):
+    if kind is NegotiationKind.INFORMATION and not single_extension_per_message:
         filled, operator_fields = _merge_operator_answer(filled, propose, decision.rationale)
-    agreed_target = (
-        None
-        if reply_only_accept
-        else _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
-    )
+    agreed_target = _prefer_the_agreed_target(kind, filled, decision, propose, baseline)
     task_content = None
     task_text = ""
-    if not single_extension_per_message and not reply_only_accept:
+    if not single_extension_per_message:
         # Only the local demo server reads a refilled Task-T from the accept. The real NMS rejects
         # a second ``-T`` key, so it never receives one; generating it there was a pure LLM call
         # whose result was discarded (and whose failure could abort a valid accept).
@@ -1970,7 +1911,6 @@ async def _build_accept_request(
         accept_decision,
         baseline,
         agreed_target,
-        verbatim_text=reply_only_accept or verbatim_decision_text,
     )
     if typed is not None:
         content = await asyncio.to_thread(
@@ -3085,8 +3025,6 @@ def _typed_accept_content(
     decision: NegotiationDecision,
     baseline: Mapping[str, object] | None,
     agreed_target: str | None,
-    *,
-    verbatim_text: bool = False,
 ) -> NegotiationEndingContent | None:
     """Build the typed ending content of an accept, or ``None`` when the flow cannot type it.
 
@@ -3094,10 +3032,6 @@ def _typed_accept_content(
     and no Task-T parameter the sample can map). Every branch here is deterministic: the values
     come from the decision, the agreed Task-T parameters or the proposal, never from a model
     re-reading the client's own accept text.
-
-    ``verbatim_text`` is true when the decision replays scripted case data: the authored
-    confirmation/summary is then the reply, so it is not replaced even when it names a target the
-    flow did not derive. The template still renders around it.
     """
     if kind is NegotiationKind.INFORMATION:
         allowed = TASK_PARAM_SCHEMA.get("properties")
@@ -3124,17 +3058,11 @@ def _typed_accept_content(
     if kind is NegotiationKind.TARGET:
         confirmation = (decision.confirmed_intent or "").strip()
         if confirmation and _contradicts_agreed_target(confirmation, agreed_target, baseline):
-            if verbatim_text:
-                _LOGGER.warning(
-                    "the scripted confirmed intent names a target the flow did not derive; "
-                    "sending it verbatim"
-                )
-            else:
-                _LOGGER.warning(
-                    "the confirmed intent names a target the accept does not agree to; using the "
-                    "deterministic confirmation instead"
-                )
-                confirmation = ""
+            _LOGGER.warning(
+                "the confirmed intent names a target the accept does not agree to; using the "
+                "deterministic confirmation instead"
+            )
+            confirmation = ""
         if not confirmation:
             confirmation = _agreed_values_line(filled, baseline=baseline)
         if not confirmation and agreed_target is not None:
@@ -3148,16 +3076,11 @@ def _typed_accept_content(
         return TargetEndingContent(NegotiationConclusion.ACCEPT, confirmation, None)
     supplied_summary = (decision.feasibility_summary or "").strip()
     if supplied_summary and _contradicts_agreed_target(supplied_summary, agreed_target, baseline):
-        if verbatim_text:
-            _LOGGER.warning(
-                "the scripted summary names a target the flow did not derive; sending it verbatim"
-            )
-        else:
-            _LOGGER.warning(
-                "the decision summary names a target the accept does not agree to; using the "
-                "deterministic summary instead"
-            )
-            supplied_summary = ""
+        _LOGGER.warning(
+            "the decision summary names a target the accept does not agree to; using the "
+            "deterministic summary instead"
+        )
+        supplied_summary = ""
     summary = supplied_summary or _feasibility_accept_summary(filled, baseline, agreed_target)
     return FeasibilityEndingContent(NegotiationConclusion.ACCEPT, summary)
 

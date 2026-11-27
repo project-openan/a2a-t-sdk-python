@@ -589,7 +589,6 @@ class ClientRuntime:
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
-        reply_only_accept: bool = False,
         apply_client_policy: bool = True,
         decision_basis: DecisionBasis | None = None,
         correction_provider: CorrectionProvider | None = None,
@@ -620,8 +619,6 @@ class ClientRuntime:
             target_server_task_id: A2A peer's Task a pure Modify continues (the outer Task owned
                 by the OSS Agent). The vendor Task id above is only the picker's identity.
             target_server_context_id: Context paired with ``target_server_task_id``.
-            reply_only_accept: Build the accept from the decision's authored reply alone (the
-                tester replays a case): no derived target and no refilled Task-T.
             apply_client_policy: Apply the process client policy to an automatic decision. A
                 tester agent run passes ``False`` so its own conditions are not rewritten.
             decision_basis: Shared principles plus optional case conditions handed to the ADK
@@ -868,10 +865,6 @@ class ClientRuntime:
                         self.config.discovery == DISCOVERY_NMS
                         and self.config.nms_infer_negotiation_kind
                     ),
-                    verbatim_decision_text=False,
-                    # The tester (live mode included) replays its case reply: the accept carries
-                    # that reply only, with nothing derived or refilled.
-                    reply_only_accept=reply_only_accept,
                     correction=correction_provider or self.correction_provider,
                     client_policy=ClientPolicy.from_config(self.config),
                     apply_client_policy=apply_client_policy,

@@ -139,21 +139,6 @@ async function loadMeta() {
   rounds.max = String(meta?.maxRounds || 1);
   rounds.value = String(meta?.defaults?.rounds || 1);
   syncRoundsKeepTasks();
-  const sources = meta?.negotiationSources || ["agent"];
-  for (const id of ["config-negotiation-source", "scratch-negotiation-source"]) {
-    const select = $(id);
-    clear(select);
-    for (const source of sources) {
-      const option = el(
-        "option",
-        "",
-        source === "agent" ? "agent（客户端 agent 决策）" : "script（用例脚本回放）",
-      );
-      option.value = source;
-      select.append(option);
-    }
-    select.value = meta?.defaults?.negotiationSource || "agent";
-  }
 }
 
 function syncRoundsKeepTasks() {
@@ -288,7 +273,6 @@ async function startBatch() {
       caseIds,
       protocols,
       stopAfter: $("config-stop-after").value,
-      negotiationSource: $("config-negotiation-source").value,
       timeoutSeconds: $("config-timeout").value === "" ? null : Number($("config-timeout").value),
       workingTimeoutSeconds:
         $("config-working-timeout").value === "" ? null : Number($("config-working-timeout").value),
@@ -320,7 +304,6 @@ async function startScratch() {
     const created = await postJson("/api/tester/scratch", {
       userInput,
       protocol: $("scratch-protocol").value,
-      negotiationSource: $("scratch-negotiation-source").value,
       timeoutSeconds: Number($("scratch-timeout").value) || 300,
       keepTasks: $("config-keep-tasks").checked,
     });

@@ -5,12 +5,9 @@ A batch is a list of ``(case, protocol)`` items. Each item runs the SDK-owned st
 (``send`` / ``negotiate`` / ``final``) through the shared :class:`RunManager`. The case YAML is the
 source of truth; the Excel workbook is no longer an input.
 
-The batch's reply source decides who authors a negotiation answer, identically on both protocols:
-
-* ``script`` — A2A-T replays the Q-column Task-T replies as ``NegotiationDecision`` objects and
-  A2A replays the P-column answers as the pure ``INPUT_REQUIRED`` answers.
-* ``agent`` — one live client agent, with the same frozen principles and case conditions, decides
-  both; Q and P become reference text (P is exported) and the server dialogue stays the oracle.
+One live client agent, with the same frozen principles and case conditions, authors every
+negotiation answer on both protocols; the Q and P columns become reference text (P is exported)
+and the server dialogue stays the oracle.
 
 A Modify A2A-T item first seeds a baseline Create task, then runs the Modify request against it.
 """
@@ -155,16 +152,6 @@ DEFAULT_ROUNDS: Final[int] = 1
 #: the value is a deliberate operator choice, not an environment property.
 MAX_ROUNDS: Final[int] = 8
 
-
-#: The client agent authors every negotiation reply.
-NEGOTIATION_SOURCE_AGENT: Final[str] = "agent"
-NEGOTIATION_SOURCES: Final[tuple[str, ...]] = (NEGOTIATION_SOURCE_AGENT,)
-
-
-def default_negotiation_source(model_mode: str) -> str:
-    """Return the reply source of a tester process."""
-    del model_mode
-    return NEGOTIATION_SOURCE_AGENT
 
 #: Persisted batch schema; v1-v4 batches are still readable and load with the live defaults.
 SCHEMA: Final[str] = "osp-tester/v5"
@@ -489,8 +476,6 @@ class _Batch:
     #: request on each protocol side). They are reported instead of silently disappearing.
     excluded_case_ids: list[int] = field(default_factory=list)
     working_timeout_seconds: float | None = None
-    #: Who authors a case's negotiation reply: the live decision agent.
-    negotiation_source: str = NEGOTIATION_SOURCE_AGENT
     #: Shared negotiation principles frozen when the batch is created (P1 fills these).
     principles_version: str = ""
     principles_text: str = ""
@@ -646,7 +631,6 @@ class EvalBatchManager:
         stop_after: str,
         timeout_seconds: float | None = None,
         working_timeout_seconds: float | None = None,
-        negotiation_source: str | None = None,
         principles_version: str | None = None,
         nms_version: str | None = None,
         keep_tasks: bool = False,
@@ -673,9 +657,6 @@ class EvalBatchManager:
         resolved_rounds = validate_rounds(rounds)
         if resolved_rounds > DEFAULT_ROUNDS and keep_tasks:
             raise ValueError("多轮批次不支持保留任务。")
-        resolved_negotiation_source = self._validate_negotiation_source(
-            negotiation_source or default_negotiation_source(self._model_mode)
-        )
         # The shared principles are frozen with the batch: a later edit of the asset must not
         # change what this batch's agent was told when it decided.
         principles = self._load_principles(principles_version)
@@ -716,7 +697,6 @@ class EvalBatchManager:
             stop_after=stop_after,
             timeout_seconds=_positive_or_none(timeout_seconds),
             working_timeout_seconds=_positive_or_none(working_timeout_seconds),
-            negotiation_source=resolved_negotiation_source,
             principles_version=principles.version,
             principles_text=principles.text,
             nms_version=(nms_version or "").strip(),
@@ -741,7 +721,6 @@ class EvalBatchManager:
         user_input: str,
         protocol: str,
         timeout_seconds: float | None = 300.0,
-        negotiation_source: str | None = None,
         keep_tasks: bool = False,
         owner: str = "",
         owner_source: Mapping[str, object] | None = None,
@@ -752,9 +731,6 @@ class EvalBatchManager:
             raise ValueError("临时请求不能为空。")
         if protocol not in {PROTOCOL_A2A_T, PROTOCOL_A2A}:
             raise ValueError(f"unknown protocol {protocol!r}")
-        resolved_negotiation_source = self._validate_negotiation_source(
-            negotiation_source or default_negotiation_source(self._model_mode)
-        )
         principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
         item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
@@ -764,7 +740,6 @@ class EvalBatchManager:
             protocols=[protocol],
             stop_after="accepted",
             timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
-            negotiation_source=resolved_negotiation_source,
             principles_version=principles.version,
             principles_text=principles.text,
             keep_tasks=keep_tasks,
@@ -777,12 +752,6 @@ class EvalBatchManager:
         self._batches[batch.batch_id] = batch
         self._persist(batch)
         return self._snapshot(batch)
-
-    def _validate_negotiation_source(self, negotiation_source: str) -> str:
-        """Validate one batch reply source."""
-        if negotiation_source not in NEGOTIATION_SOURCES:
-            raise ValueError(f"unknown negotiation_source {negotiation_source!r}")
-        return negotiation_source
 
     def _load_principles(self, version: str | None) -> NegotiationPrinciples:
         """Load the shared principles frozen for one batch."""
@@ -1631,7 +1600,6 @@ class EvalBatchManager:
             target_server_context_id=target_server_context_id,
             language=resolved_language,
             correction=correction,
-            negotiation_source=batch.negotiation_source,
             client_conditions=resolved_conditions,
             negotiation_principles=batch.principles_text,
             principles_version=batch.principles_version,
@@ -1794,7 +1762,6 @@ class EvalBatchManager:
             user_id="tester",
             idempotency_key=idempotency_key,
             source={"kind": "tester", "channel": "tester-scratch", "batchId": batch.batch_id},
-            negotiation_source=batch.negotiation_source,
             negotiation_principles=batch.principles_text,
             principles_version=batch.principles_version,
         )
@@ -1919,8 +1886,7 @@ class EvalBatchManager:
                 "batchId": batch.batch_id,
                 "caseId": item.case_id,
             },
-            # The paired Create follows the same reply source and frozen principles as the batch.
-            negotiation_source=batch.negotiation_source,
+            # The paired Create follows the same frozen principles as the batch.
             negotiation_principles=batch.principles_text,
             principles_version=batch.principles_version,
         )
@@ -2529,8 +2495,8 @@ class EvalBatchManager:
             "expectedRounds": int(negotiation_block.get("expected_rounds") or 0),
             "expectedKinds": list(negotiation_block.get("kinds") or []),
             "expectedFinalState": block.get("final_state"),
-            # The recorded A2A client reply (P column). Under the agent source it is not replayed;
-            # it stays in the export as the reference the agent's own answer is reviewed against.
+            # The recorded A2A client reply (P column) is reference text, not replayed; it stays
+            # in the export as the reply the agent's own answer is reviewed against.
             "clientReplies": (
                 pure_answers(case) if item.protocol == PROTOCOL_A2A else []
             ),
@@ -3225,8 +3191,7 @@ class EvalBatchManager:
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
         loaded_version = _optional_text(document.get("principlesVersion"))
         loaded_text = _optional_text(document.get("principlesText"))
-        loaded_source = _loaded_negotiation_source(document)
-        if loaded_source == NEGOTIATION_SOURCE_AGENT and not loaded_text:
+        if not loaded_text:
             try:
                 loaded_principles = load_principles(loaded_version or None)
             except (FileNotFoundError, ValueError):
@@ -3241,7 +3206,6 @@ class EvalBatchManager:
             stop_after=str(document.get("stopAfter") or "accepted"),
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
-            negotiation_source=loaded_source,
             principles_version=loaded_version,
             principles_text=loaded_text,
             nms_version=_optional_text(document.get("nmsVersion")),
@@ -3316,8 +3280,6 @@ class EvalBatchManager:
             "stopAfter": batch.stop_after,
             "timeoutSeconds": batch.timeout_seconds,
             "workingTimeoutSeconds": batch.working_timeout_seconds,
-            # Who authors a case's negotiation reply: ``agent`` for every tester batch.
-            "negotiationSource": batch.negotiation_source,
             "principlesVersion": batch.principles_version,
             "principlesText": batch.principles_text,
             "nmsVersion": batch.nms_version,
@@ -3334,7 +3296,6 @@ class EvalBatchManager:
                 "judgeModel": self._judge_model_label,
                 "principlesVersion": batch.principles_version,
                 "nmsVersion": batch.nms_version,
-                "decisionSource": batch.negotiation_source,
                 "stopAfter": batch.stop_after,
                 "rounds": batch.rounds,
             },
@@ -3705,7 +3666,6 @@ def _status_batch(batch: _Batch) -> dict[str, object]:
         "concurrency": batch.active_concurrency,
         "keepTasks": batch.keep_tasks,
         "stopAfter": batch.stop_after,
-        "negotiationSource": batch.negotiation_source,
         "transport": batch.transport,
         "discovery": batch.discovery,
         "startedAt": started_at,
@@ -4344,16 +4304,6 @@ def _optional_text(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _loaded_negotiation_source(document: Mapping[str, object]) -> str:
-    """Return the reply source of a persisted batch; every old schema replayed the script."""
-    value = document.get("negotiationSource")
-    return (
-        value
-        if isinstance(value, str) and value in NEGOTIATION_SOURCES
-        else NEGOTIATION_SOURCE_AGENT
-    )
-
-
 def _runtime_protocol(protocol: str) -> str:
     """Map the catalog protocol label to the value the run manager expects."""
     return PROTOCOL_PURE if protocol == PROTOCOL_A2A else protocol
@@ -4378,9 +4328,6 @@ __all__ = [
     "EvalBatchManager",
     "MAX_CONCURRENCY",
     "MAX_ROUNDS",
-    "NEGOTIATION_SOURCES",
-    "NEGOTIATION_SOURCE_AGENT",
-    "default_negotiation_source",
     "validate_concurrency",
     "validate_rounds",
     "SCHEMA",

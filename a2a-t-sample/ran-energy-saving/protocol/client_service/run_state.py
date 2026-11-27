@@ -84,7 +84,6 @@ class ClientRuntimeLike(Protocol):
         target_context_id: str | None = None,
         target_server_task_id: str | None = None,
         target_server_context_id: str | None = None,
-        reply_only_accept: bool = False,
         apply_client_policy: bool = True,
         decision_basis: DecisionBasis | None = None,
         correction_provider: CorrectionProvider | None = None,
@@ -152,7 +151,6 @@ class RunState:
         raw_request: operator request before the business intent layer.
         normalized_request: canonical text produced by the business intent layer.
         processed_intent: structured intent document, once the layer has run.
-        negotiation_source: who authors a tester negotiation reply (``agent`` / ``script``).
         client_conditions: optional case-level acceptance conditions shown to the agent.
         negotiation_principles: shared client negotiation principles frozen for the batch.
         principles_version: version identifier of the shared principles.
@@ -265,9 +263,6 @@ class RunState:
     #: ``blocked_followup.input``). It is a run-phase input, not a replacement run request.
     correction_request: str | None = None
     prepared_filled: dict[str, object] | None = None
-    #: Who authors a tester negotiation reply: ``agent`` (live decision agent) or ``script``
-    #: (replayed case reply). Every non-tester run keeps the historical script default.
-    negotiation_source: str = "script"
     #: Optional case-level acceptance conditions handed to the decision agent.
     client_conditions: str = ""
     #: Body of the shared client negotiation principles (frozen per tester batch).
