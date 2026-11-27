@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -39,6 +40,19 @@ from eval.osp.runner import (
 CASES = {case["id"]: case for case in load_cases()}
 
 T = TypeVar("T")
+
+_RATE_TARGET_LINE = re.compile(r"(?m)^Rate guarantee target:.*$")
+
+
+def _with_rate_target_line(task_t: str, replacement: str) -> str:
+    """Return ``task_t`` with its ``Rate guarantee target:`` line rewritten.
+
+    The expected line carries the window and the goal together, so a runtime rendering is
+    simulated by replacing the whole line: swapping the inner phrase would nest one label inside
+    another and change the token bag.
+    """
+    assert _RATE_TARGET_LINE.search(task_t)
+    return _RATE_TARGET_LINE.sub(replacement, task_t)
 
 
 @dataclass
@@ -160,8 +174,8 @@ def test_compare_task_t_reports_a_context_rate_change() -> None:
 
 def test_compare_task_t_accepts_the_runtime_context_phrasing() -> None:
     expected = CASES[1]["expect"]["protocols"]["a2a-t"]["task_t"]
-    actual = expected.replace(
-        "Ensuring user experience for 720p video",
+    actual = _with_rate_target_line(
+        expected,
         "Rate guarantee goal: ensuring user experience for 720p video (full period).",
     )
     assert compare_task_t(expected, actual) == []
@@ -169,11 +183,11 @@ def test_compare_task_t_accepts_the_runtime_context_phrasing() -> None:
 
 def test_compare_task_t_accepts_the_runtime_time_notation() -> None:
     expected = CASES[1]["expect"]["protocols"]["a2a-t"]["task_t"]
-    actual = expected.replace(
-        'Energy saving time range: start time "00:00:00", end time "22:00:00"',
-        "Energy saving time range: 00:00-22:00 (recurring daily)",
-    ).replace(
-        "Ensuring user experience for 720p video",
+    actual = _with_rate_target_line(
+        expected.replace(
+            'Energy saving time range: start time "00:00:00", end time "22:00:00"',
+            "Energy saving time range: 00:00-22:00 (recurring daily)",
+        ),
         "Rate guarantee goal: user experience for 720p video.",
     )
     assert compare_task_t(expected, actual) == []
@@ -208,9 +222,9 @@ def test_compare_task_t_accepts_the_runtime_site_context() -> None:
 
 def test_compare_task_t_reports_an_extra_context_rate() -> None:
     expected = CASES[42]["expect"]["protocols"]["a2a-t"]["task_t"]
-    actual = expected.replace(
-        "Set the AVG DL THP to 10Mbps.",
-        "Rate guarantee goal: 5Mbps. Set the AVG DL THP to 10Mbps.",
+    actual = _with_rate_target_line(
+        expected,
+        "Rate guarantee goal: {00:00-22:00, 5Mbps}, Set the AVG DL THP to 10Mbps.",
     )
     diffs = compare_task_t(expected, actual)
     assert [diff.path for diff in diffs] == ["task_t.Task Context"]
@@ -218,10 +232,7 @@ def test_compare_task_t_reports_an_extra_context_rate() -> None:
 
 def test_compare_task_t_ignores_context_word_order() -> None:
     expected = CASES[1]["expect"]["protocols"]["a2a-t"]["task_t"]
-    actual = expected.replace(
-        "Ensuring user experience for 720p video",
-        "Rate guarantee goal: 720p video user experience",
-    )
+    actual = _with_rate_target_line(expected, "Rate guarantee goal: 720p video user experience")
     assert compare_task_t(expected, actual) == []
 
 
@@ -236,10 +247,7 @@ def test_compare_task_t_accepts_a_to_time_range() -> None:
 
 def test_compare_task_t_accepts_rate_target_paraphrases() -> None:
     expected = CASES[2]["expect"]["protocols"]["a2a-t"]["task_t"]
-    actual = expected.replace(
-        "Ensure the UX target is at least 10",
-        "Rate guarantee goal: at least 10",
-    )
+    actual = _with_rate_target_line(expected, "Rate guarantee goal: at least 10")
     assert compare_task_t(expected, actual) == []
 
 
@@ -281,8 +289,8 @@ def test_flatten_task_t_marks_the_changed_section() -> None:
 
 def test_flatten_task_t_keeps_a_rephrasing_verbatim_but_semantically_equal() -> None:
     expected = CASES[1]["expect"]["protocols"]["a2a-t"]["task_t"]
-    actual = expected.replace(
-        "Ensuring user experience for 720p video",
+    actual = _with_rate_target_line(
+        expected,
         "Rate guarantee goal: ensuring user experience for 720p video (full period).",
     )
     rows = {row.path: row for row in flatten_task_t(expected, actual)}

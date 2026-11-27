@@ -1,40 +1,37 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
-id: 51
-name: UC4 协商目标区域
-dimension: D4 意图不完备
-operation: Create
+id: 26
+name: "[negotiation]停电场景10Mbps调整为2Mbps"
+dimension: D1 意图完备且清晰
+operation: Modify
 tags:
-  - uc
-  - negotiation
-  - region
+  - power-outage
   - rate-guarantee
+  - scenario-based
   - negotiation-a2a
   - negotiation-a2at
 user_input: |-
-  Make energy-saving targets for RegionA: 00:00-07:00→2Mbps, 07:00-18:00→10Mbps, 18:00-24:00→2Mbps.
-client_conditions: |-
-  The only valid test region is A2ATestRegion; RegionA is a placeholder for A2ATestRegion.
+  Due to a power outage from 08:00 to 18:00 on Day 2 affecting LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion region, modify their guaranteed throughput to 10 Mbps.
 expect:
   intent:
-    Operation type: Create
+    Operation type: Modify
     Energy saving cell RAT: ALL
     Energy saving aggressiveness: ''
     Energy saving region: A2ATestRegion
     Whether Experience-Preserving Energy Saving is Required: ''
     Special Requirements for Carrier Shutdown Frequencies: ''
-    Energy saving time: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59&06:00:00-06:59:59&07:00:00-07:59:59&08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59&18:00:00-18:59:59&19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59&22:00:00-22:59:59&23:00:00-23:59:59
+    Energy saving time: ''
     Frequencies of carriers that can be shut down: []
     Gain target: ''
-    Guaranteed throughput target by zone:
-      - Guaranteed throughput target: 2Mbps
-        Effective time period: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59&05:00:00-05:59:59&06:00:00-06:59:59
-      - Guaranteed throughput target: 10Mbps
-        Effective time period: 07:00:00-07:59:59&08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
-      - Guaranteed throughput target: 2Mbps
-        Effective time period: 18:00:00-18:59:59&19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59&22:00:00-22:59:59&23:00:00-23:59:59
-    Scenario-based energy saving: []
+    Guaranteed throughput target by zone: []
+    Scenario-based energy saving:
+      - Site list:
+          - LNR_KPI_7745
+          - NES_27A_321071
+        Guaranteed throughput target by site:
+          - Guaranteed throughput target: 2Mbps
+            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
+        Scenario: Power outage
+        Scenario period: 08:00:00-17:59:59
   protocols:
     a2a-t:
       validate: pass
@@ -42,21 +39,21 @@ expect:
       send: true
       task_t: |-
         ## Operation Type
-        Create
+        Modify
 
         ## Task Type
         RAN energy saving
 
         ## Task Description
-        Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target), and return the wireless network energy saving result in the format defined in [Expected Output](#expected-output).
+        Based on [Task Object](#task-object) and [Task Context](#task-context), execute the energy-saving task to achieve the goal defined in [Task Target](#task-target).
 
         ## Task Object
-        RegionA
+        A2ATestRegion
 
         ## Task Target
 
         ## Task Context
-        Time-segment-based guaranteed throughput target: {00:00-07:00, 2Mbps}, {07:00-18:00, 10Mbps}, {18:00-24:00, 2Mbps}
+        Site list: ["LNR_KPI_7745","NES_27A_321071"], Time-segmented rate guarantee target: {08:00-18:00, 10Mbps}, Background event: power outage from 08:00 to 18:00.
 
         ## Terminology Explanation
         1. LTE
@@ -99,25 +96,26 @@ expect:
         expected: true
         expected_rounds: 1
         kinds:
-          - information
+          - feasibility
         rounds:
           - |-
-            ## Information Negotiation Result
+            ## Feasibility Negotiation Result
 
             Accept
 
-            ## Information Negotiation Result in Detail
+            ## Feasibility Negotiation Result in Detail
 
-            Region: A2ATestRegion.
+            Reduce throughput target from 10Mbps to 2Mbps for the power outage period.
       final_state: task_completed
       final_state_derived: true
     a2a:
       negotiation:
         expected: true
-        expected_rounds: 1
+        expected_rounds: 2
         kinds: null
         rounds:
-          - The region is A2ATestRegion.
+          - OK, lower LNR_KPI_7745 and NES_27A_321071 to 5Mbps during the outage.
+          - OK, lower LNR_KPI_7745 and NES_27A_321071 to 2Mbps during the outage.
       final_state: null
 assert:
   intent: true
@@ -138,5 +136,5 @@ runner:
 source:
   file: OSP-Unified Evaluation Set_v.01_拆分_A2ATestRegion.xlsx
   sheet: A2A-T_原始数据
-  row: 51
+  row: 26
 known_issue: null

@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 8
 name: 节能激进程度：Maximize Energy Savings（最大化节能）-->激进节能
@@ -45,10 +43,10 @@ expect:
         A2ATestRegion
 
         ## Task Target
+        maximize energy savings
 
         ## Task Context
         Energy saving time range: start time "19:00:00", end time "22:00:00"
-        maximize energy savings
 
         ## Terminology Explanation
         1. LTE

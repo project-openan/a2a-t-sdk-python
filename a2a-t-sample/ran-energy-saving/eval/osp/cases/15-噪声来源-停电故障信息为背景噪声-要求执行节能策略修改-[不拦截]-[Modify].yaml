@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 15
 name: 噪声来源 停电故障信息为背景噪声，要求执行节能策略修改

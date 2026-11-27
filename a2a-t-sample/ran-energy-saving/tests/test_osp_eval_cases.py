@@ -1,9 +1,8 @@
-"""Contract tests of the generated OSP evaluation cases.
+"""Contract tests of the OSP evaluation cases.
 
-The 100 YAML files are generated from an internal workbook export
-(``docs-local/cases-all.yaml``, not committed); this test protects the committed contract
-(counts, filenames, schema keys and the deliberate assertion switches) without depending on the
-internal source.
+The 100 YAML files under ``eval/osp/cases`` are the source of truth and are maintained by hand;
+this test protects the committed contract (counts, filenames, schema keys and the deliberate
+assertion switches).
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from eval.osp.expectations import negotiation_message_expectation, slot_error_ex
 
 OSP_DIR = Path(__file__).resolve().parents[1] / "eval" / "osp"
 CASES_DIR = OSP_DIR / "cases"
-INDEX_PATH = OSP_DIR / "index.yaml"
 
 INTENT_KEYS = (
     "Operation type",
@@ -228,29 +226,6 @@ def test_assert_switches(cases: dict[int, dict[str, Any]]) -> None:
             "final_state": True,
         }, case_id
         assert switches["a2a"] == {"negotiation": True, "final_state": False}, case_id
-
-
-def test_index_matches_cases(cases: dict[int, dict[str, Any]]) -> None:
-    index = _load(INDEX_PATH)
-    assert index["schema"] == "osp-eval-index/v1"
-    assert index["source"]["file"] == SOURCE_FILE
-    assert index["count"] == 100
-    entries = index["cases"]
-    assert len(entries) == 100
-    assert sorted(entry["id"] for entry in entries) == list(range(1, 101))
-    for entry in entries:
-        document = cases[entry["id"]]
-        protocols = document["expect"]["protocols"]
-        assert entry["file"] == f"cases/{document['_path'].name}"
-        assert entry["operation"] == document["operation"]
-        assert entry["validate"] == protocols["a2a-t"]["validate"]
-        assert entry["tags"] == document["tags"]
-        assert entry["source_row"] == document["source"]["row"]
-        assert entry["negotiation"] == {
-            "a2a-t": protocols["a2a-t"]["negotiation"]["expected_rounds"] > 0,
-            "a2a": protocols["a2a"]["negotiation"]["expected_rounds"] > 0,
-        }
-        assert entry["blocked_followup"] == ("blocked_followup" in document)
 
 
 def test_top_level_contract(cases: dict[int, dict[str, Any]]) -> None:

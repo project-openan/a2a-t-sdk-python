@@ -7,8 +7,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `cases/*.yaml` | 用例语料（输入、期望、runner 配置） |
-| `index.yaml` | 用例索引与分组 |
+| `cases/*.yaml` | 用例语料（输入、期望、runner 配置），也是唯一来源 |
 | `catalog.py` | 加载用例、按协议投影 |
 | `expectations.py` | 期望解析与断言匹配 |
 | `compare.py` | Task-T / 意图逐字段对比 |
@@ -17,6 +16,9 @@
 | `runner.py` | SDK 阶段驱动 |
 | `intent_judge.py` / `client_quality.py` | 独立的意图/决策质量判定 |
 | `detail.py` / `followup.py` / `datapoints.py` | 报告明细 |
+
+`cases/*.yaml` 直接手工维护：没有生成器、没有 `--check`，改完跑
+`tests/test_osp_eval_cases.py` 校验数量、文件名契约与 schema 键。
 
 ## 用例字段（摘要）
 

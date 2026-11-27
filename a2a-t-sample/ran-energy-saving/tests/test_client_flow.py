@@ -52,6 +52,7 @@ from demo.scenario import (
     SCENARIO_ABORT_SPEC,
     SCENARIO_FEASIBILITY_SPEC,
     SCENARIO_REJECT_SPEC,
+    SCENARIO_TARGET,
     SCENARIO_TARGET_SPEC,
     SUPPORTED_SCENARIO_NAMES,
     ExpectedStep,
@@ -2301,8 +2302,8 @@ async def test_real_sdk_client_runs_the_information_flow_offline(
     result = await run_client_flow(
         prompt_client=prompt_client,
         transport=transport,
-        user_request=INFORMATION_NEGOTIATION_SPEC.user_request["en-US"],
-        provider=ScriptedDecisionProvider(INFORMATION_DECISIONS),
+        user_request=SCENARIO_TARGET_SPEC.user_request["en-US"],
+        provider=ScriptedDecisionProvider(SCRIPTED_DECISIONS[SCENARIO_TARGET]),
         language="en-US",
     )
 

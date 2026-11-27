@@ -1,8 +1,6 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 50
-name: UC7 停电时长>4h
+name: "[negotiation]UC7 停电时长>4h"
 dimension: D1 意图完备且清晰
 operation: Modify
 tags:

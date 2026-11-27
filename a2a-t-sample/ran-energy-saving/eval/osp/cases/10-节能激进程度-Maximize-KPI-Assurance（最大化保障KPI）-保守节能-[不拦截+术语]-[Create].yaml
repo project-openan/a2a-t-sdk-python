@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 10
 name: 节能激进程度：Maximize KPI Assurance（最大化保障KPI）-->保守节能
@@ -45,10 +43,10 @@ expect:
         A2ATestRegion
 
         ## Task Target
+        maximize kpi assurance
 
         ## Task Context
         Energy saving time range: start time "19:00:00", end time "22:00:00"
-        maximize kpi assurance
 
         ## Terminology Explanation
         1. LTE

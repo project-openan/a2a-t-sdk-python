@@ -1,18 +1,16 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
-id: 30
-name: 分段停电大于4小时触发协商
+id: 29
+name: "[negotiation]部分站点需要协商，部分站点不协商"
 dimension: D1 意图完备且清晰
 operation: Modify
 tags:
-  - power-outage
   - negotiation
+  - site
   - scenario-based
   - negotiation-a2a
   - negotiation-a2at
 user_input: |-
-  Due to power outages at LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion area from 08:00 to 10:00 and from 15:00 to 18:00 on the second day, the guaranteed bandwidth for LNR_KPI_7745 and NES_27A_321071 during the power outage period needs to be modified to 10 Mbps.
+  Due to a power outage at LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion area from 08:00 to 18:00 on the second day, the guaranteed bandwidth of LNR_KPI_7745 needs to be changed to 15 Mbit/s from 08:00 to 18:00, and the guaranteed bandwidth of NES_27A_321071 needs to be changed to 2 Mbit/s from 08:00 to 18:00.
 expect:
   intent:
     Operation type: Modify
@@ -28,14 +26,18 @@ expect:
     Scenario-based energy saving:
       - Site list:
           - LNR_KPI_7745
+        Guaranteed throughput target by site:
+          - Guaranteed throughput target: 2Mbps
+            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
+        Scenario: Power outage
+        Scenario period: 08:00:00-17:59:59
+      - Site list:
           - NES_27A_321071
         Guaranteed throughput target by site:
           - Guaranteed throughput target: 2Mbps
-            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59
-          - Guaranteed throughput target: 2Mbps
-            Effective time period: 15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
+            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59&12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
         Scenario: Power outage
-        Scenario period: 08:00:00-09:59:59&15:00:00-17:59:59
+        Scenario period: 08:00:00-17:59:59
   protocols:
     a2a-t:
       validate: pass
@@ -57,7 +59,9 @@ expect:
         ## Task Target
 
         ## Task Context
-        Site list: ["LNR_KPI_7745", "NES_27A_321071"], Time-segmented rate guarantee target: {08:00-10:00, 10Mbps}, {15:00-18:00, 10Mbps}, Background event: power outage from 08:00 to 10:00 and 15:00 to 18:00.
+        Site list 1: ["LNR_KPI_7745"], Time-segmented rate guarantee target: {08:00-13:00, 15Mbps},Background event: power outage from 08:00 to 18:00.
+
+        Site list 2: ["NES_27A_321071"], Time-segmented rate guarantee target: {13:00-18:00, 2Mbps}, Background event: power outage from 08:00 to 18:00.
 
         ## Terminology Explanation
         1. LTE
@@ -89,13 +93,14 @@ expect:
         14. ARFCN
             - Explanation: Absolute Radio Frequency Channel Number is used to identify the position of a radio frequency channel in a wireless system. For LTE, EARFCN can be used for identification; for NR, NR-ARFCN can be used.
 
+
         ## Expected Output
         - Basic information about the intent execution result, including:
           - Area
           - Intent goal achievement status
         - Detailed information about the intent execution result, including:
           - Energy saving gain achievement status, current energy saving gain goal, actual energy saving gain percentage, target adjustment suggestions
-          - Rate goal achievement status, current rate goal, actual rate, target adjustment suggestions
+          - Rate goal achievement status, current rate goal, actual rate
       negotiation:
         expected: true
         expected_rounds: 1
@@ -109,7 +114,7 @@ expect:
 
             ## Feasibility Negotiation Result in Detail
 
-            Reduce throughput target from 10Mbps to 2Mbps for the power outage period.
+            LNR_KPI_7745 reduces its throughput target from 10 Mbps to 2 Mbps during the power outage.
       final_state: task_completed
       final_state_derived: true
     a2a:
@@ -118,9 +123,9 @@ expect:
         expected_rounds: 3
         kinds: null
         rounds:
-          - LNR_KPI_7745 and NES_27A_321071 needs 10Mbps.
-          - LNR_KPI_7745 and NES_27A_321071 needs 5Mbps.
-          - LNR_KPI_7745 and NES_27A_321071 needs 2Mbps.
+          - LNR_KPI_7745 reduces its throughput target to 10 Mbps during the power outage.
+          - LNR_KPI_7745 reduces its throughput target to 5 Mbps during the power outage.
+          - LNR_KPI_7745 reduces its throughput target to 2 Mbps during the power outage.
       final_state: null
 assert:
   intent: true
@@ -141,5 +146,5 @@ runner:
 source:
   file: OSP-Unified Evaluation Set_v.01_拆分_A2ATestRegion.xlsx
   sheet: A2A-T_原始数据
-  row: 30
+  row: 29
 known_issue: null

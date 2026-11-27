@@ -1,21 +1,17 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
-id: 32
-name: LTE_26441_LNR_OCL, NRES_XCS_6102937等站点+可行性协商
+id: 28
+name: "[negotiation]时间重叠+可行性协商"
 dimension: D3 意图模糊
 operation: Modify
 tags:
   - negotiation
   - feasibility-negotiation
-  - site
+  - time-overlap
   - scenario-based
   - negotiation-a2a
   - negotiation-a2at
 user_input: |-
-  Modify the energy-saving plan for LTE_26441_LNR_OCL, NRES_XCS_6102937, and a few others in A2ATestRegion region. There will be a power outage from 00:00 to 05:00 tomorrow. Set the throughput rate guarantee to 5Mbps during the outage.
-client_conditions: |-
-  The sites affected by the outage in A2ATestRegion are LTE_26441_LNR_OCL, NRES_XCS_6102937 and LNR_KPI_7745.
+  Because LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion zone experienced a power outage from 08:00 to 18:00 on the second day, the guaranteed bandwidth for LNR_KPI_7745 and NES_27A_321071 needs to be modified to 10 Mbit/s from 08:00 to 12:00 and 5 Mbit/s from 11:00 to 18:00.
 expect:
   intent:
     Operation type: Modify
@@ -30,14 +26,15 @@ expect:
     Guaranteed throughput target by zone: []
     Scenario-based energy saving:
       - Site list:
-          - LTE_26441_LNR_OCL
-          - NRES_XCS_6102937
           - LNR_KPI_7745
+          - NES_27A_321071
         Guaranteed throughput target by site:
           - Guaranteed throughput target: 2Mbps
-            Effective time period: 00:00:00-00:59:59&01:00:00-01:59:59&02:00:00-02:59:59&03:00:00-03:59:59&04:00:00-04:59:59
+            Effective time period: 08:00:00-08:59:59&09:00:00-09:59:59&10:00:00-10:59:59&11:00:00-11:59:59
+          - Guaranteed throughput target: 2Mbps
+            Effective time period: 12:00:00-12:59:59&13:00:00-13:59:59&14:00:00-14:59:59&15:00:00-15:59:59&16:00:00-16:59:59&17:00:00-17:59:59
         Scenario: Power outage
-        Scenario period: 00:00:00-04:59:59
+        Scenario period: 08:00:00-17:59:59
   protocols:
     a2a-t:
       validate: blocked
@@ -59,7 +56,7 @@ expect:
         ## Task Target
 
         ## Task Context
-        Site list: ["LTE_26441_LNR_OCL", "NRES_XCS_6102937", "LNR_KPI_7745"], Time-segmented rate guarantee target: {00:00-05:00, 5Mbps}, Background event: power outage from 00:00 to 05:00.
+        Site list: ["LNR_KPI_7745", "NES_27A_321071"], Time-segmented rate guarantee target: {08:00-12:00,  10Mbps}, {12:00-18:00, 5Mbps}, Background event: power outage from 08:00 to 18:00.
 
         ## Terminology Explanation
         1. LTE
@@ -111,17 +108,18 @@ expect:
 
             ## Feasibility Negotiation Result in Detail
 
-            Reduce throughput target from 5Mbps to 2Mbps for the power outage period.
+            Reduce throughput target to 2Mbps for the power outage period.
       final_state: input_invalid
       final_state_derived: true
     a2a:
       negotiation:
         expected: true
-        expected_rounds: 2
+        expected_rounds: 3
         kinds: null
         rounds:
-          - The sites are LTE_26441_LNR_OCL、NRES_XCS_6102937 and LNR_KPI_7745 in A2ATestRegion area.
-          - LTE_26441_LNR_OCL、NRES_XCS_6102937 and LNR_KPI_7745 needs 2Mbps.
+          - 'Set the guaranteed throughput targets: 08:00-12:00→10Mbps,12:00-18:00→5Mbps.'
+          - 'Set the guaranteed throughput targets: 08:00-12:00→5Mbps,12:00-18:00→5Mbps.'
+          - 'Set the guaranteed throughput targets: 08:00-12:00→2Mbps,12:00-18:00→2Mbps.'
       final_state: null
 assert:
   intent: true
@@ -136,7 +134,7 @@ assert:
     final_state: false
 blocked_followup:
   input: |-
-    Modify the energy-saving plan for LTE_26441_LNR_OCL, NRES_XCS_6102937, and LNR_KPI_7745 in A2ATestRegion region. There will be a power outage from 00:00 to 05:00 tomorrow. Set the throughput rate guarantee to 5Mbps during the outage.
+    Because LNR_KPI_7745 and NES_27A_321071 in the A2ATestRegion zone experienced a power outage from 08:00 to 18:00 on the second day, the guaranteed bandwidth for those sites needs to be modified to 10 Mbit/s from 08:00 to 12:00 and 5 Mbit/s from 12:00 to 18:00.
 runner:
   scenario: night
   language: en-US
@@ -145,5 +143,5 @@ runner:
 source:
   file: OSP-Unified Evaluation Set_v.01_拆分_A2ATestRegion.xlsx
   sheet: A2A-T_原始数据
-  row: 32
+  row: 28
 known_issue: null

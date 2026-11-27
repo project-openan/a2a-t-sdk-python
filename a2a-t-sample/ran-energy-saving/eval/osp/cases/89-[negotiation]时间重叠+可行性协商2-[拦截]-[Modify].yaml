@@ -1,8 +1,6 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 89
-name: 时间重叠+可行性协商2
+name: "[negotiation]时间重叠+可行性协商2"
 dimension: D3 意图模糊
 operation: Modify
 tags:

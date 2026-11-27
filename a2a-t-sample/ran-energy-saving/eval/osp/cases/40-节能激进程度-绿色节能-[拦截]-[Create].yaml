@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 40
 name: 节能激进程度：绿色节能
@@ -51,9 +49,9 @@ expect:
         A2ATestRegion
 
         ## Task Target
+        Energy saving aggressiveness: Conservative
 
         ## Task Context
-        Energy saving aggressiveness: Conservative
         Time-segmented rate guarantee target: {00:00-07:00,  2Mbps}, { 07:00-18:00, 10Mbps},{18:00-24:00,2Mbps}
 
         ## Terminology Explanation

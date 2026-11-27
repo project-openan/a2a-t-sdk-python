@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 4
 name: 速率保障目标：用户体验目标（User Experience Target）
@@ -51,7 +49,7 @@ expect:
 
         ## Task Context
         Energy saving time range: start time "00:00:00", end time "22:00:00"
-        Set the User Experience Target  to 10
+        Rate guarantee target: {00:00-22:00, Set the User Experience Target  to 10}
 
         ## Terminology Explanation
         1. LTE

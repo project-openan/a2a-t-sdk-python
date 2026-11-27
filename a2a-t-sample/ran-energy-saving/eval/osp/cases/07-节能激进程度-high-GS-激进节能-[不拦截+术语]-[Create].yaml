@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 7
 name: 节能激进程度：high GS-->激进节能
@@ -48,11 +46,11 @@ expect:
         A2ATestRegion
 
         ## Task Target
+        Apply high GS
 
         ## Task Context
         Energy saving time range: start time "19:00:00", end time "22:00:00"
         Rate guarantee target: 10Mbps
-        Apply high GS
 
         ## Terminology Explanation
         1. LTE

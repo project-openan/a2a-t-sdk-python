@@ -1,5 +1,3 @@
-# Generated from OSP-Unified Evaluation Set_v.01.xlsx; do not edit by hand.
-# Source: docs-local/osp-eval-cases/generate_osp_cases.py
 schema: osp-eval-case/v1
 id: 100
 name: 调整输入描述，让模型猜不出来是速率-AVG DL THP1
@@ -48,7 +46,7 @@ expect:
 
         ## Task Context
         Energy saving time range: start time "00:00:00", end time "22:00:00"
-        The historical minimum downlink throughput was 2 Mbps. Set the AVG DL THP to 5Mbps.
+        Rate guarantee target: {00:00-22:00, Set the AVG DL THP to 5Mbps}
 
         ## Terminology Explanation
         1. LTE
