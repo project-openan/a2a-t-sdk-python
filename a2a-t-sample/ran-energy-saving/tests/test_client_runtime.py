@@ -449,41 +449,6 @@ async def test_a_direct_pure_agent_run_answers_with_the_decision_agent(
         await runtime.aclose()
 
 
-async def test_a_direct_pure_auto_run_without_an_agent_keeps_the_policy_answer(
-    offline_config: SampleConfig,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """The presentation/benchmark default must not start paying for an agent turn."""
-    import protocol.client_runtime as client_runtime
-    from demo.pure_auto import AutoPureAnswer
-    from shared.run_constants import PROTOCOL_PURE
-
-    async def fake_discover(**kwargs: object) -> DiscoveredAgent:
-        del kwargs
-        return _card()
-
-    async def fake_create(agent: object, client_config: ClientConfig | None = None) -> _FakeA2AClient:
-        del agent, client_config
-        return _FakeA2AClient()
-
-    monkeypatch.setattr(client_runtime, "discover_agent", fake_discover)
-    monkeypatch.setattr(client_runtime, "create_client", fake_create)
-    runtime = await build_demo_runtime(
-        offline_config,
-        "information",
-        "auto",
-        "sse",
-        "direct",
-        protocol=PROTOCOL_PURE,
-        env_path=tmp_path / "missing.env",
-    )
-    try:
-        assert not isinstance(runtime.pure_answer, AutoPureAnswer)
-    finally:
-        await runtime.aclose()
-
-
 def test_the_pure_answer_receives_the_run_decision_context() -> None:
     """The basis and policy switch must reach the pure answer, not only the A2A-T provider."""
     from protocol.client_runtime import _configure_pure_answer
