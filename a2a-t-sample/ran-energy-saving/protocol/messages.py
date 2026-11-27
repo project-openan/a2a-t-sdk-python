@@ -93,7 +93,7 @@ def format_rate_percent(value: object) -> str:
     """Render one energy-saving rate as ``NN%`` without doubling an existing percent sign.
 
     The planner may produce either ``35`` or ``35%`` depending on the model, so both the local
-    approval gate and the A2A MIE request normalize the value before showing it.
+    approval gate and the A2A approval request normalize the value before showing it.
     """
     text = str(value).strip()
     return text if text.endswith("%") else f"{text}%"

@@ -173,8 +173,8 @@ class CaseCatalog:
     def documents(self) -> list[dict[str, Any]]:
         """Return every full case document, ordered by id.
 
-        The annotation console derives its whole target space from the catalog, so it needs the
-        documents rather than the summary rows.
+        The tester derives its whole target space from the catalog, so it needs the documents
+        rather than the summary rows.
         """
         snapshot = self._snapshot
         return [snapshot.cases[case_id] for case_id in sorted(snapshot.cases)]

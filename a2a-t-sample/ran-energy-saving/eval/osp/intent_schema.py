@@ -5,7 +5,7 @@ runtime parameter schema (``shared.task_schema.TASK_PARAM_SCHEMA``): it carries 
 energy-saving mode, the region, the experience requirement, carrier frequencies, the gain target,
 area-level throughput targets and site-level scenario targets.
 
-The offline runner passes this schema to the SDK content-validation pipeline so the same semantic
+The evaluation runner passes this schema to the SDK content-validation pipeline so the same semantic
 extraction that fills a Task-T also produces the structured intent.  The schema is intentionally
 evaluation-only: the runtime client flow keeps using ``TASK_PARAM_SCHEMA``.
 """

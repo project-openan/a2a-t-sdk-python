@@ -221,7 +221,7 @@ def read_inbound_negotiation_events(
 ) -> dict[str, list[dict[str, object]]]:
     """Return the negotiation events of several runs, grouped by run id.
 
-    The annotation console reads the server's negotiation messages of a whole batch at once, and the
+    The tester report reads the server's negotiation messages of a whole batch at once, and the
     per-run detail reader would issue one query per run. Rows keep their ``seq`` order, so the n-th
     inbound event of a run is its n-th negotiation round.
     """

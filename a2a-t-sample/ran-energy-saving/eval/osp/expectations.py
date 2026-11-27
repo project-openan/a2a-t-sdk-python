@@ -22,8 +22,8 @@ blocks extend a case without changing ``validate`` (still a plain verdict string
     ``any`` passes when one observed error matches one entry; ``cover`` passes when every observed
     error is matched (and at least one error was observed). ``contains`` entries are alternatives
     of each other, so one keyword list covers both languages of the model-rendered label.
-    The annotation console exports the whole observed error (``code`` / ``slotName`` /
-    ``message`` / ``facts``) so that adopting a candidate freezes what was actually reported; an
+    The tester exports the whole observed error (``code`` / ``slotName`` / ``message`` /
+    ``facts``) so that adopting a candidate freezes what was actually reported; an
     author who does not want the model-rendered parts to be part of the oracle deletes those keys
     from the case. A matcher that states no condition matches any error, which is how an author
     says "a slot error, any kind".
@@ -45,7 +45,7 @@ blocks extend a case without changing ``validate`` (still a plain verdict string
     round 1".
 
 The two observations come from different places (a validation stage detail versus ``run.proposals``)
-but the rules are shared by the offline runner and the tester, so they live here: a comparator that
+but the rules are shared by the evaluation runner and the tester, so they live here: a comparator that
 silently drifted between the two would make a green item meaningless.
 """
 
@@ -59,7 +59,7 @@ from typing import Any, Final
 
 from eval.osp.compare import business_facts, free_text_tokens, parse_sections_ordered
 
-#: Dimension name of the blocked-request expectation, used by the annotation console and reports.
+#: Dimension name of the blocked-request expectation, used by the tester and reports.
 SLOT_DIMENSION: Final[str] = "slot_errors"
 #: Dimension name of the negotiation-message expectation.
 MESSAGE_DIMENSION: Final[str] = "messages"
@@ -189,7 +189,7 @@ class SlotErrorMatch:
 class SlotErrorEvidence:
     """The slot-error expectation of one validation together with its match.
 
-    The offline runner and the tester both store this on the validation stage detail; keeping the
+    The evaluation runner and the tester both store this on the validation stage detail; keeping the
     shape here is what stops the two from reporting an interception differently.
     """
 

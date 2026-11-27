@@ -394,8 +394,8 @@ def _pending_negotiation(
     """Return the newest event the client must answer.
 
     The local sample tags a negotiation with its ``pure`` metadata; a real NMS returns a standard
-    A2A status without that tag. An MIE ``approval`` phase belongs to the RAN Agent and is not
-    answered by the OSS Agent.
+    A2A status without that tag. An ``approval`` phase belongs to the RAN Agent and is not
+    answered by the client agent.
 
     A vendor that does not negotiate at the protocol level answers a pure request with a plain
     agent ``message`` (no Task, no negotiation metadata). ``allow_plain_question`` makes that
