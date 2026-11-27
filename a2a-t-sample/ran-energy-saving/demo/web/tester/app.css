@@ -371,6 +371,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
 }
 .toast.error { background: var(--red); }
+.toast.success { background: var(--green); }
+.toast.waiting { background: var(--orange); }
 
 @media (max-width: 820px) {
   .top { padding: 12px 16px; flex-wrap: wrap; }

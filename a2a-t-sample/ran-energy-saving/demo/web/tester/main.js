@@ -44,6 +44,7 @@ const state = {
   history: [],
   polling: null,
   roundFilter: "",
+  exporting: false,
   tab: "catalog",
   drawer: { item: null, tab: "result", caseDoc: null, loading: false },
 };
@@ -78,15 +79,18 @@ function badge(status, text) {
   return el("span", `badge ${mapped || "pending"}`, text || statusLabel(status));
 }
 
-function showToast(message, kind = "") {
+function showToast(message, kind = "", timeout = 5000) {
   const node = $("toast");
   node.textContent = message;
   node.className = `toast ${kind}`.trim();
   node.hidden = false;
   window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => {
-    node.hidden = true;
-  }, 5000);
+  // ``timeout <= 0`` keeps the toast up until the next showToast call hides it.
+  if (timeout > 0) {
+    showToast.timer = window.setTimeout(() => {
+      node.hidden = true;
+    }, timeout);
+  }
 }
 
 async function getJson(url) {
@@ -444,9 +448,59 @@ async function rerunItem(index) {
   }
 }
 
-function exportBatch(format) {
-  if (!state.batch?.batchId) return;
-  window.location.href = `/api/tester/batches/${encodeURIComponent(state.batch.batchId)}/export.${format}`;
+function elapsedSeconds(startedAt) {
+  return Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+}
+
+async function exportBatch(format) {
+  if (!state.batch?.batchId || state.exporting) return;
+  const batchId = state.batch.batchId;
+  const button = $(`export-${format}`);
+  const originalLabel = button.textContent;
+  const startedAt = Date.now();
+  // The XLSX report fetches Langfuse metrics per run, so a click can stay silent for seconds.
+  // Keep both buttons disabled and a live toast on screen until the download is handed over.
+  state.exporting = true;
+  $("export-json").disabled = true;
+  $("export-xlsx").disabled = true;
+  button.textContent = "正在导出…";
+  button.setAttribute("aria-busy", "true");
+  const describe = () =>
+    `正在生成 ${format.toUpperCase()} 报表（含 Langfuse 指标），已用 ${elapsedSeconds(startedAt)} 秒…`;
+  showToast(describe(), "waiting", 0);
+  const ticker = window.setInterval(() => showToast(describe(), "waiting", 0), 1000);
+  try {
+    const response = await fetch(`/api/tester/batches/${encodeURIComponent(batchId)}/export.${format}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || response.statusText);
+    }
+    const blob = await response.blob();
+    downloadBlob(blob, response.headers.get("content-disposition"), `osp-tester-${batchId}.${format}`);
+    showToast(`导出完成（用时 ${elapsedSeconds(startedAt)} 秒）`, "success", 2000);
+  } catch (error) {
+    showToast(`导出失败：${error.message || error}`, "error", 8000);
+  } finally {
+    window.clearInterval(ticker);
+    state.exporting = false;
+    button.textContent = originalLabel;
+    button.removeAttribute("aria-busy");
+    const enabled = Boolean(state.batch);
+    $("export-json").disabled = !enabled;
+    $("export-xlsx").disabled = !enabled;
+  }
+}
+
+function downloadBlob(blob, disposition, fallbackName) {
+  const match = /filename="?([^";]+)"?/i.exec(disposition || "");
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = match ? match[1] : fallbackName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 async function loadHistory() {
@@ -725,8 +779,8 @@ function renderResults() {
   $("start-button").disabled = running;
   $("cancel-button").hidden = !running;
   $("retry-button").hidden = running || !retryable;
-  $("export-json").disabled = false;
-  $("export-xlsx").disabled = false;
+  $("export-json").disabled = state.exporting;
+  $("export-xlsx").disabled = state.exporting;
   $("progress").hidden = !running && batch.status !== "finished" && batch.status !== "cancelled";
   const total = summary.total || 0;
   const done =
