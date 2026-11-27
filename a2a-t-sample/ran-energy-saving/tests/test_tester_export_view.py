@@ -210,6 +210,31 @@ def test_the_wire_trajectory_prints_one_summary_line_per_business_frame() -> Non
     )
 
 
+def test_the_wire_trajectory_drops_the_fixed_task_t_terminology_tail() -> None:
+    task_t = (
+        "## Operation Type\nCreate\n\n"
+        "## Task Object\nThe area is Region A.\n\n"
+        "## Expected Output\nOutput the intent report.\n\n"
+        "## Terminology Explanation\n1. LTE\n   - Synonyms: 4G, E-UTRAN"
+    )
+    records = [
+        {
+            "dir": "out",
+            "body": {
+                "message": {
+                    "parts": [{"text": "create task"}],
+                    "metadata": {"https://example/Task-T/v1": task_t},
+                }
+            },
+        }
+    ]
+
+    assert render_wire_trajectory(records) == (
+        "R1 Client Task-T | ## Operation Type Create ## Task Object The area is Region A. "
+        "## Expected Output Output the intent report."
+    )
+
+
 def test_the_wire_trajectory_names_a_negotiation_performative_and_round() -> None:
     records = [
         {

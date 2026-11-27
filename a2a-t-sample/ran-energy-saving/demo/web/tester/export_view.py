@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
@@ -416,6 +417,9 @@ def render_trajectory(exchanges: Sequence[Mapping[str, object]]) -> str:
 #: Prefix the vendor repeats on every Task state; the trajectory shows the bare state name.
 _TASK_STATE_PREFIX: Final = "TASK_STATE_"
 
+#: Heading that opens the fixed tail of every Task-T message (the boilerplate sections).
+_TASK_T_FIXED_HEADING: Final = re.compile(r"^#{1,6}\s*Terminology\b", re.MULTILINE)
+
 
 def render_wire_trajectory(records: Sequence[Mapping[str, object]]) -> str:
     """Render the interaction trajectory from the raw wire frames, one hop per line.
@@ -543,10 +547,16 @@ def _message_summary(message: Mapping[str, object]) -> tuple[str, str, int | Non
     if performative and performative != "TASK_T":
         return performative, negotiation or _parts_text(message), round_number
     if task_t:
-        return "Task-T", task_t, round_number
+        return "Task-T", _before_task_t_fixed_sections(task_t), round_number
     if negotiation:
         return "Negotiation-T", negotiation, round_number
     return "Message", _parts_text(message), round_number
+
+
+def _before_task_t_fixed_sections(text: str) -> str:
+    """Keep the task-specific Task-T prose and drop the fixed Terminology Explanation tail."""
+    match = _TASK_T_FIXED_HEADING.search(text)
+    return text[: match.start()].strip() if match else text
 
 
 def _state_title(state: str) -> str:
