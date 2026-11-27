@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import pytest
 from a2a_t.core.errors.catalog import ErrorCatalog
-from a2a_t.core.errors.exceptions import ContentValidationError
+from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
 from demo.web.tester import service
 from demo.web.tester.service import (
     ALL_STAGES,
@@ -47,7 +47,6 @@ from demo.web.tester.service import (
 )
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog
 from eval.osp.followup import followup_input, is_blocked_case
-from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
 from protocol.client_flow import ClientFlowResult
 from protocol.client_runtime import MODE_AUTO
@@ -96,33 +95,29 @@ class _PromptClient:
         case = self._by_text[text]
         self._last_id = int(case["id"])
         self._last_text = text
+        blocked_case = case["expect"]["protocols"]["a2a-t"]["validate"] == "blocked"
+        original_input = text == str(case.get("user_input"))
+        if text not in self.unblocked_texts and (
+            text in self.blocked_texts or (blocked_case and original_input)
+        ):
+            # The only local interception left is the slot extraction.
+            raise PromptGenerationError(
+                ErrorCatalog.SLOT_NOT_PROVIDED,
+                {"slot_label": "Area"},
+                message="blocked by test",
+                failed_parameters=[
+                    SlotValidationError(
+                        slot_name="task_object",
+                        code="slot.not_provided",
+                        message="blocked by test",
+                        facts={"slot_label": "Area"},
+                    )
+                ],
+            )
         return SimpleNamespace(
             prompt_text=str(case["expect"]["protocols"]["a2a-t"]["task_t"]),
             template_uri=template_uri,
         )
-
-    def validate_task_prompt_and_data_filling(
-        self,
-        prompt: str,
-        schema: Mapping[str, object],
-        template_uri: str,
-    ) -> object:
-        del prompt, template_uri
-        assert self._last_id is not None
-        if schema is OSP_INTENT_SCHEMA:
-            return SimpleNamespace(data=dict(CASES[self._last_id]["expect"]["intent"]))
-        case = CASES[self._last_id]
-        blocked_case = case["expect"]["protocols"]["a2a-t"]["validate"] == "blocked"
-        original_input = self._last_text == str(case.get("user_input"))
-        if self._last_text in self.unblocked_texts:
-            return SimpleNamespace(data={})
-        if self._last_text in self.blocked_texts or (blocked_case and original_input):
-            raise ContentValidationError(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                {"reason": "test"},
-                message="blocked by test",
-            )
-        return SimpleNamespace(data={})
 
 
 class _FakeRuns:
@@ -821,7 +816,6 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
         "scenario": "runner-scenario",
         "language": "zh-CN",
         "timeout_seconds": 7,
-        "pre_send_validation": "off",
     }
     created = manager.create(
         case_ids=[1],
@@ -839,7 +833,6 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
     call = runs.calls[0]
     assert call["scenario"] == "runner-scenario"
     assert call["language"] == "zh-CN"
-    assert call["validate_before_send"] is False
     case = manager._catalog.get(1)
     assert case is not None
     assert manager._resolved_timeout(batch, case) == 7
@@ -1779,10 +1772,10 @@ async def test_a_validate_only_batch_freezes_the_case_reference_and_intent(
     assert item.refs["caseName"] == CASES[1]["name"]
     assert str(item.refs["taskT"]).startswith("## Operation Type")
     assert item.refs["expectedIntent"] == CASES[1]["expect"]["intent"]
-    assert item.intent == CASES[1]["expect"]["intent"]
+    assert item.intent is None  # the SDK intent extraction was removed; the stage is record-only
     snapshot = manager.get(batch_id)
     assert snapshot is not None
-    assert snapshot["items"][0]["intent"]["Operation type"] == "Create"
+    assert snapshot["items"][0]["intent"] is None
 
 
 async def test_a_full_run_records_the_trace_id_and_answer(tmp_path: Path) -> None:

@@ -243,10 +243,11 @@ SCENARIO_INFORMATION_SPEC = Scenario(
     name=SCENARIO_INFORMATION,
     expected_kind=KIND_INFORMATION,
     user_request=EXAMPLE_REQUESTS[SCENARIO_INFORMATION],
-    # The request omits the task object. The client catches that locally, so the demo shows the
-    # pre-send gate instead of a server negotiation; no scripted decision is consumed. The rate
-    # guarantee target is optional (the vendor executes an area-level request without one), so it
-    # can no longer serve as the missing field.
+    # The request omits the task object. The SDK slot extraction reports it as
+    # ``slot.not_provided`` before a Task-T exists, so the demo shows the local block instead of a
+    # server negotiation; no scripted decision is consumed. The rate guarantee target is optional
+    # (the vendor executes an area-level request without one), so it cannot serve as the missing
+    # field.
     expected_sequence=(),
     expected_final_state=FINAL_STATE_INPUT_INVALID,
     expected_negotiation_target=None,

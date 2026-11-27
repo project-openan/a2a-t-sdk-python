@@ -122,7 +122,6 @@ runner:
   language: en-US
   approval: approve
   timeout_seconds: 300
-  pre_send_validation: always
 source:
   file: OSP-Unified Evaluation Set_v.01_拆分_A2ATestRegion.xlsx
   sheet: A2A-T_原始数据

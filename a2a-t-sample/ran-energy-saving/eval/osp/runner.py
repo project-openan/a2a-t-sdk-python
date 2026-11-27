@@ -4,12 +4,13 @@ The runner executes the SDK-owned stages of a case without starting the Web UI o
 network:
 
 ``intent``
-    Generate the Task-T from the operator text, then extract the 11-key structured intent with
-    :data:`eval.osp.intent_schema.OSP_INTENT_SCHEMA`.
+    Record-only. The structured intent used to come from the client content validation, which the
+    client no longer calls; a full-flow tester judges the downstream's own reading instead.
 ``task_t``
     Compare the generated Task-T with the expected one section by section.
 ``validate``
-    Run the sample's Task-T content validation and map it to ``blocked`` / ``pass``.
+    The local gate: the slot extraction either blocks before a Task-T exists (``blocked``) or the
+    Task-T is generated (``pass``). There is no second model call.
 
 ``send``, ``negotiate`` and ``final`` need the full runtime and are deliberately outside this
 runner; use the presentation, the tester console or the benchmark for those stages.
@@ -32,18 +33,11 @@ from pathlib import Path
 from typing import Any, Final, Protocol
 
 import yaml
-from a2a_t.core.errors.exceptions import (
-    ContentValidationError,
-    PromptGenerationError,
-    SlotValidationError,
-)
-from protocol.client_flow import _classify_validation_error
+from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
 from protocol.messages import TASK_TEMPLATE_URI
-from protocol.negotiation_policy import NegotiationKind
-from shared.task_schema import TASK_PARAM_SCHEMA
 from shared.trace import trace_stage
 
-from eval.osp.compare import Diff, compare_intent, compare_task_t
+from eval.osp.compare import Diff, compare_task_t
 from eval.osp.conditions import case_client_conditions
 from eval.osp.detail import render_failures
 from eval.osp.expectations import slot_error_evidence
@@ -55,7 +49,6 @@ from eval.osp.followup import (
     interception_case,
     is_blocked_case,
 )
-from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 
 #: Stages this runner can execute, in pipeline order.
 STAGE_ORDER: Final[tuple[str, ...]] = ("intent", "task_t", "validate")
@@ -74,12 +67,6 @@ _STAGE_BUCKET: Final[dict[str, str]] = {
     STAGE_ERROR: "error",
 }
 
-#: The 24 hourly intervals of a full-day energy-saving period. ``OSP_INTENT_SCHEMA`` declares this
-#: as the default for an area-level request that names no time range.
-_FULL_DAY_TIME: Final[str] = "&".join(
-    f"{hour:02d}:00:00-{hour:02d}:59:59" for hour in range(24)
-)
-
 #: The case directory shipped next to this module.
 DEFAULT_CASES_DIR: Final[Path] = Path(__file__).resolve().parent / "cases"
 
@@ -95,12 +82,6 @@ class EvalPromptClient(Protocol):
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object: ...
 
-    def validate_task_prompt_and_data_filling(
-        self,
-        prompt: str,
-        schema: Mapping[str, object],
-        template_uri: str,
-    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -310,11 +291,11 @@ def _run_segment(
 
     outcomes: list[StageOutcome] = []
     if "intent" in stages and include_intent:
-        outcomes.append(_run_intent(case, client, task_t))
+        outcomes.append(_run_intent(case, task_t))
     if "task_t" in stages:
         outcomes.append(_run_task_t(case, task_t))
     if "validate" in stages:
-        outcomes.append(_run_validate(case, client, task_t))
+        outcomes.append(_run_validate(case, task_t))
 
     passed = all(outcome.status in {STAGE_PASSED, STAGE_RECORDED} for outcome in outcomes)
     return CaseOutcome(case_id=case_id, name=name, stages=tuple(outcomes), passed=passed)
@@ -380,16 +361,13 @@ def _blocked_before_task_t(
             )
             continue
         if stage == "intent":
-            recorded = not _assert_flag(case, "intent")
             expected = case["expect"]["intent"]
         else:
-            recorded = not _assert_flag(case, "a2a-t", "task_t")
             expected = case["expect"]["protocols"]["a2a-t"]["task_t"]
-        status = (
-            STAGE_RECORDED
-            if recorded or expected_validate in {"blocked", None}
-            else STAGE_ERROR
-        )
+        # The stages after the block never ran, so there is nothing to judge: the validate row
+        # carries the failure. Marking them as errors would turn an unexpected block into an
+        # ``error`` item and hide that its real verdict is the failed interception.
+        status = STAGE_RECORDED
         outcomes.append(
             StageOutcome(
                 stage=stage,
@@ -414,88 +392,21 @@ def _generate_task_t(case: Mapping[str, Any], client: EvalPromptClient) -> str:
     return text
 
 
-def _run_intent(
-    case: Mapping[str, Any],
-    client: EvalPromptClient,
-    task_t: str,
-) -> StageOutcome:
-    expected = case["expect"]["intent"]
-    note = ""
-    try:
-        with trace_stage("intent_extraction"):
-            filled = client.validate_task_prompt_and_data_filling(
-                task_t, OSP_INTENT_SCHEMA, TASK_TEMPLATE_URI
-            )
-        actual = getattr(filled, "data", None)
-    except ContentValidationError as exc:
-        params = getattr(exc, "params", None)
-        actual = dict(params) if isinstance(params, Mapping) else {}
-        note = f"intent extraction reported {exc.code_str}"
-    except Exception as exc:  # noqa: BLE001 - the stage reports the failure
-        return StageOutcome(
-            stage="intent",
-            status=STAGE_ERROR,
-            message=f"{type(exc).__name__}: {exc}",
-            expected=expected,
-        )
-    if not isinstance(actual, Mapping):
-        actual = {}
-    actual, applied_defaults = _apply_intent_defaults(actual)
-    if applied_defaults:
-        note = _append_note(note, f"schema defaults: {', '.join(applied_defaults)}")
-    diffs = compare_intent(expected, actual)
-    negotiation = case["expect"]["protocols"]["a2a-t"]["negotiation"]
-    post_negotiation = bool(negotiation.get("expected"))
-    recorded = not _assert_flag(case, "intent") or post_negotiation
-    if recorded:
-        status = STAGE_RECORDED
-        note = _append_note(
-            note,
-            "expected intent is post-negotiation; the offline runner sees the initial request"
-            if post_negotiation
-            else "record-only",
-        )
-    else:
-        status = STAGE_PASSED if not diffs else STAGE_FAILED
+def _run_intent(case: Mapping[str, Any], task_t: str) -> StageOutcome:
+    """Record the intent stage without extracting anything.
+
+    The structured intent used to come from the client content validation. The client no longer
+    calls it, and a full-flow tester judges the downstream's own reading (the Task payload of
+    ``TASK_STATE_SUBMITTED``) instead, so an SDK-only batch keeps the column as record-only.
+    """
+    del task_t
     return StageOutcome(
         stage="intent",
-        status=status,
-        message=note,
-        expected=expected,
-        actual=dict(actual),
-        diffs=tuple(diffs),
+        status=STAGE_RECORDED,
+        message="intent 抽取随客户端内容校验一并移除；本版本只记录",
+        expected=case["expect"]["intent"],
     )
 
-
-def _apply_intent_defaults(
-    actual: Mapping[str, object],
-) -> tuple[dict[str, object], tuple[str, ...]]:
-    """Fill the defaults ``OSP_INTENT_SCHEMA`` declares but the model may leave null.
-
-    The schema states that an unmentioned RAT is ``ALL`` and that a ``Create`` area-level request
-    without a time range covers the full day. Those are schema semantics, not guesses about the
-    operator's text, so they are applied here instead of trusting every model turn to repeat them.
-
-    An explicit ``Energy saving time`` is never rewritten: the rate targets' effective periods are
-    a different field and must not be promoted into the energy-saving window (the 2026-11-12 OSP
-    table expects the full day for a Create whose rate windows are time-segmented). A ``Modify``
-    area-level request keeps its empty time because the template only lets a Modify change the
-    rate target, and a site-level request (one that carries ``Scenario-based energy saving``) keeps
-    its empty time as well: the outage window belongs to the scenario period there.
-    """
-    data = dict(actual)
-    applied: list[str] = []
-    rat = data.get("Energy saving cell RAT")
-    if rat is None or (isinstance(rat, str) and not rat.strip()):
-        data["Energy saving cell RAT"] = "ALL"
-        applied.append("Energy saving cell RAT=ALL")
-    time = data.get("Energy saving time")
-    empty_time = time is None or (isinstance(time, str) and not time.strip())
-    operation = str(data.get("Operation type") or "").strip().lower()
-    if empty_time and not data.get("Scenario-based energy saving") and operation != "modify":
-        data["Energy saving time"] = _FULL_DAY_TIME
-        applied.append("Energy saving time=full day")
-    return data, tuple(applied)
 
 
 def _run_task_t(case: Mapping[str, Any], task_t: str) -> StageOutcome:
@@ -519,96 +430,39 @@ def _run_task_t(case: Mapping[str, Any], task_t: str) -> StageOutcome:
     )
 
 
-def _run_validate(
-    case: Mapping[str, Any],
-    client: EvalPromptClient,
-    task_t: str,
-) -> StageOutcome:
-    protocol = case["expect"]["protocols"]["a2a-t"]
-    expected = protocol["validate"]
-    recorded = not _assert_flag(case, "a2a-t", "validate")
-    actual, note, error, detail = _actual_validation(client, task_t)
-    if error is not None:
-        return StageOutcome(
-            stage="validate",
-            status=STAGE_ERROR,
-            message=error,
-            expected=expected,
-            actual=actual,
-            detail=detail,
-        )
-    if recorded:
+def _run_validate(case: Mapping[str, Any], task_t: str) -> StageOutcome:
+    """Judge the local gate: the Task-T exists, so the slot extraction did not block it.
+
+    A ``slot.*`` failure never reaches this stage; :func:`_blocked_before_task_t` already reports
+    it as ``blocked``. What is left is the local passing evidence against the case expectation.
+    """
+    del task_t
+    expected = case["expect"]["protocols"]["a2a-t"]["validate"]
+    actual = "pass"
+    detail: dict[str, object] = {"verdict": "pass", "source": "local"}
+    if not _assert_flag(case, "a2a-t", "validate"):
         return StageOutcome(
             stage="validate",
             status=STAGE_RECORDED,
-            message=_append_note(note, "record-only"),
+            message="record-only",
             expected=expected,
             actual=actual,
             detail=detail,
         )
-    diffs = _slot_error_diffs(case, expected, actual, detail)
-    passed = _validation_matches(expected, actual) and _slot_errors_matched(detail)
-    if expected == "pass_with_terminology" and actual == "pass":
-        note = _append_note(note, "terminology context is a soft expectation")
+    message = (
+        "terminology context is a soft expectation"
+        if expected == "pass_with_terminology"
+        else ""
+    )
     return StageOutcome(
         stage="validate",
-        status=STAGE_PASSED if passed else STAGE_FAILED,
-        message=note,
+        status=STAGE_PASSED if _validation_matches(expected, actual) else STAGE_FAILED,
+        message=message,
         expected=expected,
         actual=actual,
-        diffs=diffs,
         detail=detail,
     )
 
-
-def _actual_validation(
-    client: EvalPromptClient,
-    task_t: str,
-) -> tuple[str | None, str, str | None, dict[str, object] | None]:
-    """Return the validation verdict, a note, a stage error and the structured evidence.
-
-    The evidence keeps what the status string drops: the failing code and, when the SDK emitted
-    them, the per-slot errors the operator can act on. It is display evidence only; the verdict
-    still drives the stage status.
-    """
-    try:
-        with trace_stage("task_t_client_validation"):
-            content = client.validate_task_prompt_and_data_filling(
-                task_t, TASK_PARAM_SCHEMA, TASK_TEMPLATE_URI
-            )
-    except ContentValidationError as exc:
-        verdict, kind = _classify_validation_error(exc)
-        detail = _validation_detail(exc, verdict, kind)
-        if verdict == "unavailable":
-            return "unavailable", f"validation unavailable: {exc.code_str}", None, detail
-        if verdict == "blocked":
-            return "blocked", f"blocked by {exc.code_str}", None, detail
-        return "pass", f"negotiable ({exc.code_str}); the request is still sent", None, detail
-    except Exception as exc:  # noqa: BLE001 - reported as a stage error
-        return None, "", f"{type(exc).__name__}: {exc}", None
-    # Keep the extracted business values: a full-flow run that reuses this Task-T (a tester
-    # interception miss) needs them as the accept-refill baseline.
-    data = getattr(content, "data", None)
-    detail: dict[str, object] | None = (
-        {"filledParams": {str(key): value for key, value in data.items()}}
-        if isinstance(data, Mapping) and data
-        else None
-    )
-    return "pass", "", None, detail
-
-
-def _validation_detail(
-    error: ContentValidationError,
-    verdict: str,
-    kind: NegotiationKind | None,
-) -> dict[str, object]:
-    """Render one validation failure as JSON-ready evidence for the tester table."""
-    return {
-        "verdict": verdict,
-        "negotiationKind": kind.value if kind is not None else None,
-        "code": error.code_str,
-        "slotErrors": _slot_error_documents(error.errors),
-    }
 
 
 def _slot_error_documents(errors: Iterable[SlotValidationError] | None) -> list[dict[str, object]]:

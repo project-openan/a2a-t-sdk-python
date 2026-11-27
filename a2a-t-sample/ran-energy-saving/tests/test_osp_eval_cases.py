@@ -268,6 +268,5 @@ def test_top_level_contract(cases: dict[int, dict[str, Any]]) -> None:
         assert runner["language"] == "en-US"
         assert runner["approval"] == "approve"
         assert runner["timeout_seconds"] == 300
-        assert runner["pre_send_validation"] == "always"
         issue = document["known_issue"]
         assert issue is None or (isinstance(issue, str) and issue.strip())

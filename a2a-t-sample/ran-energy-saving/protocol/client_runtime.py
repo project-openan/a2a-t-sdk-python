@@ -584,9 +584,6 @@ class ClientRuntime:
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
-        validate_before_send: bool = False,
-        enforce_required_fields: bool = False,
-        site_level_rate_optional: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -616,11 +613,6 @@ class ClientRuntime:
                 the scenario's canned request.
             conversation_context: Optional recent-turn block injected into the decision prompt
                 and Task-T generation so a follow-up can refer to an earlier run.
-            validate_before_send: Validate the rendered Task-T with the SDK content pipeline
-                before sending it; only the A2A-T flow implements the gate.
-            enforce_required_fields: Run the business-required-field gate before sending an
-                operator request. The caller decides the entry points; curated scenarios no longer
-                get an exemption.
             run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify
                 Task-T against an existing running Task.
             target_task_id: Task a Modify-only run continues.
@@ -883,9 +875,6 @@ class ClientRuntime:
                     correction=correction_provider or self.correction_provider,
                     client_policy=ClientPolicy.from_config(self.config),
                     apply_client_policy=apply_client_policy,
-                    validate_before_send=validate_before_send,
-                    enforce_required_fields=enforce_required_fields,
-                    site_level_rate_optional=site_level_rate_optional,
                     run_mode=run_mode,
                     target_task_id=target_task_id,
                     target_context_id=target_context_id,

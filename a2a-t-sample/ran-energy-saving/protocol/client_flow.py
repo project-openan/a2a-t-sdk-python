@@ -44,7 +44,7 @@ from a2a.types import (
     TaskPushNotificationConfig,
     TaskState,
 )
-from a2a_t.core.errors.exceptions import ContentValidationError, PromptGenerationError
+from a2a_t.core.errors.exceptions import PromptGenerationError
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
@@ -141,12 +141,12 @@ from protocol.messages import (
 )
 from protocol.negotiation_policy import (
     NegotiationKind,
-    negotiation_kind_for_errors,
     negotiation_kind_for_negotiation_type,
     negotiation_kind_for_propose_content,
     negotiation_kind_for_template_uri,
 )
 from protocol.target_grammar import find_segments, normalize_text
+from protocol.task_t_readback import read_task_t_fields
 
 _LOGGER = logging.getLogger("ran_energy_saving.client_flow")
 
@@ -229,36 +229,14 @@ class ClientFlowError(RuntimeError):
     """Raised when the server sends content the client flow cannot handle."""
 
 
-#: SDK validation codes that mean the validator itself failed rather than the content being invalid.
-#: Those calls degrade to ``unavailable`` so a model outage never blocks a demo run.
-_VALIDATION_UNAVAILABLE_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "llm.not_configured",
-        "llm.invocation_failed",
-        "llm.response_invalid",
-        "template.load_failed",
-        "infra.resource_read_failed",
-        "infra.internal_error",
-    }
-)
-
-#: Deterministic validation failures the user can act on; they block regardless of the LLM verdict.
-_VALIDATION_BLOCKING_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "input.text_too_long",
-        "template.not_found",
-        "negotiation.invalid_input",
-    }
-)
-
-
 @dataclass(frozen=True)
 class TaskValidation:
-    """Outcome of one pre-send Task-T validation call.
+    """Pre-send evidence of one Task-T.
 
-    ``filled`` carries the parameters the SDK extracted from the prompt. The accept refill uses
-    them as its baseline, so a raw-intent run keeps the operator's values instead of falling back
-    to a hardcoded default.
+    The client no longer calls the SDK content validation. The block verdict now comes from the
+    slot extraction (``slot.*``) and the passing verdict is the local evidence that the Task-T was
+    generated. ``filled`` carries the values the client reads back from the rendered prompt; the
+    accept refill uses them as its baseline.
     """
 
     verdict: str
@@ -267,8 +245,10 @@ class TaskValidation:
     reason: str | None
     duration_ms: int
     filled: Mapping[str, object] = field(default_factory=dict)
-    #: How many SDK validation attempts this result consumed (1 when no retry was needed).
+    #: Kept in the trace shape for the tester and the presentation card; a local check is always 1.
     attempts: int = 1
+    #: ``local`` for a read-back verdict, empty for a slot-extraction block.
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -314,22 +294,8 @@ def scripted_correction(text: str) -> CorrectionProvider:
     return provider
 
 
-def _elapsed_ms(started: float) -> int:
-    """Return the whole milliseconds elapsed since ``started``."""
-    return max(0, int((time.monotonic() - started) * 1000))
-
-
-def _validation_errors(error: ContentValidationError) -> list[dict[str, object]]:
-    """Render the SDK slot errors as JSON-ready documents for the trace and the UI."""
-    return [
-        {
-            "slotName": item.slot_name,
-            "code": str(item.code),
-            "message": item.message,
-            "facts": dict(item.facts or {}),
-        }
-        for item in error.errors or []
-    ]
+#: Caller-schema field carrying the time-segmented guaranteed throughput target.
+RATE_TARGET_FIELD: Final[str] = "guaranteedThroughputTarget"
 
 
 def _generation_task_validation(error: PromptGenerationError) -> TaskValidation | None:
@@ -352,247 +318,6 @@ def _generation_task_validation(error: PromptGenerationError) -> TaskValidation 
     if not errors:
         return None
     return TaskValidation("blocked", None, errors, str(error.code_str), 0)
-
-
-def _classify_validation_error(
-    error: ContentValidationError,
-) -> tuple[str, NegotiationKind | None]:
-    """Map one SDK validation failure to ``passed``-adjacent, negotiable or blocking."""
-    code = error.code_str
-    if code in _VALIDATION_UNAVAILABLE_CODES:
-        return "unavailable", None
-    if code in _VALIDATION_BLOCKING_CODES:
-        return "blocked", None
-    kind = negotiation_kind_for_errors(error.errors)
-    if kind is not None:
-        # The server maps the same errors to a negotiation kind, so the request must still be sent.
-        return "negotiable", kind
-    return "blocked", None
-
-
-#: Business labels of the caller-schema required fields, used by the OSS-agent interception.
-_REQUIRED_FIELD_LABELS: Final[dict[str, str]] = {
-    "operationType": "Operation Type",
-    "region": "Area",
-    "guaranteedThroughputTarget": "Rate guarantee goal",
-}
-
-#: Business labels of the same required fields in Chinese.
-_REQUIRED_FIELD_LABELS_ZH: Final[dict[str, str]] = {
-    "operationType": "操作类型",
-    "region": "区域",
-    "guaranteedThroughputTarget": "速率保障目标",
-}
-
-
-def _required_field_label(
-    name: str,
-    schema: Mapping[str, object],
-    language: str,
-) -> str:
-    """Return the business label of one required field.
-
-    The schema's own ``title`` (and ``x-title-zh-CN``) is authoritative, so adding a required field
-    also adds its label instead of leaking the camelCase property name. The static maps remain a
-    fallback for schemas that predate the titles.
-    """
-    properties = schema.get("properties")
-    if isinstance(properties, Mapping):
-        prop = properties.get(name)
-        if isinstance(prop, Mapping):
-            key = "x-title-zh-CN" if language == LANGUAGE_ZH else "title"
-            value = prop.get(key) or prop.get("title")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    labels = _REQUIRED_FIELD_LABELS_ZH if language == LANGUAGE_ZH else _REQUIRED_FIELD_LABELS
-    return labels.get(name, name)
-
-
-#: Caller-schema field a site-level request must state. The Task-T template requires a
-#: time-segmented rate target for a site-level configuration; the caller schema does not list it
-#: in ``required`` because an area-level request may omit it.
-RATE_TARGET_FIELD: Final[str] = "guaranteedThroughputTarget"
-
-
-def _is_missing_value(value: object) -> bool:
-    """Return whether one extracted parameter carries no value."""
-    return value is None or (isinstance(value, str) and not value.strip())
-
-
-def _missing_required_fields(
-    data: Mapping[str, object],
-    schema: Mapping[str, object],
-    language: str,
-    *,
-    site_level_rate_optional: bool = False,
-) -> list[dict[str, object]]:
-    """Return the caller-schema required fields the OSS agent must ask the operator to supply.
-
-    The schema's ``required`` list is the only source of mandatory fields. The guaranteed rate is
-    deliberately not on it: an area-level request without one is valid (the vendor treats an empty
-    target list as the default non-disruptive mode, and our Task-T template marks the rate target
-    optional). A site-level request still needs it, because the Task-T template requires a
-    time-segmented rate target for site-level configurations; enforcing that rule here keeps
-    area-level requests sendable while the site-level contract stays intact.
-
-    The returned errors use the same ``content.param_missing`` shape as the SDK, including a
-    business ``section_label`` that the presentation and the negotiation proposal can display.
-    """
-    required = schema.get("required")
-    names = [name for name in required if isinstance(name, str)] if isinstance(required, list) else []
-    site_level = any(
-        data.get(field) not in (None, "")
-        for field in ("siteList", "backgroundEvent")
-    )
-    if not site_level_rate_optional and RATE_TARGET_FIELD not in names:
-        names.append(RATE_TARGET_FIELD)
-    errors: list[dict[str, object]] = []
-    for name in names:
-        if name == RATE_TARGET_FIELD and not site_level:
-            # Area-level: the rate guarantee target is optional.
-            continue
-        if not _is_missing_value(data.get(name)):
-            continue
-        label = _required_field_label(name, schema, language)
-        message = (
-            f"缺少必填项「{label}」，请补充后重试"
-            if language == LANGUAGE_ZH
-            else f"'{label}' is empty; please provide a value"
-        )
-        errors.append(
-            {
-                "slotName": name,
-                "code": "content.param_missing",
-                "message": message,
-                "facts": {"section_label": label},
-            }
-        )
-    return errors
-
-
-def _validation_names_a_missing_required(
-    error: ContentValidationError,
-    schema: Mapping[str, object],
-) -> bool:
-    """Return whether a failed validation reports a required value as missing.
-
-    A semantic conflict (for example overlapping target windows) nulls the affected slot too, but
-    that value is negotiable and must still reach the server. A structured error on a caller-
-    required slot triggers the local business gate; the gate itself then decides whether the value
-    is actually absent.
-    """
-    required = schema.get("required")
-    if isinstance(required, list):
-        required_names = {name for name in required if isinstance(name, str)}
-        for item in error.errors or ():
-            if item.slot_name in required_names and str(item.code) in {
-                "content.param_missing",
-                "content.entry_field_missing",
-            }:
-                return True
-    return str(error.code_str) in {"content.param_missing", "content.entry_field_missing"}
-
-
-#: Extra attempts the sample makes when the SDK reports ``llm.response_invalid``. The SDK already
-#: retries that code, but the sample pins ``A2AT_LLM_MAX_ATTEMPTS=1`` to keep one LLM call inside
-#: the A2A HTTP budget. Retrying the contract failure here is cheap (the model returned in seconds);
-#: transport timeouts (``llm.invocation_failed``) are deliberately not retried, because a second
-#: 120 s wait would exhaust the same budget.
-_SEMANTIC_VALIDATION_RETRIES: Final[int] = 1
-
-
-async def _validate_task_prompt(
-    prompt_client: PromptClient,
-    prompt: str,
-    schema: Mapping[str, object],
-    template_uri: str,
-    *,
-    language: str,
-    enforce_required_fields: bool = True,
-    site_level_rate_optional: bool = False,
-) -> TaskValidation:
-    """Run the SDK content validation without blocking the event loop.
-
-    The extracted parameters are always returned, even when semantic validation fails, because the
-    accept refill and the required-field gate both need the operator-derived baseline.
-    """
-    started = time.monotonic()
-    total_attempts = _SEMANTIC_VALIDATION_RETRIES + 1
-    for attempt in range(1, total_attempts + 1):
-        try:
-            # Name the call for the trace: without a stage every validation shows up in Langfuse
-            # as the generic "LLM call · structured" and cannot be told apart from the Task-T
-            # extraction or the negotiation steps.
-            with trace_stage("task_t_client_validation"):
-                filled = await asyncio.to_thread(
-                    prompt_client.validate_task_prompt_and_data_filling,
-                    prompt,
-                    schema,
-                    template_uri,
-                )
-        except ContentValidationError as error:
-            if error.code_str == "llm.response_invalid" and attempt < total_attempts:
-                _LOGGER.warning(
-                    "Task-T semantic validation returned an invalid response (attempt %s/%s); retrying",
-                    attempt,
-                    total_attempts,
-                )
-                continue
-            params = error.params if isinstance(error.params, Mapping) else {}
-            if enforce_required_fields and _validation_names_a_missing_required(error, schema):
-                missing = _missing_required_fields(
-                    params,
-                    schema,
-                    language,
-                    site_level_rate_optional=site_level_rate_optional,
-                )
-                if missing:
-                    return TaskValidation(
-                        "blocked",
-                        None,
-                        missing,
-                        "content.param_missing",
-                        _elapsed_ms(started),
-                        params,
-                        attempt,
-                    )
-            verdict, kind = _classify_validation_error(error)
-            return TaskValidation(
-                verdict,
-                kind,
-                _validation_errors(error),
-                error.code_str,
-                _elapsed_ms(started),
-                params,
-                attempt,
-            )
-        except Exception as error:  # noqa: BLE001 - validation must never break the send path
-            _LOGGER.warning("Task-T validation unavailable: %s", error)
-            reason = f"{type(error).__name__}: {error}"
-            return TaskValidation("unavailable", None, [], reason, _elapsed_ms(started), {}, attempt)
-        extracted = getattr(filled, "data", filled)
-        data = dict(extracted) if isinstance(extracted, Mapping) else {}
-        if enforce_required_fields:
-            missing = _missing_required_fields(
-                data,
-                schema,
-                language,
-                site_level_rate_optional=site_level_rate_optional,
-            )
-            if missing:
-                # The OSS agent owns the business-required fields: do not send an incomplete Task-T
-                # and rely on the network's negotiation for a value the operator can supply here.
-                return TaskValidation(
-                    "blocked",
-                    None,
-                    missing,
-                    "content.param_missing",
-                    _elapsed_ms(started),
-                    data,
-                    attempt,
-                )
-        return TaskValidation("passed", None, [], None, _elapsed_ms(started), data, attempt)
-    raise RuntimeError("unreachable")  # pragma: no cover - every loop path returns
 
 
 async def _resolve_intent_fields(
@@ -632,45 +357,6 @@ def _merge_initial_filled(
     return merged
 
 
-def _region_consistency_errors(
-    extracted: Mapping[str, object],
-    intent_fields: Mapping[str, object] | None,
-    language: str,
-) -> list[dict[str, object]]:
-    """Return one error when the extracted region disagrees with the intent's verbatim region.
-
-    The intent agent is instructed to keep the region verbatim. A disagreement means the Task-T
-    extraction was polluted (for example by a schema example), so the request must not be sent.
-    """
-    extracted_region = extracted.get("region")
-    intent_region = (intent_fields or {}).get("region")
-    if not (isinstance(extracted_region, str) and extracted_region.strip()):
-        return []
-    if not (isinstance(intent_region, str) and intent_region.strip()):
-        return []
-    if normalize(extracted_region) == normalize(intent_region):
-        return []
-    label = "区域" if language == LANGUAGE_ZH else "Area"
-    if language == LANGUAGE_ZH:
-        message = (
-            f"提取出的区域「{extracted_region}」与操作员原文「{intent_region}」不一致；"
-            "请修改请求后重试"
-        )
-    else:
-        message = (
-            f"The extracted region '{extracted_region}' does not match the operator's text "
-            f"'{intent_region}'; edit the request and retry."
-        )
-    return [
-        {
-            "slotName": "region",
-            "code": "content.value_mismatch",
-            "message": message,
-            "facts": {"section_label": label},
-        }
-    ]
-
-
 class PromptClient(Protocol):
     """The ``A2ATClient`` surface the flow uses (also implemented by test fakes)."""
 
@@ -702,13 +388,6 @@ class PromptClient(Protocol):
     def generate_negotiation_propose_prompt_from_text(
         self, text: str | None, context: NegotiationContext, template_uri: str
     ) -> MetadataContent: ...
-
-    def validate_task_prompt_and_data_filling(
-        self,
-        prompt: str,
-        schema: Mapping[str, object],
-        template_uri: str,
-    ) -> object: ...
 
 
 class SendMessageClient(Protocol):
@@ -1000,9 +679,6 @@ async def run_client_flow(
     verbatim_decision_text: bool = False,
     client_policy: ClientPolicy | None = None,
     apply_client_policy: bool = True,
-    validate_before_send: bool = False,
-    enforce_required_fields: bool = False,
-    site_level_rate_optional: bool = False,
     run_mode: str = RUN_MODE_CREATE,
     target_task_id: str | None = None,
     target_context_id: str | None = None,
@@ -1073,13 +749,6 @@ async def run_client_flow(
             passes ``False``: the agent's own conditions are its acceptance ground, so the process
             floor must not rewrite a reject of a feasible alternative. Grounding still runs. The
             default keeps the historical behaviour for every scripted and presentation path.
-        validate_before_send: Validate each rendered Task-T with the SDK content pipeline before
-            sending it. Negotiable errors still go to the server for negotiation; unmapped errors
-            end the flow with ``input_invalid`` and no message is sent.
-        enforce_required_fields: Check the caller schema's required parameters against the
-            extracted data and stop before sending when one is empty. The SDK extraction runs even
-            when ``validate_before_send`` is false, so the gate does not depend on the semantic
-            validation switch.
         run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify Task-T
             as the first message so an existing running Task is continued.
         target_task_id: Task the Modify-only run continues; required by ``run_mode="modify"``.
@@ -1197,6 +866,8 @@ async def run_client_flow(
                 "durationMs": validation.duration_ms,
                 "reason": validation.reason,
                 "attempts": validation.attempts,
+                "filled": dict(validation.filled),
+                **({"source": validation.source} if validation.source else {}),
             },
         )
 
@@ -1277,7 +948,6 @@ async def run_client_flow(
         raise ClientFlowError("A target Task can only be used by a Modify-only run.")
     resolved_label = TASK_MODIFY_LABEL if modify_only else label
     initial_phase = PHASE_TASK_MODIFY if modify_only else PHASE_TASK_PROMPT
-    validation_schema: Mapping[str, object] = TASK_PARAM_SCHEMA
     # The request the run currently executes. A gate block does not end the run: the operator may
     # repair the request and the same run continues, so this text changes at most once.
     request_text = user_request
@@ -1405,79 +1075,29 @@ async def run_client_flow(
                 **({"samplePhase": SAMPLE_PHASE_MODIFY} if modify_only else {}),
             },
         )
+        # The client no longer re-extracts the rendered Task-T with the SDK content validation.
+        # The accept refill and the decision grounding read the values back from the prompt the
+        # client just rendered, so a raw-intent run keeps the operator's values instead of
+        # falling back to the intent fields alone.
         initial_filled = _merge_initial_filled(None, intent_fields)
+        for key, value in read_task_t_fields(prompt_text).items():
+            if value is not None and not (isinstance(value, str) and not value.strip()):
+                initial_filled[key] = value
         if prepared and prepared_filled:
-            # The caller's validation already extracted these values; reuse them so a later
-            # accept refill keeps the operator's values instead of falling back to the intent
-            # fields alone.
+            # The caller's own extraction is authoritative when it supplied the Task-T.
             initial_filled = _merge_initial_filled(
                 TaskValidation("passed", None, [], None, 0, dict(prepared_filled), 1),
                 initial_filled,
             )
-        validation: TaskValidation | None = None
-        required_unknown = False
-        if not prepared and (validate_before_send or enforce_required_fields):
-            validation = await _validate_task_prompt(
-                prompt_client,
-                prompt_text,
-                validation_schema,
-                task_template_uri,
-                language=language,
-                enforce_required_fields=enforce_required_fields,
-                site_level_rate_optional=site_level_rate_optional,
-            )
-            initial_filled = _merge_initial_filled(validation, intent_fields)
-            if enforce_required_fields and validation.verdict == "unavailable":
-                # The semantic pipeline is unavailable (for example a contract-breaking model
-                # response). Keep the real validator reason: reporting "field is empty" would
-                # blame the operator for a validator failure. The missing caller-required values
-                # stay in the error list as secondary context, and the gate still blocks.
-                missing = _missing_required_fields(
-                    initial_filled,
-                    validation_schema,
-                    language,
-                    site_level_rate_optional=site_level_rate_optional,
-                )
-                if missing:
-                    required_unknown = True
-                    validation = TaskValidation(
-                        "blocked",
-                        None,
-                        [*validation.errors, *missing],
-                        validation.reason or "content.param_missing",
-                        validation.duration_ms,
-                        initial_filled,
-                        validation.attempts,
-                    )
-            if enforce_required_fields and validation.filled:
-                mismatch = _region_consistency_errors(validation.filled, intent_fields, language)
-                if mismatch:
-                    validation = TaskValidation(
-                        "blocked",
-                        None,
-                        mismatch,
-                        "content.value_mismatch",
-                        validation.duration_ms,
-                        initial_filled,
-                        validation.attempts,
-                    )
-            if validate_before_send:
-                emit_validation(validation, prompt_text, task_template_uri, initial_phase)
-                if validation.verdict == "blocked":
-                    # Nothing is sent and no negotiation starts until the request is repaired.
-                    if await accept_correction(validation, prompt_text):
-                        continue
-                    return end_blocked()
-            elif required_unknown or validation.reason in {
-                "content.param_missing",
-                "content.value_mismatch",
-            }:
-                # Only the business gate runs when semantic validation is off; negotiable content
-                # still goes to the server.
-                emit_validation(validation, prompt_text, task_template_uri, initial_phase)
-                if await accept_correction(validation, prompt_text):
-                    continue
-                return end_blocked()
+        # The only local interception left is the slot extraction, which blocks before a Task-T
+        # exists. A generated Task-T is recorded as local passing evidence so the tester's
+        # validate column and the timeline keep their shape; nothing is sent differently.
+        emit_validation(
+            TaskValidation("passed", None, [], None, 0, dict(initial_filled), 1, "local"),
+            "",
+            task_template_uri,
+            initial_phase,
+        )
         break
     if on_intent_ready is not None and not await on_intent_ready(prompt_text):
         # The engineer did not confirm the structured intent, so the Task-T never leaves the OSS

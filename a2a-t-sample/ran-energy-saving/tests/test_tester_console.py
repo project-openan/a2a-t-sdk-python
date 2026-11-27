@@ -277,7 +277,7 @@ async def test_the_sdk_stage_batch_passes_with_the_fake_client(client: httpx.Asy
     assert finished["summary"]["passed"] == 1
     item = finished["items"][0]
     assert item["status"] == "passed"
-    assert item["stages"]["intent"]["status"] == "passed"
+    assert item["stages"]["intent"]["status"] == "recorded"
     assert item["stages"]["task_t"]["status"] == "passed"
     assert item["stages"]["validate"]["status"] == "passed"
 

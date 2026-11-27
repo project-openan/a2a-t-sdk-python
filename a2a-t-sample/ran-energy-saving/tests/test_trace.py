@@ -224,7 +224,6 @@ def test_accept_time_task_t_stages_belong_to_the_resolution_phase() -> None:
     # The initial generation/validation keep their own phases.
     assert phase_for_stage("task_t_slot_extraction") == PHASE_TASK_PROMPT
     assert phase_for_stage("task_t_server_validation") == PHASE_TASK_VALIDATION
-    assert phase_for_stage("task_t_client_validation") == PHASE_TASK_VALIDATION
     assert phase_for_stage("intent_extraction") == PHASE_TASK_PROMPT
     assert infer_decision_phase("accept") == PHASE_RESOLUTION
     assert infer_decision_phase("counter") == PHASE_NEGOTIATION

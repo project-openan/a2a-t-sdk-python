@@ -1,4 +1,9 @@
-"""Tests of the client-side pre-send Task-T validation gate."""
+"""Tests of the client-side pre-send Task-T evidence.
+
+The client no longer calls the SDK content validation. The only local interception is the slot
+extraction (``slot.*``), and a generated Task-T is recorded as local passing evidence whose values
+are read back from the prompt itself.
+"""
 
 from __future__ import annotations
 
@@ -10,10 +15,9 @@ import pytest
 from a2a.client.client import ClientCallContext
 from a2a.types import SendMessageRequest
 from a2a_t.core.errors.catalog import ErrorCatalog
-from a2a_t.core.errors.exceptions import ContentValidationError, PromptGenerationError, SlotValidationError
+from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
 from a2a_t.core.metadata import TASK_T_EXTENSION_URI, MetadataContent
 from a2a_t.core.standard_templates import ENERGY_SAVING_URI
-from a2a_t.core.validation_pipeline import FilledParamData
 from google.protobuf.json_format import MessageToDict
 from protocol.client_flow import (
     CorrectionProvider,
@@ -21,33 +25,62 @@ from protocol.client_flow import (
     run_client_flow,
     scripted_correction,
 )
+from tests.support.decision_provider import ScriptedDecisionProvider
 from shared.run_constants import FINAL_STATE_INPUT_INVALID, FINAL_STATE_TASK_COMPLETED
 from shared.trace import PHASE_TASK_PROMPT
 
-from tests.support.decision_provider import ScriptedDecisionProvider
-
 _CONTEXT_ID = "ctx-validation"
+
+_TASK_T = """## Operation Type
+Create
+
+## Task Object
+A2ATestRegion
+
+## Task Target
+Maximize energy saving under the task context.
+
+## Task Context
+Time-segmented rate guarantee target: {08:00-12:00, 10Mbps}
+
+## Expected Output
+Output the intent report.
+"""
+
+_TASK_T_WITHOUT_RATE = """## Operation Type
+Modify
+
+## Task Object
+A2ATestRegion
+
+## Task Target
+Maximize energy saving under the task context.
+
+## Task Context
+Site list: ["NES_27A_321071", "NRES_XCS_6102937"], Background event: power outage from 08:00 to 12:00.
+
+## Expected Output
+Output the intent report.
+"""
 
 
 @dataclass
-class ValidatingPromptClient:
-    """SDK client double that scripts one validation outcome per call."""
+class ScriptedPromptClient:
+    """SDK client double that scripts one generation outcome per call."""
 
-    validation_errors: list[Exception | None] = field(default_factory=list)
-    generation_errors: list[Exception | None] = field(default_factory=list)
-    filled_data: Mapping[str, object] | None = None
-    validation_calls: list[tuple[str, Mapping[str, object], str]] = field(default_factory=list)
+    outcomes: list[MetadataContent | Exception] = field(default_factory=list)
     generation_calls: list[str] = field(default_factory=list)
 
     def generate_task_prompt_from_text(self, text: str, template_uri: str) -> MetadataContent:
         self.generation_calls.append(text)
-        if self.generation_errors:
-            error = self.generation_errors.pop(0)
-            if error is not None:
-                raise error
+        outcome = self.outcomes.pop(0) if self.outcomes else None
+        if isinstance(outcome, Exception):
+            raise outcome
+        if outcome is not None:
+            return outcome
         return MetadataContent(
             template_uri=template_uri,
-            prompt_text=f"Task-T prompt for: {text}",
+            prompt_text=_TASK_T,
             extension_uri=TASK_T_EXTENSION_URI,
         )
 
@@ -63,20 +96,6 @@ class ValidatingPromptClient:
             prompt_text=f"Task-T data: {json.dumps(dict(data), sort_keys=True)}",
             extension_uri=TASK_T_EXTENSION_URI,
         )
-
-    def validate_task_prompt_and_data_filling(
-        self,
-        prompt: str,
-        schema: Mapping[str, object],
-        template_uri: str,
-    ) -> object:
-        self.validation_calls.append((prompt, schema, template_uri))
-        error = self.validation_errors.pop(0) if self.validation_errors else None
-        if error is not None:
-            raise error
-        if self.filled_data is not None:
-            return FilledParamData(data=dict(self.filled_data))
-        return object()
 
 
 class RecordingTransport:
@@ -101,37 +120,25 @@ class RecordingTransport:
         self.cancelled.append(task_id)
 
 
-def _content_error(
-    code: ErrorCatalog,
+def _slot_failure(
     *,
-    slot_errors: list[SlotValidationError] | None = None,
-) -> ContentValidationError:
-    return ContentValidationError(
-        code,
-        {"reason": "test"},
-        message=f"test failure: {code.value}",
-        errors=slot_errors,
+    slot_name: str = "task_target",
+    code: str = "slot.constraint_violated",
+    label: str = "Task Target",
+) -> PromptGenerationError:
+    return PromptGenerationError(
+        ErrorCatalog.SLOT_CONSTRAINT_VIOLATED,
+        {"slot_label": label},
+        message=f"The value of '{label}' is not allowed",
+        failed_parameters=[
+            SlotValidationError(
+                slot_name=slot_name,
+                code=code,
+                message=f"The value of '{label}' is not allowed",
+                facts={"slot_label": label},
+            )
+        ],
     )
-
-
-def _slot_error(code: str, slot_name: str = "guaranteedThroughputTarget") -> SlotValidationError:
-    return SlotValidationError(
-        slot_name=slot_name,
-        code=code,
-        message=f"test slot failure: {code}",
-        facts={"section_label": "task_context"},
-    )
-
-
-def _working_task() -> list[dict[str, object]]:
-    return [
-        {
-            "kind": "status",
-            "task_id": "task-1",
-            "context_id": _CONTEXT_ID,
-            "state": "TASK_STATE_WORKING",
-        }
-    ]
 
 
 def _completed_task() -> list[dict[str, object]]:
@@ -161,11 +168,9 @@ def _completed_task() -> list[dict[str, object]]:
 
 async def _run(
     *,
-    prompt_client: ValidatingPromptClient,
+    prompt_client: ScriptedPromptClient,
     transport: RecordingTransport,
     trace_sink: list[dict[str, object]],
-    validate: bool = True,
-    enforce_required_fields: bool = False,
     correction: CorrectionProvider | None = None,
 ):
     return await run_client_flow(
@@ -177,8 +182,6 @@ async def _run(
         language="en-US",
         trace_sink=trace_sink.append,
         single_extension_per_message=False,
-        validate_before_send=validate,
-        enforce_required_fields=enforce_required_fields,
         correction=correction,
     )
 
@@ -187,220 +190,49 @@ def _validation_spans(traces: list[dict[str, object]]) -> list[dict[str, object]
     return [span for span in traces if span.get("kind") == "task_validation"]
 
 
+def _detail(span: dict[str, object]) -> dict[str, object]:
+    detail = span.get("detail")
+    assert isinstance(detail, dict)
+    return detail
+
+
+def _sent_task_t(transport: RecordingTransport) -> str:
+    metadata = MessageToDict(transport.requests[0].message.metadata)
+    return str(next(value for key, value in metadata.items() if "Task-T" in key))
+
+
 @pytest.mark.asyncio
-async def test_blocked_validation_sends_nothing_and_ends_input_invalid() -> None:
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.format_error")],
-            )
-        ]
-    )
+async def test_a_generated_task_t_is_sent_with_local_passing_evidence() -> None:
+    prompt_client = ScriptedPromptClient()
     transport = RecordingTransport([_completed_task()])
     traces: list[dict[str, object]] = []
 
     result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
 
-    assert result.final_state == FINAL_STATE_INPUT_INVALID
-    assert transport.requests == []
-    assert len(prompt_client.validation_calls) == 1
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
     spans = _validation_spans(traces)
     assert len(spans) == 1
-    detail = spans[0]["detail"]
-    assert isinstance(detail, dict)
-    assert detail["verdict"] == "blocked"
-    assert detail["blocking"] is True
-    assert detail["errors"][0]["code"] == "content.format_error"
-    assert spans[0]["phase"] == PHASE_TASK_PROMPT
-
-
-@pytest.mark.asyncio
-async def test_a_negotiable_validation_error_still_reaches_the_server() -> None:
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.param_missing")],
-            )
-        ]
-    )
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-    detail = _validation_spans(traces)[0]["detail"]
-    assert isinstance(detail, dict)
-    assert detail["verdict"] == "negotiable"
-    assert detail["blocking"] is False
-    assert detail["negotiationKind"] == "information"
-
-
-@pytest.mark.asyncio
-async def test_a_missing_entry_field_is_negotiable_information() -> None:
-    """A missing Rate inside Task Context is information the operator can supply."""
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.entry_field_missing")],
-            )
-        ]
-    )
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-    detail = _validation_spans(traces)[0]["detail"]
-    assert isinstance(detail, dict)
-    assert detail["verdict"] == "negotiable"
-    assert detail["negotiationKind"] == "information"
-
-
-@pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_an_area_level_request_may_omit_the_rate_target() -> None:
-    """An area-level Create without a rate is valid; the server executes its default mode."""
-    prompt_client = ValidatingPromptClient(
-        filled_data={
-            "operationType": "Create",
-            "region": "A2ATestRegion",
-            "guaranteedThroughputTarget": None,
-        }
-    )
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=traces,
-        enforce_required_fields=True,
-    )
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-    assert _validation_spans(traces)[0]["detail"]["verdict"] == "passed"
-
-
-@pytest.mark.asyncio
-async def test_a_caller_can_disable_the_required_gate() -> None:
-    """A direct caller may still opt out; the sample's entry points do not."""
-    prompt_client = ValidatingPromptClient(
-        filled_data={
-            "operationType": "Create",
-            "region": "A2ATestRegion",
-            "guaranteedThroughputTarget": None,
-        }
-    )
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=traces,
-        enforce_required_fields=False,
-    )
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-    assert _validation_spans(traces)[0]["detail"]["verdict"] == "passed"
-
-
-@pytest.mark.asyncio
-async def test_a_complete_caller_schema_still_reaches_the_server() -> None:
-    prompt_client = ValidatingPromptClient(
-        filled_data={
-            "operationType": "Create",
-            "region": "A2ATestRegion",
-            "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}",
-        }
-    )
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-    assert _validation_spans(traces)[0]["detail"]["verdict"] == "passed"
-
-
-@pytest.mark.asyncio
-async def test_unavailable_validation_reports_the_validator_failure_not_empty_fields() -> None:
-    """The business gate must not hide a broken validator behind "field is empty"."""
-    validator_error = _content_error(
-        ErrorCatalog.LLM_RESPONSE_INVALID,
-        slot_errors=[_slot_error("llm.response_invalid", slot_name="_llm")],
-    )
-    prompt_client = ValidatingPromptClient(validation_errors=[validator_error, validator_error])
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=traces,
-        enforce_required_fields=True,
-    )
-
-    assert result.final_state == FINAL_STATE_INPUT_INVALID
-    assert transport.requests == []
-    detail = _validation_spans(traces)[0]["detail"]
-    assert isinstance(detail, dict)
-    assert detail["verdict"] == "blocked"
-    assert detail["reason"] == "llm.response_invalid"
-    assert detail["attempts"] == 2
-    codes = [error["code"] for error in detail["errors"]]
-    assert codes[0] == "llm.response_invalid"
-    assert "content.param_missing" in codes
-    missing = [error for error in detail["errors"] if error["code"] == "content.param_missing"]
-    assert any(error["facts"]["section_label"] == "Operation Type" for error in missing)
-
-
-@pytest.mark.asyncio
-async def test_a_schema_echo_is_retried_before_the_validation_is_used() -> None:
-    """``llm.response_invalid`` is retryable; the second attempt may return the contract shape."""
-    validator_error = _content_error(
-        ErrorCatalog.LLM_RESPONSE_INVALID,
-        slot_errors=[_slot_error("llm.response_invalid", slot_name="_llm")],
-    )
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[validator_error, None],
-        filled_data={
-            "operationType": "Create",
-            "region": "A2ATestRegion",
-            "guaranteedThroughputTarget": "{00:00~06:00,2Mbps}",
-        },
-    )
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(prompt_client.validation_calls) == 2
-    detail = _validation_spans(traces)[0]["detail"]
-    assert isinstance(detail, dict)
+    detail = _detail(spans[0])
     assert detail["verdict"] == "passed"
-    assert detail["attempts"] == 2
+    assert detail["source"] == "local"
+    assert detail["blocking"] is False
+    assert spans[0]["phase"] == PHASE_TASK_PROMPT
+    # The values the accept refill uses are read back from the rendered prompt.
+    assert detail["filled"]["operationType"] == "Create"
+    assert detail["filled"]["region"] == "A2ATestRegion"
+    assert detail["filled"]["guaranteedThroughputTarget"] == "{08:00-12:00,10Mbps}"
 
 
 @pytest.mark.asyncio
-async def test_a_semantic_rejection_is_not_retried() -> None:
-    """Only the contract failure is retried; a real semantic rejection is final."""
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.format_error")],
+async def test_a_site_level_request_without_a_rate_is_still_sent() -> None:
+    """There is no local required-field gate any more; the server negotiates the missing rate."""
+    prompt_client = ScriptedPromptClient(
+        outcomes=[
+            MetadataContent(
+                template_uri=ENERGY_SAVING_URI,
+                prompt_text=_TASK_T_WITHOUT_RATE,
+                extension_uri=TASK_T_EXTENSION_URI,
             )
         ]
     )
@@ -409,57 +241,19 @@ async def test_a_semantic_rejection_is_not_retried() -> None:
 
     result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
 
-    assert result.final_state == FINAL_STATE_INPUT_INVALID
-    assert len(prompt_client.validation_calls) == 1
-    detail = _validation_spans(traces)[0]["detail"]
-    assert isinstance(detail, dict)
-    assert detail["attempts"] == 1
-
-
-def test_required_field_labels_come_from_the_schema_title() -> None:
-    from protocol.client_flow import _missing_required_fields
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "siteList": {"type": "string", "title": "Site List", "x-title-zh-CN": "站点列表"},
-        },
-        "required": ["siteList"],
-    }
-
-    assert _missing_required_fields({}, schema, "en-US")[0]["facts"]["section_label"] == "Site List"
-    assert _missing_required_fields({}, schema, "zh-CN")[0]["facts"]["section_label"] == "站点列表"
-
-
-def test_a_required_field_without_a_title_falls_back_to_its_name() -> None:
-    from protocol.client_flow import _missing_required_fields
-
-    schema = {
-        "type": "object",
-        "properties": {"newField": {"type": "string"}},
-        "required": ["newField"],
-    }
-
-    assert _missing_required_fields({}, schema, "en-US")[0]["facts"]["section_label"] == "newField"
+    assert result.final_state == FINAL_STATE_TASK_COMPLETED
+    assert len(transport.requests) == 1
+    detail = _detail(_validation_spans(traces)[0])
+    assert detail["verdict"] == "passed"
+    assert detail["filled"]["siteList"] == "NES_27A_321071, NRES_XCS_6102937"
+    assert detail["filled"]["backgroundEvent"].startswith("power outage")
+    assert "guaranteedThroughputTarget" not in detail["filled"]
 
 
 @pytest.mark.asyncio
 async def test_a_slot_generation_failure_blocks_with_structured_errors() -> None:
     """A failed extraction has no Task-T to send; the operator edits the request and retries."""
-    error = PromptGenerationError(
-        ErrorCatalog.SLOT_CONSTRAINT_VIOLATED,
-        {"slot_label": "Task Target", "actual": "3G"},
-        message="The value of 'Task Target' (3G) is not within the allowed range",
-        failed_parameters=[
-            SlotValidationError(
-                slot_name="task_target",
-                code="slot.constraint_violated",
-                message="The value of 'Task Target' (3G) is not within the allowed range",
-                facts={"slot_label": "Task Target", "actual": "3G"},
-            )
-        ],
-    )
-    prompt_client = ValidatingPromptClient(generation_errors=[error])
+    prompt_client = ScriptedPromptClient(outcomes=[_slot_failure()])
     transport = RecordingTransport([_completed_task()])
     traces: list[dict[str, object]] = []
 
@@ -467,16 +261,14 @@ async def test_a_slot_generation_failure_blocks_with_structured_errors() -> None
 
     assert result.final_state == FINAL_STATE_INPUT_INVALID
     assert transport.requests == []
-    assert prompt_client.validation_calls == []
     spans = _validation_spans(traces)
     assert len(spans) == 1
-    detail = spans[0]["detail"]
-    assert isinstance(detail, dict)
+    detail = _detail(spans[0])
     assert detail["verdict"] == "blocked"
     assert detail["blocking"] is True
     assert detail["errors"][0]["slotName"] == "task_target"
     assert detail["errors"][0]["code"] == "slot.constraint_violated"
-    assert detail["errors"][0]["facts"]["actual"] == "3G"
+    assert detail["errors"][0]["facts"]["slot_label"] == "Task Target"
 
 
 @pytest.mark.asyncio
@@ -487,7 +279,7 @@ async def test_an_infrastructure_generation_failure_is_not_misreported_as_input(
         {"provider": "openai", "reason": "Request timed out."},
         message="LLM invocation failed (provider openai): Request timed out.",
     )
-    prompt_client = ValidatingPromptClient(generation_errors=[error])
+    prompt_client = ScriptedPromptClient(outcomes=[error])
     transport = RecordingTransport([_completed_task()])
 
     with pytest.raises(PromptGenerationError):
@@ -496,96 +288,15 @@ async def test_an_infrastructure_generation_failure_is_not_misreported_as_input(
     assert transport.requests == []
 
 
-@pytest.mark.parametrize(
-    "code",
-    [
-        ErrorCatalog.LLM_INVOCATION_FAILED,
-        ErrorCatalog.LLM_NOT_CONFIGURED,
-        ErrorCatalog.LLM_RESPONSE_INVALID,
-    ],
-)
-@pytest.mark.asyncio
-async def test_validation_infrastructure_failures_let_the_request_through(
-    code: ErrorCatalog,
-) -> None:
-    # ``llm.response_invalid`` is retried once before the failure is reported, so the double must
-    # fail on both attempts; the other codes fail immediately.
-    attempts = 2 if code == ErrorCatalog.LLM_RESPONSE_INVALID else 1
-    prompt_client = ValidatingPromptClient(validation_errors=[_content_error(code) for _ in range(attempts)])
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=traces)
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-    assert len(prompt_client.validation_calls) == attempts
-    detail = _validation_spans(traces)[0]["detail"]
-    assert isinstance(detail, dict)
-    assert detail["verdict"] == "unavailable"
-    assert detail["attempts"] == attempts
-
-
-@pytest.mark.asyncio
-async def test_unexpected_validation_exceptions_are_treated_as_unavailable() -> None:
-    prompt_client = ValidatingPromptClient(validation_errors=[RuntimeError("boom")])
-    transport = RecordingTransport([_completed_task()])
-
-    result = await _run(prompt_client=prompt_client, transport=transport, trace_sink=[])
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert len(transport.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_disabled_validation_never_calls_the_sdk() -> None:
-    prompt_client = ValidatingPromptClient()
-    transport = RecordingTransport([_completed_task()])
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=[],
-        validate=False,
-    )
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert prompt_client.validation_calls == []
-    assert len(transport.requests) == 1
-
-
-def _correction_spans(traces: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [span for span in traces if span.get("kind") == "correction_applied"]
-
-
-def _detail(span: dict[str, object]) -> dict[str, object]:
-    detail = span.get("detail")
-    assert isinstance(detail, dict)
-    return detail
-
-
-def _rendered_spans(traces: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [span for span in traces if span.get("kind") == "task_prompt_rendered"]
-
-
-def _sent_task_t(transport: RecordingTransport) -> str:
-    metadata = MessageToDict(transport.requests[0].message.metadata)
-    return str(next(value for key, value in metadata.items() if "Task-T" in key))
-
-
 @pytest.mark.asyncio
 async def test_a_blocked_request_is_corrected_inside_the_run_and_then_sent() -> None:
-    """The gate is a run phase: the run starts with the operator request, the correction is a
-    later input of the same run, and only the corrected Task-T reaches the wire."""
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.format_error")],
-            ),
-            None,
-        ]
+    """The slot block is a run phase: the correction is a later input of the same run."""
+    corrected = MetadataContent(
+        template_uri=ENERGY_SAVING_URI,
+        prompt_text=f"{_TASK_T}\n<!-- for NR cells -->\n",
+        extension_uri=TASK_T_EXTENSION_URI,
     )
+    prompt_client = ScriptedPromptClient(outcomes=[_slot_failure(), corrected])
     transport = RecordingTransport([_completed_task()])
     traces: list[dict[str, object]] = []
 
@@ -601,44 +312,29 @@ async def test_a_blocked_request_is_corrected_inside_the_run_and_then_sent() -> 
         "create ran energy saving task",
         "create ran energy saving task for NR cells",
     ]
-    assert [call[0] for call in prompt_client.validation_calls] == [
-        "Task-T prompt for: create ran energy saving task",
-        "Task-T prompt for: create ran energy saving task for NR cells",
-    ]
     assert "for NR cells" in _sent_task_t(transport)
 
-    rendered = _rendered_spans(traces)
-    assert [_detail(span)["userRequest"] for span in rendered] == [
-        "create ran energy saving task",
-        "create ran energy saving task for NR cells",
-    ]
-    assert [_detail(span)["attempt"] for span in rendered] == [1, 2]
+    # A slot block happens before a Task-T exists, so only the corrected attempt renders one.
+    rendered = [span for span in traces if span.get("kind") == "task_prompt_rendered"]
+    assert [_detail(span)["attempt"] for span in rendered] == [2]
 
-    corrections = _correction_spans(traces)
+    corrections = [span for span in traces if span.get("kind") == "correction_applied"]
     assert len(corrections) == 1
     detail = _detail(corrections[0])
     assert detail["attempt"] == 1
     assert detail["originalRequest"] == "create ran energy saving task"
     assert detail["correctedRequest"] == "create ran energy saving task for NR cells"
     assert detail["verdict"] == "blocked"
-    errors = detail["errors"]
-    assert isinstance(errors, list)
-    assert errors[0]["code"] == "content.format_error"
 
     kinds = [span.get("kind") for span in traces]
     assert kinds.index("correction_applied") > kinds.index("task_validation")
-    assert kinds.index("task_prompt_rendered", kinds.index("correction_applied")) > kinds.index(
-        "correction_applied"
-    )
+    assert len(_validation_spans(traces)) == 2
+    assert _detail(_validation_spans(traces)[1])["verdict"] == "passed"
 
 
 @pytest.mark.asyncio
 async def test_a_corrected_request_that_blocks_again_ends_input_invalid() -> None:
-    blocked = _content_error(
-        ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-        slot_errors=[_slot_error("content.format_error")],
-    )
-    prompt_client = ValidatingPromptClient(validation_errors=[blocked, blocked])
+    prompt_client = ScriptedPromptClient(outcomes=[_slot_failure(), _slot_failure()])
     transport = RecordingTransport([_completed_task()])
     traces: list[dict[str, object]] = []
 
@@ -652,13 +348,12 @@ async def test_a_corrected_request_that_blocks_again_ends_input_invalid() -> Non
     assert result.final_state == FINAL_STATE_INPUT_INVALID
     assert transport.requests == []
     assert len(prompt_client.generation_calls) == 2
-    assert len(prompt_client.validation_calls) == 2
-    assert len(_correction_spans(traces)) == 1
+    assert len([span for span in traces if span.get("kind") == "correction_applied"]) == 1
 
 
 @pytest.mark.asyncio
 async def test_a_passing_gate_never_asks_for_a_correction() -> None:
-    prompt_client = ValidatingPromptClient()
+    prompt_client = ScriptedPromptClient()
     transport = RecordingTransport([_completed_task()])
     asked: list[CorrectionRequest] = []
 
@@ -677,69 +372,3 @@ async def test_a_passing_gate_never_asks_for_a_correction() -> None:
     assert asked == []
     assert prompt_client.generation_calls == ["create ran energy saving task"]
     assert "for NR cells" not in _sent_task_t(transport)
-
-
-@pytest.mark.asyncio
-async def test_a_slot_generation_failure_can_be_corrected_too() -> None:
-    error = PromptGenerationError(
-        ErrorCatalog.SLOT_CONSTRAINT_VIOLATED,
-        {"slot_label": "Task Target", "actual": "3G"},
-        message="The value of 'Task Target' (3G) is not within the allowed range",
-        failed_parameters=[
-            SlotValidationError(
-                slot_name="task_target",
-                code="slot.constraint_violated",
-                message="The value of 'Task Target' (3G) is not within the allowed range",
-                facts={"slot_label": "Task Target", "actual": "3G"},
-            )
-        ],
-    )
-    prompt_client = ValidatingPromptClient(generation_errors=[error, None])
-    transport = RecordingTransport([_completed_task()])
-    traces: list[dict[str, object]] = []
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=traces,
-        correction=scripted_correction("create ran energy saving task for NR cells"),
-    )
-
-    assert result.final_state == FINAL_STATE_TASK_COMPLETED
-    assert prompt_client.generation_calls == [
-        "create ran energy saving task",
-        "create ran energy saving task for NR cells",
-    ]
-    corrections = _correction_spans(traces)
-    assert len(corrections) == 1
-    errors = _detail(corrections[0])["errors"]
-    assert isinstance(errors, list)
-    assert errors[0]["code"] == "slot.constraint_violated"
-
-
-@pytest.mark.asyncio
-async def test_a_correction_provider_failure_keeps_the_block() -> None:
-    prompt_client = ValidatingPromptClient(
-        validation_errors=[
-            _content_error(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                slot_errors=[_slot_error("content.format_error")],
-            )
-        ]
-    )
-    transport = RecordingTransport([_completed_task()])
-
-    async def broken(request: CorrectionRequest) -> str | None:
-        raise RuntimeError("no operator available")
-
-    result = await _run(
-        prompt_client=prompt_client,
-        transport=transport,
-        trace_sink=[],
-        correction=broken,
-    )
-
-    assert result.final_state == FINAL_STATE_INPUT_INVALID
-    assert transport.requests == []
-
-

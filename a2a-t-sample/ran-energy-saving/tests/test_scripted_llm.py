@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import pytest
 from a2a_t.client.a2at_client import A2ATClient
-from a2a_t.core.errors.exceptions import ContentValidationError
+from a2a_t.core.errors.exceptions import ContentValidationError, PromptGenerationError
 from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from a2a_t.core.standard_templates import (
     INFORMATION_NEGOTIATION_ACCEPT_REJECT_URI,
@@ -424,12 +424,20 @@ def test_information_client_extraction_succeeds_and_server_maps_to_information(
     server = A2ATServer(env_path=env_path)
     request = SCENARIOS["information"].user_request["en-US"]
 
-    content = client.generate_task_prompt_from_text(request, TASK_TEMPLATE_URI)
-    prompt_text = content.prompt_text
-    assert prompt_text is not None
+    with pytest.raises(PromptGenerationError) as generation:
+        client.generate_task_prompt_from_text(request, TASK_TEMPLATE_URI)
+    assert [
+        str(item.code) for item in generation.value.failed_parameters
+    ] == ["slot.not_provided"]
 
+    # The client now blocks the vague area at extraction time. The server-side mapping is still
+    # exercised with the Task-T such a request would have rendered.
+    prompt_text = (
+        "## Operation Type\nCreate\n\n"
+        "## Task Object\nThe area is the test area.\n\n"
+        "## Task Target\nMaximize energy saving.\n"
+    )
     assert "test area" in prompt_text
-    assert "07:00~17:30,10Mbps" not in prompt_text
     with pytest.raises(ContentValidationError) as excinfo:
         server.validate_task_prompt_and_data_filling(
             prompt_text,

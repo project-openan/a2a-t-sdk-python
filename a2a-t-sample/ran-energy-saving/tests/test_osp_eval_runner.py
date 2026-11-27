@@ -10,11 +10,7 @@ from typing import Any, TypeVar
 
 import pytest
 from a2a_t.core.errors.catalog import ErrorCatalog
-from a2a_t.core.errors.exceptions import (
-    ContentValidationError,
-    PromptGenerationError,
-    SlotValidationError,
-)
+from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
 from eval.osp.compare import (
     INTENT_ROW_ADDED,
     INTENT_ROW_CHANGED,
@@ -28,7 +24,6 @@ from eval.osp.compare import (
     flatten_task_t,
 )
 from eval.osp.followup import followup_input
-from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import (
     STAGE_ERROR,
     STAGE_FAILED,
@@ -87,46 +82,6 @@ class FakePromptClient:
             prompt_text=case["expect"]["protocols"]["a2a-t"]["task_t"],
             template_uri=template_uri,
         )
-
-    def validate_task_prompt_and_data_filling(
-        self,
-        prompt: str,
-        schema: Mapping[str, object],
-        template_uri: str,
-    ) -> object:
-        del prompt, template_uri
-        assert self.last_case_id is not None
-        case = CASES[self.last_case_id]
-        self.calls.append((self.last_case_id, "intent" if schema is OSP_INTENT_SCHEMA else "runtime"))
-        if schema is OSP_INTENT_SCHEMA:
-            intent = self.intent_overrides.get(
-                self.last_case_id, case["expect"]["intent"]
-            )
-            return SimpleNamespace(data=dict(intent))
-        outcome = self._segment_value(self.validate_outcomes, "pass")
-        if outcome == "blocked":
-            raise ContentValidationError(
-                ErrorCatalog.NEGOTIATION_SEMANTIC_REJECTED,
-                {"reason": "test"},
-                message="blocked by test",
-            )
-        if outcome == "negotiable":
-            raise ContentValidationError(
-                ErrorCatalog.CONTENT_PARAM_MISSING,
-                {"section_label": "Area"},
-                message="missing area",
-                errors=[
-                    SlotValidationError(
-                        slot_name="region",
-                        code="content.param_missing",
-                        message="missing area",
-                        facts={"section_label": "Area"},
-                    )
-                ],
-            )
-        if outcome == "error":
-            raise RuntimeError("validation crashed")
-        return SimpleNamespace(data=dict(self.validation_filled.get(self.last_case_id or 0, {})))
 
 
 def _statuses(outcome: Any) -> dict[str, str]:
@@ -562,20 +517,22 @@ def test_runner_passes_a_clean_case() -> None:
     outcome = run_case(CASES[1], client, stop_after="validate")
     assert outcome.passed is True
     assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
+        "intent": STAGE_RECORDED,
         "task_t": STAGE_PASSED,
         "validate": STAGE_PASSED,
     }
 
 
 def test_runner_records_the_conflict_fields() -> None:
-    client = FakePromptClient(validate_outcomes={(40, "original"): "blocked"})
+    client = FakePromptClient(
+        generation_errors={(40, "original"): _generation_block("slot.constraint_violated")}
+    )
     outcome = run_case(CASES[40], client, stop_after="validate")
     assert outcome.passed is True
     # The base case disables the conflicting intent/Task-T assertions; the follow-up override
     # turns them back on, so the replacement request is judged on both.
     assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
+        "intent": STAGE_RECORDED,
         "task_t": STAGE_PASSED,
         "validate": STAGE_PASSED,
     }
@@ -584,32 +541,6 @@ def test_runner_records_the_conflict_fields() -> None:
         "task_t": STAGE_RECORDED,
         "validate": STAGE_PASSED,
     }
-
-
-def test_the_validate_stage_keeps_the_values_the_validation_extracted() -> None:
-    client = FakePromptClient(validation_filled={1: {"Operation type": "Create"}})
-    outcome = run_case(CASES[1], client, stop_after="validate")
-    validate_stage = next(stage for stage in outcome.stages if stage.stage == "validate")
-    assert validate_stage.detail is not None
-    # A full-flow run that reuses this Task-T (a tester interception miss) needs them to fill the
-    # accepted Task-T, so the preflight must keep them.
-    assert validate_stage.detail["filledParams"] == {"Operation type": "Create"}
-
-
-def test_the_validate_stage_carries_the_slot_errors() -> None:
-    client = FakePromptClient(validate_outcomes={1: "negotiable"})
-    outcome = run_case(CASES[1], client, stop_after="validate")
-    validate_stage = next(stage for stage in outcome.stages if stage.stage == "validate")
-    assert validate_stage.actual == "pass"
-    assert validate_stage.detail is not None
-    assert validate_stage.detail["slotErrors"] == [
-        {
-            "slotName": "region",
-            "code": "content.param_missing",
-            "message": "missing area",
-            "facts": {"section_label": "Area"},
-        }
-    ]
 
 
 def test_runner_records_an_unfilled_validation_result() -> None:
@@ -623,7 +554,7 @@ def test_runner_records_an_unfilled_validation_result() -> None:
     outcome = run_case(unfilled, client, stop_after="validate")
     assert outcome.passed is True
     assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
+        "intent": STAGE_RECORDED,
         "task_t": STAGE_PASSED,
         "validate": STAGE_RECORDED,
     }
@@ -689,7 +620,7 @@ def test_the_validate_stage_fails_when_the_block_reports_another_slot_error() ->
     # replacement still runs and the case is red on the slot expectation alone.
     assert outcome.followup_skipped is False
     assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
+        "intent": STAGE_RECORDED,
         "task_t": STAGE_PASSED,
         "validate": STAGE_PASSED,
     }
@@ -705,7 +636,7 @@ def test_runner_handles_a_blocked_generation_as_the_expected_outcome() -> None:
     outcome = run_case(CASES[40], client, stop_after="validate")
     assert outcome.passed is True
     assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
+        "intent": STAGE_RECORDED,
         "task_t": STAGE_PASSED,
         "validate": STAGE_PASSED,
     }
@@ -717,11 +648,13 @@ def test_runner_handles_a_blocked_generation_as_the_expected_outcome() -> None:
 
 
 def test_blocked_case_runs_the_followup_segment() -> None:
-    client = FakePromptClient(validate_outcomes={(25, "original"): "blocked"})
+    client = FakePromptClient(
+        generation_errors={(25, "original"): _generation_block("slot.constraint_violated")}
+    )
     outcome = run_case(CASES[25], client, stop_after="validate")
     assert outcome.passed is True
     assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
+        "intent": STAGE_RECORDED,
         "task_t": STAGE_PASSED,
         "validate": STAGE_PASSED,
     }
@@ -739,7 +672,7 @@ def test_blocked_case_runs_the_followup_when_the_batch_stops_before_the_validati
     client = FakePromptClient()
     outcome = run_case(CASES[25], client, stop_after="task_t")
     assert outcome.followup_skipped is False
-    assert _statuses(outcome) == {"intent": STAGE_PASSED, "task_t": STAGE_PASSED}
+    assert _statuses(outcome) == {"intent": STAGE_RECORDED, "task_t": STAGE_PASSED}
     assert _statuses_of(outcome.interception) == {
         "intent": STAGE_RECORDED,
         "task_t": STAGE_RECORDED,
@@ -765,21 +698,6 @@ def test_blocked_case_records_a_miss_and_passes() -> None:
     assert client.calls.count((25, "generate")) == 1, "the follow-up request must not run"
 
 
-def test_an_interception_validation_error_does_not_stop_the_followup() -> None:
-    # The validation call itself failed, so no verdict exists: nothing proves the original was
-    # let through, and the historical two-segment behaviour is kept.
-    client = FakePromptClient(validate_outcomes={(25, "original"): "error"})
-    outcome = run_case(CASES[25], client, stop_after="validate")
-    assert outcome.followup_skipped is False
-    assert _statuses_of(outcome.interception)["validate"] == STAGE_ERROR
-    assert _statuses(outcome) == {
-        "intent": STAGE_PASSED,
-        "task_t": STAGE_PASSED,
-        "validate": STAGE_PASSED,
-    }
-    assert outcome.passed is False
-
-
 def test_blocked_case_reports_a_followup_generation_failure() -> None:
     error = PromptGenerationError(
         ErrorCatalog.SLOT_NOT_PROVIDED,
@@ -787,8 +705,10 @@ def test_blocked_case_reports_a_followup_generation_failure() -> None:
         message="'Site list' is not provided in the input.",
     )
     client = FakePromptClient(
-        generation_errors={(25, "followup"): error},
-        validate_outcomes={(25, "original"): "blocked"},
+        generation_errors={
+            (25, "original"): _generation_block("slot.constraint_violated"),
+            (25, "followup"): error,
+        }
     )
     outcome = run_case(CASES[25], client, stop_after="validate")
     assert outcome.passed is False
@@ -806,8 +726,8 @@ def test_runner_fails_when_an_unexpected_block_stops_generation() -> None:
     outcome = run_case(CASES[1], client, stop_after="validate")
     assert outcome.passed is False
     assert _statuses(outcome) == {
-        "intent": STAGE_ERROR,
-        "task_t": STAGE_ERROR,
+        "intent": STAGE_RECORDED,
+        "task_t": STAGE_RECORDED,
         "validate": STAGE_FAILED,
     }
 
@@ -815,38 +735,17 @@ def test_runner_fails_when_an_unexpected_block_stops_generation() -> None:
 def test_runner_stops_after_intent() -> None:
     client = FakePromptClient()
     outcome = run_case(CASES[1], client, stop_after="intent")
-    assert _statuses(outcome) == {"intent": STAGE_PASSED}
-    assert client.calls == [(1, "generate"), (1, "intent")]
+    assert outcome.passed is True
+    assert _statuses(outcome) == {"intent": STAGE_RECORDED}
+    assert client.calls == [(1, "generate")]
 
 
-def test_runner_records_the_intent_of_a_negotiation_case() -> None:
+def test_the_intent_stage_is_record_only() -> None:
     client = FakePromptClient()
     outcome = run_case(CASES[32], client, stop_after="intent")
     assert outcome.passed is True
     assert _statuses(outcome) == {"intent": STAGE_RECORDED}
-    assert "post-negotiation" in outcome.stages[0].message
-
-
-def test_runner_fails_the_intent_stage_on_a_wrong_extraction() -> None:
-    wrong = dict(CASES[1]["expect"]["intent"])
-    wrong["Energy saving region"] = ""
-    client = FakePromptClient(intent_overrides={1: wrong})
-    outcome = run_case(CASES[1], client, stop_after="intent")
-    assert outcome.passed is False
-    assert _statuses(outcome) == {"intent": STAGE_FAILED}
-
-
-def test_validate_stage_treats_negotiable_errors_as_not_blocked() -> None:
-    client = FakePromptClient(validate_outcomes={1: "negotiable"})
-    outcome = run_case(CASES[1], client, stop_after="validate")
-    assert _statuses(outcome)["validate"] == STAGE_PASSED
-
-
-def test_validate_stage_reports_a_crash() -> None:
-    client = FakePromptClient(validate_outcomes={1: "error"})
-    outcome = run_case(CASES[1], client, stop_after="validate")
-    assert _statuses(outcome)["validate"] == STAGE_ERROR
-    assert outcome.passed is False
+    assert "移除" in outcome.stages[0].message
 
 
 def test_stop_after_rejects_an_unsupported_stage() -> None:
@@ -876,111 +775,6 @@ def test_scenario_outage_is_the_same_as_power_outage() -> None:
         }
     ]
     assert compare_intent(expected, actual) == []
-
-
-def test_intent_defaults_fill_rat_and_full_day() -> None:
-    from eval.osp.runner import _apply_intent_defaults
-
-    data, applied = _apply_intent_defaults(
-        {
-            "Energy saving cell RAT": None,
-            "Energy saving time": "",
-            "Scenario-based energy saving": [],
-        }
-    )
-    assert data["Energy saving cell RAT"] == "ALL"
-    assert len(str(data["Energy saving time"]).split("&")) == 24
-    assert applied == ("Energy saving cell RAT=ALL", "Energy saving time=full day")
-
-
-def test_intent_defaults_fill_full_day_even_when_zone_targets_exist() -> None:
-    from eval.osp.runner import _apply_intent_defaults
-
-    data, applied = _apply_intent_defaults(
-        {
-            "Operation type": "Create",
-            "Energy saving cell RAT": "ALL",
-            "Energy saving time": "",
-            "Scenario-based energy saving": [],
-            "Guaranteed throughput target by zone": [
-                {
-                    "Guaranteed throughput target": "10Mbps",
-                    "Effective time period": (
-                        "19:00:00-19:59:59&20:00:00-20:59:59&21:00:00-21:59:59"
-                    ),
-                }
-            ],
-        }
-    )
-    assert len(str(data["Energy saving time"]).split("&")) == 24
-    assert applied == ("Energy saving time=full day",)
-
-
-def test_intent_defaults_keep_an_explicit_time_window() -> None:
-    from eval.osp.runner import _apply_intent_defaults
-
-    data, applied = _apply_intent_defaults(
-        {
-            "Operation type": "Create",
-            "Energy saving cell RAT": "NR",
-            "Energy saving time": "00:00:00-00:59:59&01:00:00-01:59:59",
-            "Scenario-based energy saving": [],
-            "Guaranteed throughput target by zone": [
-                {
-                    "Guaranteed throughput target": "2Mbps",
-                    "Effective time period": "00:00-06:00",
-                }
-            ],
-        }
-    )
-    assert data["Energy saving time"] == "00:00:00-00:59:59&01:00:00-01:59:59"
-    assert applied == ()
-
-
-def test_intent_defaults_keep_a_modify_time_empty() -> None:
-    from eval.osp.runner import _apply_intent_defaults
-
-    data, applied = _apply_intent_defaults(
-        {
-            "Operation type": "Modify",
-            "Energy saving cell RAT": "ALL",
-            "Energy saving time": "",
-            "Scenario-based energy saving": [],
-            "Guaranteed throughput target by zone": [
-                {
-                    "Guaranteed throughput target": "10Mbps",
-                    "Effective time period": "00:00-06:00",
-                }
-            ],
-        }
-    )
-    assert data["Energy saving time"] == ""
-    assert applied == ()
-
-
-def test_intent_defaults_keep_a_site_level_time_empty() -> None:
-    from eval.osp.runner import _apply_intent_defaults
-
-    data, applied = _apply_intent_defaults(
-        {
-            "Energy saving cell RAT": "ALL",
-            "Energy saving time": "",
-            "Scenario-based energy saving": [{"Site list": ["NE_A"]}],
-        }
-    )
-    assert data["Energy saving time"] == ""
-    assert applied == ()
-
-
-def test_runner_applies_the_schema_defaults_before_comparison() -> None:
-    missing = dict(CASES[16]["expect"]["intent"])
-    missing["Energy saving cell RAT"] = None
-    missing["Energy saving time"] = ""
-    client = FakePromptClient(intent_overrides={16: missing})
-    outcome = run_case(CASES[16], client, stop_after="intent")
-    assert outcome.passed is True
-    assert _statuses(outcome) == {"intent": STAGE_PASSED}
-    assert "schema defaults" in outcome.stages[0].message
 
 
 def test_time_ranges_with_seconds_normalize_to_the_same_hours() -> None:

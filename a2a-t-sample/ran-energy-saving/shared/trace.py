@@ -774,7 +774,6 @@ _STAGE_PHASE_PREFIXES: Final[tuple[tuple[str, str], ...]] = (
     ("task_t_modify_validation", PHASE_TASK_MODIFY),
     ("task_t_modify_extraction", PHASE_TASK_MODIFY),
     ("task_t_server_validation", PHASE_TASK_VALIDATION),
-    ("task_t_client_validation", PHASE_TASK_VALIDATION),
     ("content_validation", PHASE_TASK_VALIDATION),
     ("intent_extraction", PHASE_TASK_PROMPT),
     ("task_t_", PHASE_TASK_PROMPT),

@@ -79,9 +79,6 @@ class ClientRuntimeLike(Protocol):
         run_id: str | None = None,
         user_request: str | None = None,
         conversation_context: str | None = None,
-        validate_before_send: bool = False,
-        enforce_required_fields: bool = False,
-        site_level_rate_optional: bool = False,
         run_mode: str = RUN_MODE_CREATE,
         target_task_id: str | None = None,
         target_context_id: str | None = None,
@@ -149,7 +146,6 @@ class RunState:
         server_intent: structured Task payload the downstream returned with any status frame, i.e.
             its own understanding of the Task-T (``None`` when it returns none).
         intent_mode: ``processed`` or ``raw`` for this run.
-        validate_before_send: whether the client validates the rendered Task-T before sending it.
         run_mode: ``create`` or ``modify`` (Modify-only against an existing Task).
         target_task_id: existing Task a Modify-only run continues.
         target_context_id: context of the Task a Modify-only run continues.
@@ -251,7 +247,6 @@ class RunState:
     downstream_context_id: str | None = None
     downstream_hop: str = ""
     intent_mode: str = ""
-    validate_before_send: bool = False
     #: ``create`` for a new A2A Task, ``modify`` for a Modify-only run against an existing one.
     run_mode: str = RUN_MODE_CREATE
     target_task_id: str | None = None

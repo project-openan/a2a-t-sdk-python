@@ -515,9 +515,9 @@ function stageChips(item, stopAfter) {
     if (pure && SDK_STAGES.has(stage)) continue;
     if (limit >= 0 && STAGE_ORDER.indexOf(stage) > limit) continue;
     const result = item.stages?.[stage];
-    // Every A2A-T item runs the Task-T and its pre-send interception check, whether from the SDK
-    // preflight or inside the run, so the chip is visible from the start and filled when the
-    // evidence exists. A finished item without a stage really skipped it.
+    // Every A2A-T item generates a Task-T and records the local gate evidence (a slot.* block
+    // or a passing read-back), so the chip is visible from the start and filled when the evidence
+    // exists. A finished item without a stage really skipped it.
     const status = result?.status || (settled ? "skipped" : "pending");
     const chip = el("span", `stage-chip ${status}`, `${STAGE_LABELS[stage] || stage}`);
     chip.title = `${stage}: ${statusLabel(status)}${result?.message ? ` · ${result.message}` : ""}`;
