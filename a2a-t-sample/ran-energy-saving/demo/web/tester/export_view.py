@@ -7,7 +7,8 @@ The reference worksheet the test team arbitrates with uses:
 
 * a nested JSON path with array indices for the intent difference (``A[0].B``);
 * three difference classes in the order missing / added / changed;
-* a milestone trajectory such as ``### Round 1 | Client | Task-T``.
+* a one-line interaction trajectory such as ``R1 Client Task-T | …`` built from the wire frames
+  (the exchanges-based milestone trajectory remains the fallback when no wire log is available).
 """
 
 from __future__ import annotations
@@ -410,6 +411,242 @@ def render_trajectory(exchanges: Sequence[Mapping[str, object]]) -> str:
         prefix = f"Round {round_number} | " if isinstance(round_number, int) else ""
         lines.append(f"### {prefix}{side} | {label}")
     return "\n\n".join(lines)
+
+
+#: Prefix the vendor repeats on every Task state; the trajectory shows the bare state name.
+_TASK_STATE_PREFIX: Final = "TASK_STATE_"
+
+
+def render_wire_trajectory(records: Sequence[Mapping[str, object]]) -> str:
+    """Render the interaction trajectory from the raw wire frames, one hop per line.
+
+    The interaction column prints every frame verbatim; this column answers "who said what, in
+    which order" at a glance. Each business frame becomes one line: the round and side, the
+    message title (Task-T, a negotiation performative or a Task state) and the core body. Header
+    frames, blank SSE lines, heartbeats and dropped duplicate pushes stay in the interaction
+    column only. A rejected frame is kept as an ``ERROR`` line because it explains a negotiation
+    that never reached the wire log.
+    """
+    lines: list[str] = []
+    current_round: int | None = None
+    for record in records:
+        line, current_round = _wire_trajectory_line(record, current_round)
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _wire_trajectory_line(
+    record: Mapping[str, object], current_round: int | None
+) -> tuple[str, int | None]:
+    """Return one wire record's trajectory line and the round the next frame belongs to."""
+    if _is_wire_error(record):
+        label = str(record.get("type") or "")
+        message = str(record.get("message") or "")
+        detail = f"{label}: {message}" if label and message else (label or message)
+        line = f"ERROR | {_one_line(detail)}" if detail.strip() else "ERROR"
+        return line, current_round
+    sse_line = record.get("line")
+    if isinstance(sse_line, str):
+        summary = _sse_trajectory_summary(sse_line)
+        if summary is None:
+            return "", current_round
+        title, text, round_number = summary
+        return _rounded_row(round_number, _SIDE_SERVER, title, text, current_round)
+    source = record.get("source")
+    if isinstance(source, str) and source:
+        if record.get("dropped"):
+            return "", current_round
+        body = _decoded_body(record.get("body"))
+        if not isinstance(body, Mapping):
+            return f"{_SIDE_SERVER} {source}", current_round
+        title, text, round_number = _frame_summary(body)
+        return _rounded_row(round_number, _SIDE_SERVER, title or source, text, current_round)
+    body = _decoded_body(record.get("body"))
+    if not isinstance(body, Mapping):
+        return "", current_round
+    message = body.get("message")
+    if not isinstance(message, Mapping):
+        return "", current_round
+    title, text, round_number = _message_summary(message)
+    return _rounded_row(round_number, _SIDE_CLIENT, title, text, current_round)
+
+
+def _sse_trajectory_summary(line: str) -> tuple[str, str, int | None] | None:
+    """Return one inbound SSE ``data:`` frame's summary; blank lines and heartbeats end here."""
+    stripped = line.strip()
+    if not stripped.startswith("data:"):
+        return None
+    payload = stripped[len("data:") :].strip()
+    if not payload:
+        return None
+    try:
+        body = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, Mapping):
+        return None
+    title, text, round_number = _frame_summary(body)
+    if not title:
+        return None
+    return title, text, round_number
+
+
+def _rounded_row(
+    round_number: int | None,
+    side: str,
+    title: str,
+    body: str,
+    current_round: int | None,
+) -> tuple[str, int | None]:
+    """Render one row and carry the current round forward, defaulting the first Task-T to round 1."""
+    if round_number is not None:
+        current_round = round_number
+    elif title == "Task-T" and current_round is None:
+        current_round = 1
+    return _trajectory_row(current_round, side, title, body), current_round
+
+
+def _frame_summary(body: Mapping[str, object]) -> tuple[str, str, int | None]:
+    """Return the title, core body and round of one inbound frame or webhook push."""
+    for key in ("task", "statusUpdate"):
+        envelope = body.get(key)
+        if isinstance(envelope, Mapping):
+            status = envelope.get("status")
+            if isinstance(status, Mapping):
+                state = str(status.get("state") or "")
+                return _state_title(state), _status_text(status), _negotiation_round(envelope)
+    status = body.get("status")
+    if isinstance(status, Mapping):
+        state = str(status.get("state") or "")
+        return _state_title(state), _status_text(status), None
+    artifact = body.get("artifactUpdate")
+    if isinstance(artifact, Mapping):
+        return "ARTIFACT", _parts_text(artifact.get("artifact")), None
+    message = body.get("message")
+    if isinstance(message, Mapping):
+        return _message_summary(message)
+    # The normalized transcript shape kept by older fixtures.
+    state = body.get("state")
+    if isinstance(state, str) and state:
+        return _state_title(state), _message_text(body.get("message")), None
+    return "", "", None
+
+
+def _message_summary(message: Mapping[str, object]) -> tuple[str, str, int | None]:
+    """Return the title and core body of one A2A message (outbound or inbound)."""
+    metadata = message.get("metadata")
+    performative = _performative(message)
+    negotiation = _metadata_text(metadata, "Negotiation-T")
+    task_t = _metadata_text(metadata, "Task-T")
+    round_number = _negotiation_round(message)
+    if performative and performative != "TASK_T":
+        return performative, negotiation or _parts_text(message), round_number
+    if task_t:
+        return "Task-T", task_t, round_number
+    if negotiation:
+        return "Negotiation-T", negotiation, round_number
+    return "Message", _parts_text(message), round_number
+
+
+def _state_title(state: str) -> str:
+    """Return the bare Task state name (``TASK_STATE_SUBMITTED`` -> ``SUBMITTED``)."""
+    value = state.strip()
+    if value.startswith(_TASK_STATE_PREFIX):
+        value = value[len(_TASK_STATE_PREFIX) :]
+    return value
+
+
+def _status_text(status: Mapping[str, object]) -> str:
+    """Return the short status sentence; the structured task reading is a separate column."""
+    return _before_structured(_one_line(_parts_text(status.get("message"))))
+
+
+def _parts_text(message: object) -> str:
+    """Return every text part of one A2A message joined by newlines."""
+    if not isinstance(message, Mapping):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    return "\n".join(
+        str(part["text"])
+        for part in parts
+        if isinstance(part, Mapping)
+        and isinstance(part.get("text"), str)
+        and str(part.get("text")).strip()
+    )
+
+
+def _message_text(value: object) -> str:
+    """Return a message body that may be a plain string or an A2A message object."""
+    if isinstance(value, Mapping):
+        return _parts_text(value)
+    return _one_line(str(value)) if isinstance(value, str) else ""
+
+
+def _metadata_text(metadata: object, marker: str) -> str:
+    """Return the first metadata value whose key names ``marker`` (Task-T / Negotiation-T)."""
+    if not isinstance(metadata, Mapping):
+        return ""
+    for key, value in metadata.items():
+        if isinstance(key, str) and marker in key and isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _performative(message: Mapping[str, object]) -> str:
+    """Return the negotiation performative of one A2A message, empty when it is not a negotiation."""
+    metadata = message.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    context = metadata.get("negotiationContext")
+    if not isinstance(context, Mapping):
+        return ""
+    value = context.get("performative")
+    return str(value).upper() if isinstance(value, str) and value else ""
+
+
+def _negotiation_round(message: Mapping[str, object]) -> int | None:
+    """Return the negotiation round of one A2A message, ``None`` when it carries none."""
+    metadata = message.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    context = metadata.get("negotiationContext")
+    if not isinstance(context, Mapping):
+        return None
+    value = context.get("round")
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return int(value)
+    return None
+
+
+def _trajectory_row(round_number: int | None, side: str, title: str, body: str) -> str:
+    """Return one compact ``R1 Client Task-T | body`` line."""
+    prefix = f"R{round_number} {side}" if isinstance(round_number, int) else side
+    head = f"{prefix} {title}".strip()
+    text = _one_line(body)
+    return f"{head} | {text}" if text else head
+
+
+def _decoded_body(value: object) -> object:
+    """Return a wire body decoded from JSON when it was logged as a string."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _one_line(text: str) -> str:
+    """Collapse one message body to a single line so every hop stays on one row."""
+    return " ".join(text.split())
+
+
+def _before_structured(text: str) -> str:
+    """Keep the sentence before a structured task reading (``Task creation succeeded{...}``)."""
+    return text.split("{", 1)[0].strip()
 
 
 #: Label of a blank SSE line in the interaction transcript (the frame separator).

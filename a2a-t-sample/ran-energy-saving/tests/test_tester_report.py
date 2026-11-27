@@ -347,6 +347,55 @@ def test_the_interaction_column_prints_every_raw_frame(tmp_path: Path) -> None:
     assert '"taskId":"t-1"' in cell
 
 
+def test_the_trajectory_column_summarises_the_wire_frames(tmp_path: Path) -> None:
+    """The trajectory answers "who said what" without a reader parsing the raw interaction cell."""
+    batch = _snapshot()
+    run_id = str(batch["items"][0]["runId"])
+    _write_wire(
+        tmp_path / run_id,
+        "wire.jsonl",
+        [
+            {
+                "ts": "2026-11-26T01:00:00.000Z",
+                "dir": "out",
+                "method": "POST",
+                "url": "http://nms.test/a2a/json/message:stream",
+                "body": {
+                    "message": {
+                        "parts": [{"text": "create task"}],
+                        "metadata": {
+                            "https://example/Task-T/v1": "## Operation Type\nCreate"
+                        },
+                    }
+                },
+            },
+            {
+                "ts": "2026-11-26T01:00:00.200Z",
+                "dir": "in",
+                "line": (
+                    'data: {"task": {"status": {"state": "TASK_STATE_SUBMITTED", '
+                    '"message": {"parts": [{"text": "Task creation succeeded{\\"a\\":1}"}]}}}}'
+                ),
+            },
+            {
+                "ts": "2026-11-26T01:00:01.000Z",
+                "dir": "in",
+                "source": "webhook",
+                "dropped": "duplicate",
+                "body": {"taskId": "t-1", "status": {"state": "WORKING"}},
+            },
+        ],
+    )
+
+    workbook = load_workbook(BytesIO(write_report(batch, runs_dir=tmp_path)))
+    rows = list(workbook["仲裁格式"].iter_rows(values_only=True))
+
+    assert rows[1][18] == (
+        "R1 Client Task-T | ## Operation Type Create\n"
+        "R1 Server SUBMITTED | Task creation succeeded"
+    )
+
+
 def test_a_rejected_frame_is_included_from_the_error_log(tmp_path: Path) -> None:
     """A frame the SDK rejected never reaches wire.jsonl; the column must still show it."""
     batch = _snapshot()

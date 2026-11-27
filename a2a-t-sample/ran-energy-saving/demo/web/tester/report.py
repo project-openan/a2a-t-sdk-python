@@ -28,6 +28,7 @@ from demo.web.tester.export_view import (
     render_intent_diff,
     render_trajectory,
     render_wire_frames,
+    render_wire_trajectory,
     result_label,
     score_for,
     verdict_reason,
@@ -94,6 +95,8 @@ _MAX_CELL_CHARS: Final[int] = 32000
 
 #: Suffix of an interaction cell that did not fit one Excel cell.
 _WIRE_TRUNCATED_NOTE: Final[str] = "…（已截断，完整逐帧报文见「交互报文」工作表）"
+#: Suffix of a trajectory cell that did not fit one Excel cell.
+_TRAJECTORY_TRUNCATED_NOTE: Final[str] = "…（轨迹已截断，完整报文见「交互报文」列）"
 #: Note of an item that never started a run (a validate-only or intercepted-miss item).
 _NO_RUN_NOTE: Final[str] = "本用例未启动 run。"
 #: Note of an export asked for without the runs directory.
@@ -480,10 +483,14 @@ def _write_reference_sheet(
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, Mapping):
             continue
-        wire_text, frames = _wire_text(item, runs_dir)
+        wire_text, frames, records = _wire_text(item, runs_dir)
         oversized = len(wire_text) > _MAX_CELL_CHARS
         shown = _truncated_wire(wire_text) if oversized else wire_text
-        row = _reference_row(item, wire_text=shown)
+        trajectory = render_wire_trajectory(records)
+        if len(trajectory) > _MAX_CELL_CHARS:
+            keep = _MAX_CELL_CHARS - len(_TRAJECTORY_TRUNCATED_NOTE)
+            trajectory = trajectory[:keep] + _TRAJECTORY_TRUNCATED_NOTE
+        row = _reference_row(item, wire_text=shown, wire_trajectory=trajectory)
         _append_trace_cells(row, item, trace_columns)
         if multi:
             row.insert(2, item.get("round", 1))
@@ -654,7 +661,9 @@ def _round_matrix(batch: Mapping[str, Any], rounds: int) -> list[list[object]]:
     return rows
 
 
-def _reference_row(item: Mapping[str, Any], *, wire_text: str) -> list[object]:
+def _reference_row(
+    item: Mapping[str, Any], *, wire_text: str, wire_trajectory: str = ""
+) -> list[object]:
     """Build one arbitration row from the data collected while the item ran."""
     refs = _map_of(item.get("refs"))
     intent_meta = _map_of(item.get("intentMeta"))
@@ -699,7 +708,8 @@ def _reference_row(item: Mapping[str, Any], *, wire_text: str) -> list[object]:
         ),
         _json_cell(answer, indent=2),
         wire_text,
-        render_trajectory(exchanges if isinstance(exchanges, list) else []),
+        wire_trajectory
+        or render_trajectory(exchanges if isinstance(exchanges, list) else []),
         _task_state(item, answer),
         item.get("durationMs", ""),
         _negotiation_rounds(answer, stages),
@@ -760,20 +770,22 @@ def _reference_note(
     return "；".join(notes)
 
 
-def _wire_text(item: Mapping[str, Any], runs_dir: Path | None) -> tuple[str, list[str]]:
-    """Return the item's interaction transcript and its per-frame blocks."""
+def _wire_text(
+    item: Mapping[str, Any], runs_dir: Path | None
+) -> tuple[str, list[str], list[dict[str, object]]]:
+    """Return the item's interaction transcript, its per-frame blocks and the raw records."""
     run_id = str(item.get("runId") or "")
     if not run_id:
-        return _NO_RUN_NOTE, [_NO_RUN_NOTE]
+        return _NO_RUN_NOTE, [_NO_RUN_NOTE], []
     if runs_dir is None:
-        return _NO_RUNS_DIR_NOTE, [_NO_RUNS_DIR_NOTE]
+        return _NO_RUNS_DIR_NOTE, [_NO_RUNS_DIR_NOTE], []
     records = read_wire_records(runs_dir, run_id, include_errors=True)
     if not records:
         note = _NO_WIRE_NOTE.format(run_id=run_id)
-        return note, [note]
+        return note, [note], []
     frames = render_wire_frames(records)
     header = _WIRE_HEADER.format(run_id=run_id, frames=len(frames))
-    return f"{header}\n\n" + "\n\n".join(frames), frames
+    return f"{header}\n\n" + "\n\n".join(frames), frames, records
 
 
 def _truncated_wire(text: str) -> str:

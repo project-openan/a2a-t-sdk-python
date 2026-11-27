@@ -15,6 +15,7 @@ from demo.web.tester.export_view import (
     render_intent_diff,
     render_trajectory,
     render_wire_frames,
+    render_wire_trajectory,
     result_label,
     score_for,
 )
@@ -164,6 +165,85 @@ def test_the_trajectory_keeps_negotiation_performatives() -> None:
         "### Round 1 | Server | ACCEPT\n\n"
         "### Server | TASK_STATE_WORKING"
     )
+
+
+def test_the_wire_trajectory_prints_one_summary_line_per_business_frame() -> None:
+    task_t = "## Operation Type\nCreate\n\n## Task Object\nThe area is Region A."
+    records = [
+        {
+            "dir": "out",
+            "method": "POST",
+            "url": "http://nms.test/a2a/json/message:stream",
+            "headers": {"content-type": "application/json"},
+            "body": {
+                "message": {
+                    "parts": [{"text": "create task"}],
+                    "metadata": {"https://example/Task-T/v1": task_t},
+                }
+            },
+        },
+        {"dir": "in", "method": "POST", "status": 200, "stream": True},
+        {"dir": "in", "line": ""},
+        {"dir": "in", "line": ": heartbeat"},
+        {
+            "dir": "in",
+            "line": (
+                'data: {"task": {"status": {"state": "TASK_STATE_SUBMITTED", '
+                '"message": {"parts": [{"text": "Task creation succeeded{\\"region\\":\\"A\\"}"}]}}}}'
+            ),
+        },
+        {
+            "dir": "in",
+            "line": (
+                'data: {"statusUpdate": {"status": {"state": "TASK_STATE_WORKING", '
+                '"message": {"parts": [{"text": "Task is executing the energy-saving plan."}]}}}}'
+            ),
+        },
+        {"type": "sdk_rejected", "message": "content.param_missing", "status": 400},
+    ]
+
+    assert render_wire_trajectory(records) == (
+        "R1 Client Task-T | ## Operation Type Create ## Task Object The area is Region A.\n"
+        "R1 Server SUBMITTED | Task creation succeeded\n"
+        "R1 Server WORKING | Task is executing the energy-saving plan.\n"
+        "ERROR | sdk_rejected: content.param_missing"
+    )
+
+
+def test_the_wire_trajectory_names_a_negotiation_performative_and_round() -> None:
+    records = [
+        {
+            "dir": "out",
+            "body": {
+                "message": {
+                    "parts": [{"text": "propose"}],
+                    "metadata": {
+                        "negotiationContext": {"round": 2, "performative": "PROPOSE"},
+                        "https://example/Negotiation-T/v1": (
+                            "## Feasibility Negotiation Result\nPropose\n\n"
+                            "## Content\nShift to 20:00."
+                        ),
+                    },
+                }
+            },
+        },
+        {
+            "dir": "in",
+            "line": (
+                'data: {"message": {"parts": [{"text": "accepted"}], "metadata": '
+                '{"negotiationContext": {"round": 2, "performative": "ACCEPT"}}}}'
+            ),
+        },
+    ]
+
+    assert render_wire_trajectory(records) == (
+        "R2 Client PROPOSE | ## Feasibility Negotiation Result Propose ## Content Shift to 20:00.\n"
+        "R2 Server ACCEPT | accepted"
+    )
+
+
+def test_a_run_without_business_wire_frames_has_an_empty_wire_trajectory() -> None:
+    assert render_wire_trajectory([{"dir": "in", "line": ": heartbeat"}]) == ""
 
 
 def test_the_real_traceparent_is_read_from_the_wire_log(tmp_path: Path) -> None:
