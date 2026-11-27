@@ -96,9 +96,7 @@ function fillFacts(target, pairs) {
 }
 
 function renderProcess(process) {
-  const nms = process.nms
-    ? (process.nmsSim ? "模拟器（nms-sim）" : "真实网管")
-    : "本地 RAN Agent";
+  const nms = process.nms ? "真实网管" : "本地 RAN Agent";
   fillFacts($("process-facts"), [
     ["UI", location.host],
     ["进程", `PID ${process.pid}`],

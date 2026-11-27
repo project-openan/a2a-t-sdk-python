@@ -2,8 +2,7 @@
 
 The Starlette app observes and steers the client flow, it never re-implements protocol logic:
 
-* ``GET /`` serves the page selected by ``ui_mode`` (``presentation`` for an audience,
-  ``explorer`` for protocol-level debugging) and ``/static`` its assets;
+* ``GET /`` serves the presentation page and ``/static`` its assets;
 * ``POST /api/runs`` starts one background client run (one concurrent run, a second start is 409);
 * ``GET /api/runs/{id}/events`` streams the normalized events, ``decision_requested`` prompts and
   the ``finished`` outcome as Server-Sent Events;
@@ -13,8 +12,7 @@ The Starlette app observes and steers the client flow, it never re-implements pr
 * ``POST /api/runs/{id}/cancel`` cancels the running Task (presentation UI), best effort on the
   remote side and always on the local run;
 * ``POST /api/runs/{id}/trace`` ingests the cross-process server spans (local token, envelope
-  validation, broadcast; re-sent producer spans are deduplicated by original ``spanId``);
-* ``GET /api/runs/{id}/transcript.json`` / ``.md`` download the run transcript.
+  validation, broadcast; re-sent producer spans are deduplicated by original ``spanId``).
 
 The language is process-level and read-only: it comes from the sample configuration and is exposed
 through ``GET /api/meta`` (design D18).
@@ -23,8 +21,6 @@ through ``GET /api/meta`` (design D18).
 from __future__ import annotations
 
 import asyncio
-import csv
-import io
 import json
 import logging
 import os
@@ -36,7 +32,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
-from a2a_t.core.metadata import NegotiationContext, NegotiationPerformative
 from eval.osp.catalog import CaseCatalog
 from langfuse_export.config import Config as LangfuseConfig
 from langfuse_export.config import ConfigError as LangfuseConfigError
@@ -51,20 +46,9 @@ from protocol.client_service import (
     RunState,
     RuntimeFactory,
 )
-from protocol.client_store import (
-    ClientStore,
-    read_client_run_detail,
-    read_client_run_summaries,
-    read_conversation_detail,
-    read_conversation_summaries,
-    read_run_metrics,
-    read_run_metrics_rows,
-)
-from protocol.manual_answer import missing_item_labels, ungrounded_answer_fields
-from protocol.metrics_summary import summarize_metrics, summarize_protocols
+from protocol.client_store import ClientStore, read_client_run_detail
 from protocol.nms_client import NmsConfigError, NmsError
 from protocol.run_spec import RunCatalog
-from protocol.sqlite_task_store import read_task_summaries
 from shared.config import (
     DISCOVERY_DIRECT,
     DISCOVERY_NMS,
@@ -106,12 +90,7 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    Response,
-)
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -132,7 +111,6 @@ from demo.web.nms_tasks import (
     read_task,
 )
 from demo.web.request_source import request_source
-from demo.web.runs_console import build_run_console_routes
 from demo.web.status_routes import build_status_routes
 from demo.web.tester import build_tester_routes
 from demo.web.wire_records import read_wire_records
@@ -142,16 +120,8 @@ _LOGGER = logging.getLogger("ran_energy_saving.web")
 #: Trace ingest path; it is exempt from the user bearer and authenticated by the trace token.
 TRACE_INGEST_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"/api/runs/[^/]+/trace")
 
-#: Static directory of the Run Explorer page.
-STATIC_DIR: Final[Path] = Path(__file__).resolve().parent / "static"
-
 #: Static directory of the presentation page served to an audience.
 PRESENTATION_DIR: Final[Path] = Path(__file__).resolve().parent / "presentation"
-
-#: Web UI variants: the audience-facing presentation and the technical Run Explorer.
-WEB_UI_PRESENTATION: Final[str] = "presentation"
-WEB_UI_EXPLORER: Final[str] = "explorer"
-WEB_UI_MODES: Final[tuple[str, ...]] = (WEB_UI_PRESENTATION, WEB_UI_EXPLORER)
 
 #: Seconds an SSE stream stays open after ``finished`` so late cross-process server spans arrive.
 #:
@@ -245,7 +215,6 @@ def create_app(
     finished_grace_seconds: float = FINISHED_GRACE_SECONDS,
     metrics_grace_seconds: float = 0.0,
     bind_host: str = "127.0.0.1",
-    ui_mode: str = WEB_UI_PRESENTATION,
     default_brand: str = BRAND_ORANGE,
     server_url: str | None = None,
     allow_insecure_bind: bool = False,
@@ -279,15 +248,12 @@ def create_app(
             persisted, so the last batched server spans are included; ``0`` persists immediately
             (tests and callers that query live metrics only).
         bind_host: address the caller will bind; a non-loopback bind needs an auth token.
-        ui_mode: ``presentation`` (audience-facing page) or ``explorer`` (technical Run
-            Explorer); both serve the same API and event stream.
         default_brand: presentation color theme (``orange`` or ``huawei``); the page can switch it
             at runtime and remembers the choice in local storage.
         server_url: base URL of the A2A server.
         allow_insecure_bind: explicit opt-in for a trusted-LAN bind without ``A2AT_SAMPLE_AUTH_TOKEN``;
             only the Web UI exposes this, never the A2A server.
-        intent_review: whether confirm mode waits for approval 1; defaults to true only for the
-            presentation view, because the explorer has no intent card.
+        intent_review: whether confirm mode waits for approval 1; defaults to true.
         protocol: default interaction protocol of this UI process.
         protocols: interaction protocols the page may switch between; defaults to ``(protocol,)``.
             ``("a2a-t", "pure")`` exposes both request forms of the same agent.
@@ -301,19 +267,15 @@ def create_app(
         The assembled Starlette application.
 
     Raises:
-        ValueError: when an explicit default is not a supported value, or ``ui_mode`` is unknown.
+        ValueError: when an explicit default is not a supported value.
     """
-    if ui_mode not in WEB_UI_MODES:
-        raise ValueError(f"Unsupported ui mode: {ui_mode}; expected one of {WEB_UI_MODES}")
     if default_brand not in SUPPORTED_BRANDS:
         raise ValueError(f"Unsupported presentation brand: {default_brand}; expected one of {SUPPORTED_BRANDS}")
-    static_dir = PRESENTATION_DIR if ui_mode == WEB_UI_PRESENTATION else STATIC_DIR
-    index_html = (static_dir / "index.html").read_text(encoding="utf-8")
-    if ui_mode == WEB_UI_PRESENTATION:
-        index_html = index_html.replace("__A2AT_DEFAULT_BRAND__", default_brand)
-        # The page ships the Chinese template; let it hide that copy before the first paint when
-        # the process language is different. The client applies the real copy after /api/meta.
-        index_html = index_html.replace("__A2AT_LANGUAGE__", config.language)
+    index_html = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
+    index_html = index_html.replace("__A2AT_DEFAULT_BRAND__", default_brand)
+    # The page ships the Chinese template; let it hide that copy before the first paint when
+    # the process language is different. The client applies the real copy after /api/meta.
+    index_html = index_html.replace("__A2AT_LANGUAGE__", config.language)
     validate_bind_security(bind_host, config.auth_token, allow_insecure=allow_insecure_bind)
     if catalog is None:
         from demo.catalog import DemoRunCatalog
@@ -381,7 +343,7 @@ def create_app(
     resolved_intent_mode = (
         config.intent_mode if config.intent_mode in SUPPORTED_INTENT_MODES else SUPPORTED_INTENT_MODES[0]
     )
-    resolved_intent_review = ui_mode == WEB_UI_PRESENTATION if intent_review is None else intent_review
+    resolved_intent_review = True if intent_review is None else intent_review
 
     async def default_factory(
         resolved_config: SampleConfig,
@@ -473,15 +435,6 @@ def create_app(
     # The status page is process-wide: it must see every browser's batches, so it reads the same
     # tester manager the owner-filtered console uses.
     status_routes = build_status_routes(batches=tester_batches)
-    run_console_routes = build_run_console_routes(
-        runs=manager,
-        client_db_path=Path(config.client_db_path) if config.client_db_path else None,
-        runs_dir=resolved_runs_dir,
-        protocols=advertised_protocols,
-        scenarios_by_protocol=scenarios_by_protocol,
-        language=config.language,
-        run_dir=Path(config.run_dir) if config.run_dir else None,
-    )
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
@@ -524,9 +477,7 @@ def create_app(
 
     async def index(request: Request) -> Response:
         del request
-        if ui_mode == WEB_UI_PRESENTATION:
-            return HTMLResponse(index_html)
-        return FileResponse(static_dir / "index.html")
+        return HTMLResponse(index_html)
 
     async def meta(request: Request) -> Response:
         del request
@@ -559,7 +510,6 @@ def create_app(
                 "defaultDiscovery": resolved_default_discovery,
                 "defaultIntentMode": resolved_intent_mode,
                 "intentModes": list(SUPPORTED_INTENT_MODES),
-                "uiMode": ui_mode,
                 "defaultBrand": default_brand,
                 "brands": list(SUPPORTED_BRANDS),
                 "decisionMode": resolved_default_mode,
@@ -570,28 +520,6 @@ def create_app(
                 "finishedGraceMs": int(round(finished_grace_seconds * 1000)),
             }
         )
-
-    async def tasks(request: Request) -> Response:
-        """Return the persisted A2A task summaries for the task-status table."""
-        raw_limit = request.query_params.get("limit", "50")
-        try:
-            limit = int(raw_limit)
-        except ValueError:
-            return JSONResponse(
-                {"error": "limit must be an integer.", "code": "limit_not_integer"},
-                status_code=400,
-            )
-        if not 1 <= limit <= 500:
-            return JSONResponse(
-                {"error": "limit must be between 1 and 500.", "code": "limit_out_of_range"},
-                status_code=400,
-            )
-        path = config.task_db_path
-        enabled = path is not None and Path(path).is_file()
-        if not enabled:
-            return JSONResponse({"enabled": False, "tasks": []})
-        rows = await asyncio.to_thread(read_task_summaries, path, limit)
-        return JSONResponse({"enabled": True, "tasks": rows})
 
     async def nms_tasks(request: Request) -> Response:
         """Return the Tasks the Running-tasks picker may select.
@@ -694,226 +622,12 @@ def create_app(
             }
         )
 
-    def query_limit(request: Request) -> int | Response:
-        """Parse and validate the ``limit`` query parameter."""
-        raw_limit = request.query_params.get("limit", "50")
-        try:
-            limit = int(raw_limit)
-        except ValueError:
-            return JSONResponse(
-                {"error": "limit must be an integer.", "code": "limit_not_integer"},
-                status_code=400,
-            )
-        if not 1 <= limit <= 500:
-            return JSONResponse(
-                {"error": "limit must be between 1 and 500.", "code": "limit_out_of_range"},
-                status_code=400,
-            )
-        return limit
-
-    async def client_runs(request: Request) -> Response:
-        """Return persisted client run summaries for the client-runs table."""
-        limit = query_limit(request)
-        if isinstance(limit, Response):
-            return limit
-        path = config.client_db_path
-        enabled = path is not None and Path(path).is_file()
-        if not enabled:
-            return JSONResponse({"enabled": False, "runs": []})
-        rows = await asyncio.to_thread(read_client_run_summaries, path, limit)
-        return JSONResponse({"enabled": True, "runs": rows})
-
     async def run_wire(request: Request) -> Response:
         """Return the redacted NMS exchanges of one run, as the wire inspector shows them."""
         run_id = request.path_params["run_id"]
         root = runs_dir or Path(config.runs_dir)
         records = await asyncio.to_thread(read_wire_records, root, run_id)
         return JSONResponse({"runId": run_id, "records": records, "enabled": bool(records)})
-
-    async def client_run_detail(request: Request) -> Response:
-        """Return one persisted client run with turns and negotiation events."""
-        path = config.client_db_path
-        if path is None:
-            return JSONResponse(
-                {"error": "The client database is disabled.", "code": "client_db_disabled"},
-                status_code=404,
-            )
-        detail = await asyncio.to_thread(read_client_run_detail, path, request.path_params["run_id"])
-        if detail is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        # The wire inspector shows what the client really sent. These records are written redacted
-        # by the NMS client, so credentials arrive as "***" and need no second scrub.
-        wire = await asyncio.to_thread(
-            read_wire_records, runs_dir or Path(config.runs_dir), request.path_params["run_id"]
-        )
-        if wire:
-            detail["wire"] = wire
-        live = manager.get(request.path_params["run_id"])
-        if live is not None:
-            detail["live"] = live.snapshot()
-        return JSONResponse(detail)
-
-    async def client_conversations(request: Request) -> Response:
-        """Return persisted client conversation summaries."""
-        limit = query_limit(request)
-        if isinstance(limit, Response):
-            return limit
-        path = config.client_db_path
-        enabled = path is not None and Path(path).is_file()
-        if not enabled:
-            return JSONResponse({"enabled": False, "conversations": []})
-        rows = await asyncio.to_thread(read_conversation_summaries, path, limit)
-        return JSONResponse({"enabled": True, "conversations": rows})
-
-    async def client_conversation_detail(request: Request) -> Response:
-        """Return one conversation with its turns and runs."""
-        path = config.client_db_path
-        if path is None:
-            return JSONResponse(
-                {"error": "The client database is disabled.", "code": "client_db_disabled"},
-                status_code=404,
-            )
-        detail = await asyncio.to_thread(read_conversation_detail, path, request.path_params["conversation_id"])
-        if detail is None:
-            return JSONResponse(
-                {"error": "Unknown conversation.", "code": "unknown_conversation"},
-                status_code=404,
-            )
-        return JSONResponse(detail)
-
-    def metrics_filter(request: Request) -> tuple[str | None, str | None]:
-        """Return the optional protocol/scenario filters of a metrics request."""
-        protocol = (request.query_params.get("protocol") or "").strip() or None
-        scenario = (request.query_params.get("scenario") or "").strip() or None
-        return protocol, scenario
-
-    def metrics_limit(request: Request) -> int:
-        """Parse the metrics list limit (1..5000)."""
-        try:
-            return max(1, min(int(request.query_params.get("limit", "500")), 5000))
-        except ValueError:
-            return 500
-
-    def stored_metrics(request: Request) -> list[dict[str, object]] | None:
-        """Read persisted metrics rows; ``None`` when the client database is disabled."""
-        path = config.client_db_path
-        if path is None or not Path(path).is_file():
-            return None
-        protocol, scenario = metrics_filter(request)
-        return read_run_metrics_rows(
-            path,
-            protocol=protocol,
-            scenario=scenario,
-            limit=metrics_limit(request),
-        )
-
-    async def run_metrics_detail(request: Request) -> Response:
-        """Return one run's metrics: live while the process holds it, persisted otherwise."""
-        run_id = request.path_params["run_id"]
-        run = manager.get(run_id)
-        metrics = manager.metrics_for(run_id)
-        if metrics is not None and run is not None:
-            elapsed = time.monotonic() - run.finished_at if run.finished_at is not None else 0.0
-            metrics["traceFinal"] = run.finished() and elapsed >= manager.metrics_grace_seconds
-            return JSONResponse(metrics)
-        path = config.client_db_path
-        stored = read_run_metrics(path, run_id) if path is not None else None
-        if stored is None:
-            return JSONResponse(
-                {"error": "No metrics have been recorded for this run.", "code": "metrics_unknown"},
-                status_code=404,
-            )
-        stored["traceFinal"] = True
-        return JSONResponse(stored)
-
-    async def metrics_runs(request: Request) -> Response:
-        """Return the persisted per-run metrics rows."""
-        rows = await asyncio.to_thread(stored_metrics, request)
-        if rows is None:
-            return JSONResponse({"enabled": False, "runs": []})
-        return JSONResponse({"enabled": True, "runs": rows})
-
-    async def metrics_summary(request: Request) -> Response:
-        """Return protocol/scenario aggregates and the headline protocol comparison."""
-        rows = await asyncio.to_thread(stored_metrics, request)
-        if rows is None:
-            return JSONResponse({"enabled": False, "groups": [], "protocols": [], "runs": 0})
-        return JSONResponse(
-            {
-                "enabled": True,
-                "runs": len(rows),
-                "groups": summarize_metrics(rows),
-                "protocols": summarize_protocols(rows),
-            }
-        )
-
-    async def metrics_csv(request: Request) -> Response:
-        """Download the persisted metrics as CSV (one row per run)."""
-        rows = await asyncio.to_thread(stored_metrics, request)
-        if rows is None:
-            return JSONResponse({"enabled": False, "runs": []})
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerow(
-            [
-                "runId",
-                "protocol",
-                "scenario",
-                "mode",
-                "modelMode",
-                "status",
-                "finalState",
-                "passed",
-                "accuracy",
-                "rounds",
-                "promptTokens",
-                "completionTokens",
-                "totalTokens",
-                "cachedTokens",
-                "cacheHitRate",
-                "llmCalls",
-                "durationMs",
-                "modelMs",
-                "approvalWaitMs",
-                "startedAt",
-                "finishedAt",
-            ]
-        )
-        for row in rows:
-            accuracy = row.get("accuracy") if isinstance(row.get("accuracy"), Mapping) else {}
-            negotiation = row.get("negotiation") if isinstance(row.get("negotiation"), Mapping) else {}
-            tokens = row.get("tokens") if isinstance(row.get("tokens"), Mapping) else {}
-            latency = row.get("latency") if isinstance(row.get("latency"), Mapping) else {}
-            writer.writerow(
-                [
-                    row.get("runId"),
-                    row.get("protocol"),
-                    row.get("scenario"),
-                    row.get("mode"),
-                    row.get("modelMode"),
-                    row.get("status"),
-                    row.get("finalState"),
-                    accuracy.get("passed"),
-                    accuracy.get("score"),
-                    negotiation.get("rounds"),
-                    tokens.get("prompt"),
-                    tokens.get("completion"),
-                    tokens.get("total"),
-                    tokens.get("cached"),
-                    tokens.get("cacheHitRate"),
-                    tokens.get("llmCalls"),
-                    latency.get("totalMs"),
-                    latency.get("modelMs"),
-                    latency.get("approvalWaitMs"),
-                    row.get("startedAt"),
-                    row.get("finishedAt"),
-                ]
-            )
-        return Response(
-            buffer.getvalue(),
-            media_type="text/csv",
-            headers={"Content-Disposition": 'attachment; filename="run-metrics.csv"'},
-        )
 
     async def start_run(request: Request) -> Response:
         try:
@@ -1306,105 +1020,6 @@ def create_app(
         provider.submit(decision)
         return JSONResponse({"accepted": True, "runId": run.run_id})
 
-    async def parse_decision(request: Request) -> Response:
-        """Structure one engineer's manual answer into a decision preview.
-
-        The preview is not submitted: the page shows it and the engineer confirms through the
-        normal decision endpoint. This keeps a model misread from silently changing the
-        negotiation.
-        """
-        run = manager.get(request.path_params["run_id"])
-        if run is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        try:
-            body = await request.json()
-        except (ValueError, TypeError):
-            return JSONResponse(
-                {"error": "The body must be a JSON object.", "code": "body_not_object"},
-                status_code=400,
-            )
-        text = body.get("text") if isinstance(body, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            return JSONResponse(
-                {"error": "The text field must be a non-empty string.", "code": "manual_text_invalid"},
-                status_code=400,
-            )
-        if run.status != STATUS_RUNNING or not run.pending_decision or run.manual_provider is None:
-            return JSONResponse(
-                {"error": "No manual decision is pending for this run."},
-                status_code=409,
-            )
-        structurer = run.manual_structurer
-        if structurer is None:
-            return JSONResponse(
-                {
-                    "error": "Structuring a manual answer requires a live decision model.",
-                    "code": "manual_parse_unavailable",
-                },
-                status_code=422,
-            )
-        propose = run.proposals[-1] if run.proposals else None
-        if propose is None:
-            return JSONResponse(
-                {"error": "No inbound proposal is available for this decision."},
-                status_code=409,
-            )
-        session = NegotiationContext(
-            id=propose.negotiation_id,
-            round=propose.round,
-            max_rounds=propose.max_rounds,
-            performative=NegotiationPerformative(propose.performative),
-        )
-        try:
-            decision = await structurer.structure_answer(propose, session, text.strip())
-        except Exception as exc:  # noqa: BLE001 - a model failure must become a readable 422
-            return JSONResponse(
-                {
-                    "error": f"Manual answer parsing failed: {type(exc).__name__}: {exc}",
-                    "code": "manual_parse_failed",
-                },
-                status_code=422,
-            )
-        if decision is None:
-            return JSONResponse(
-                {
-                    "error": (
-                        "The answer could not be structured into a decision for this proposal; "
-                        "rephrase it or send it as a free-text counter-proposal."
-                    ),
-                    "code": "manual_parse_failed",
-                },
-                status_code=422,
-            )
-        if run.protocol == PROTOCOL_PURE and propose.kind == "information":
-            # A pure A2A answer is one plain sentence: an invented value would reach the vendor as
-            # if the operator had typed it. Only accept values grounded in the answer text or in an
-            # explicit page selection.
-            selected = body.get("region")
-            ungrounded = ungrounded_answer_fields(
-                text,
-                decision.filled_params,
-                allow=(selected,) if isinstance(selected, str) and selected.strip() else (),
-            )
-            if ungrounded:
-                return JSONResponse(
-                    {
-                        "error": (
-                            "The structured answer contains values the operator did not supply: "
-                            f"{', '.join(ungrounded)}. Rewrite the answer with the exact value."
-                        ),
-                        "code": "manual_answer_ungrounded",
-                        "fields": list(ungrounded),
-                    },
-                    status_code=422,
-                )
-        return JSONResponse(
-            {
-                "decision": decision.model_dump(),
-                "missingItems": list(missing_item_labels(propose.content)),
-            }
-        )
-
     async def submit_intent(request: Request) -> Response:
         """Resolve approval 1: the engineer confirms or rejects the structured intent."""
         run = manager.get(request.path_params["run_id"])
@@ -1431,57 +1046,6 @@ def create_app(
                 status_code=409,
             )
         return JSONResponse({"accepted": True, "runId": run.run_id})
-
-    async def _stored_transcript(request: Request, field_name: str) -> str | None:
-        """Read one transcript path persisted with a finished run."""
-        path = config.client_db_path
-        if path is None:
-            return None
-        detail = await asyncio.to_thread(read_client_run_detail, path, request.path_params["run_id"])
-        stored = detail.get(field_name) if detail is not None else None
-        if not isinstance(stored, str) or not Path(stored).is_file():
-            return None
-        try:
-            return await asyncio.to_thread(Path(stored).read_text, encoding="utf-8")
-        except OSError:
-            return None
-
-    async def transcript_json(request: Request) -> Response:
-        run = manager.get(request.path_params["run_id"])
-        if run is not None and run.transcript is not None:
-            text = run.transcript.to_json()
-        else:
-            text = await _stored_transcript(request, "transcriptJson")
-        if text is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        return Response(
-            text,
-            media_type="application/json",
-            headers={"Content-Disposition": (f'attachment; filename="{request.path_params["run_id"]}.json"')},
-        )
-
-    async def transcript_markdown(request: Request) -> Response:
-        run = manager.get(request.path_params["run_id"])
-        if run is not None and run.transcript is not None:
-            text = run.transcript.to_markdown()
-        else:
-            text = await _stored_transcript(request, "transcriptMarkdown")
-        if text is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        return Response(
-            text,
-            media_type="text/markdown",
-            headers={"Content-Disposition": (f'attachment; filename="{request.path_params["run_id"]}.md"')},
-        )
-
-    async def run_span(request: Request) -> Response:
-        run = manager.get(request.path_params["run_id"])
-        if run is None:
-            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
-        span = run.spans.get(request.path_params["span_id"])
-        if span is None:
-            return JSONResponse({"error": "Unknown span.", "code": "unknown_span"}, status_code=404)
-        return JSONResponse(span)
 
     async def run_trace_json(request: Request) -> Response:
         run_id = request.path_params["run_id"]
@@ -1596,34 +1160,20 @@ def create_app(
         routes=[
             Route("/", index),
             Route("/api/meta", meta),
-            Route("/api/tasks", tasks),
             Route("/api/nms/tasks", nms_tasks),
             Route("/api/nms/tasks/{task_id}/cancel", cancel_nms_task_route, methods=["POST"]),
-            Route("/api/client/runs", client_runs),
-            Route("/api/client/runs/{run_id}", client_run_detail),
-            Route("/api/client/conversations", client_conversations),
-            Route("/api/client/conversations/{conversation_id}", client_conversation_detail),
             Route("/api/runs/{run_id}/wire", run_wire),
-            Route("/api/runs/{run_id}/metrics", run_metrics_detail),
-            Route("/api/metrics/runs", metrics_runs),
-            Route("/api/metrics/summary", metrics_summary),
-            Route("/api/metrics/export.csv", metrics_csv),
             Route("/api/runs", start_run, methods=["POST"]),
             Route("/api/runs/{run_id}", run_status),
             Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
             Route("/api/runs/{run_id}/events", run_events),
             Route("/api/runs/{run_id}/decisions", submit_decision, methods=["POST"]),
-            Route("/api/runs/{run_id}/decisions/parse", parse_decision, methods=["POST"]),
             Route("/api/runs/{run_id}/intent", submit_intent, methods=["POST"]),
-            Route("/api/runs/{run_id}/transcript.json", transcript_json),
-            Route("/api/runs/{run_id}/transcript.md", transcript_markdown),
             Route("/api/runs/{run_id}/trace", ingest_trace, methods=["POST"]),
             Route("/api/runs/{run_id}/trace.json", run_trace_json),
-            Route("/api/runs/{run_id}/spans/{span_id}", run_span),
             *tester_routes,
             *status_routes,
-            *run_console_routes,
-            Mount("/static", app=StaticFiles(directory=static_dir), name="static"),
+            Mount("/static", app=StaticFiles(directory=PRESENTATION_DIR), name="static"),
         ],
         lifespan=lifespan,
         middleware=(

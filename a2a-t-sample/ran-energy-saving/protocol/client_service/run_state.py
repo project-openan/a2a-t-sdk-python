@@ -1112,8 +1112,6 @@ class RunState:
             "finalState": self.result.final_state if self.result is not None else None,
             "report": self.result.report if self.result is not None else None,
             "error": self.error,
-            "transcriptJson": f"/api/runs/{self.run_id}/transcript.json",
-            "transcriptMarkdown": f"/api/runs/{self.run_id}/transcript.md",
             "traceJson": f"/api/runs/{self.run_id}/trace.json",
             "langfuse": self.langfuse,
         }

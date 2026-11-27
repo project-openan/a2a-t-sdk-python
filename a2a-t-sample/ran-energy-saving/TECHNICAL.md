@@ -8,7 +8,7 @@ the OSS proxy, MIE approval and the internal observation/review consoles.
 
 | Process | Module | Default port | Role |
 |---|---|---:|---|
-| Web UI | `demo.web.serve` | 8080 | presentation + `/tester` + `/runs` |
+| Web UI | `demo.web.serve` | 8080 | presentation + `/tester` + `/status` |
 | Inbound gateway | `protocol.client_gateway` | 8001 | A2A caller (Gemini Enterprise) → client runs |
 | Local RAN server | `protocol.server_app` | 8000 | reference server for pre-lab runs |
 | Callback receiver | inside UI/gateway | 9000 / 9001 | NMS push notifications |
@@ -70,7 +70,7 @@ and report presence are compared.
 
 ## 7. Observability
 
-- `/runs` is the read-only run console (SQLite + wire + trace).
+- `/status` is the read-only tester status page (batches, runs, shared SDK pool).
 - Langfuse OTLP export is optional and best-effort; without keys it is a no-op.
 - Trace, Langfuse and metrics failures never change a protocol result.
 

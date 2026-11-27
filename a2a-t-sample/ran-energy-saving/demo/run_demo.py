@@ -1138,7 +1138,7 @@ def _build_parser(
 
     from demo.scenario import SUPPORTED_SCENARIO_NAMES
 
-    cli_modes = [mode for mode in SUPPORTED_MODES if mode != "scripted"]
+    cli_modes = list(SUPPORTED_MODES)
     parser = argparse.ArgumentParser(description="Non-blocking launcher of the RAN energy-saving ADK sample.")
     parser.add_argument(
         "--env-file",
@@ -1249,12 +1249,6 @@ def _build_parser(
         ),
     )
     parser.add_argument("--ui", action="store_true", help="serve the Web UI instead of the CLI client")
-    parser.add_argument(
-        "--ui-mode",
-        default="presentation",
-        choices=("presentation", "explorer"),
-        help=("Web UI variant: presentation (audience-facing demo, default) or explorer (protocol-level Run Explorer)"),
-    )
     parser.add_argument(
         "--brand",
         default=_env_str(env, "A2AT_SAMPLE_UI_BRAND", BRAND_ORANGE),
@@ -1789,8 +1783,6 @@ def main() -> int:
                 args.mode,
                 "--transport",
                 ui_transport,
-                "--ui-mode",
-                args.ui_mode,
                 "--brand",
                 args.brand,
                 "--server-url",

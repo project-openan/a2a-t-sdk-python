@@ -14,8 +14,6 @@ from typing import Any
 
 import httpx
 import pytest
-from a2a.server.context import ServerCallContext, UnauthenticatedUser
-from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
 from a2a_t.core.metadata import (
     NEGOTIATION_CONTEXT_METADATA_KEY,
     NEGOTIATION_T_EXTENSION_URI,
@@ -35,12 +33,9 @@ from integration_helpers import (
 from protocol.client_flow import ClientFlowResult
 from protocol.client_store import (
     ClientRunRecord,
-    NegotiationEventRecord,
     SqliteClientStore,
-    TaskSnapshotRecord,
 )
 from protocol.decision_provider import ManualDecisionProvider
-from protocol.sqlite_task_store import SqliteTaskStore
 from shared.config import DISCOVERY_NMS, PURE_HOP_NMS, TRANSPORT_WEBHOOK, SampleConfig
 from shared.models import NegotiationDecision, NegotiationProposeView
 from shared.run_constants import FINAL_STATE_INTENT_NOT_CONFIRMED, PROTOCOL_A2A_T, PROTOCOL_PURE
@@ -325,7 +320,7 @@ async def client(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -563,7 +558,7 @@ async def test_start_run_rejects_a_target_that_is_not_modifiable(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -598,7 +593,7 @@ async def test_start_run_accepts_a_submitted_target(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -635,7 +630,7 @@ async def test_start_run_accepts_a_modify_on_a_selected_task_for_any_scenario(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -671,7 +666,7 @@ async def test_start_run_passes_the_target_to_the_runtime(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
@@ -741,7 +736,7 @@ async def test_a_pure_modify_forwards_the_outer_task_ids_to_the_runtime(
         runtime_factory=factory,
         client_store=store,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
     )
     transport = httpx.ASGITransport(app=app)
@@ -787,7 +782,7 @@ async def test_a_pure_modify_without_an_outer_task_mapping_is_rejected(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
     )
     transport = httpx.ASGITransport(app=app)
@@ -828,7 +823,7 @@ async def test_a_direct_pure_modify_accepts_the_vendor_pair(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
     )
     transport = httpx.ASGITransport(app=app)
@@ -879,7 +874,7 @@ async def test_a_direct_pure_modify_rejects_an_outer_pair(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
     )
     transport = httpx.ASGITransport(app=app)
@@ -925,7 +920,7 @@ async def test_the_task_picker_reports_the_pure_outer_task_ids(
         runs_dir=tmp_path,
         client_store=store,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
         protocols=(PROTOCOL_A2A_T, PROTOCOL_PURE),
     )
     transport = httpx.ASGITransport(app=app)
@@ -936,118 +931,6 @@ async def test_the_task_picker_reports_the_pure_outer_task_ids(
     row = response.json()["tasks"][0]
     assert row["serverTaskId"] == "outer-1"
     assert row["serverContextId"] == "outer-ctx"
-
-
-async def test_client_run_endpoints_return_persisted_runs_and_conversations(
-    offline_config: SampleConfig, tmp_path: Path
-) -> None:
-    db_path = tmp_path / "client.sqlite3"
-    store = SqliteClientStore(db_path)
-    await store.ensure_conversation(
-        conversation_id="conv-1", external_id="ext-1", user_id="user-1", title="energy saving"
-    )
-    await store.append_turn(conversation_id="conv-1", role="user", content="save energy")
-    await store.create_run(
-        ClientRunRecord(
-            run_id="run-1",
-            conversation_id="conv-1",
-            scenario="information",
-            mode="auto",
-            transport="sse",
-            discovery="direct",
-            user_request="save energy",
-            status="finished",
-            final_state="task_completed",
-        )
-    )
-    await store.record_negotiation_event(
-        NegotiationEventRecord.new(
-            run_id="run-1",
-            seq=1,
-            direction="inbound",
-            actor="server",
-            kind="information",
-            round=1,
-            performative="PROPOSE",
-            content={"content": "missing region"},
-        )
-    )
-    await store.save_task_snapshot(
-        TaskSnapshotRecord(run_id="run-1", task_id="task-1", context_id="ctx-1", state="TASK_STATE_COMPLETED")
-    )
-    config = replace(offline_config, client_db_path=str(db_path))
-    app = create_app(config, runs_dir=tmp_path, client_store=store, finished_grace_seconds=0.0)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
-        runs = await http_client.get("/api/client/runs")
-        assert runs.status_code == 200
-        payload = runs.json()
-        assert payload["enabled"] is True
-        assert payload["runs"][0]["runId"] == "run-1"
-        assert payload["runs"][0]["conversationId"] == "conv-1"
-
-        detail = await http_client.get("/api/client/runs/run-1")
-        assert detail.status_code == 200
-        body = detail.json()
-        assert body["status"] == "finished"
-        assert body["turns"][0]["content"] == "save energy"
-        assert body["negotiationEvents"][0]["performative"] == "PROPOSE"
-        assert body["taskSnapshot"]["state"] == "TASK_STATE_COMPLETED"
-
-        conversations = await http_client.get("/api/client/conversations")
-        assert conversations.status_code == 200
-        assert conversations.json()["conversations"][0]["conversationId"] == "conv-1"
-
-        conversation = await http_client.get("/api/client/conversations/conv-1")
-        assert conversation.status_code == 200
-        assert conversation.json()["runs"][0]["runId"] == "run-1"
-
-        assert (await http_client.get("/api/client/runs/missing")).status_code == 404
-
-
-async def test_tasks_endpoint_returns_persisted_task_summaries(offline_config: SampleConfig, tmp_path: Path) -> None:
-    db_path = tmp_path / "tasks.sqlite3"
-    store = SqliteTaskStore(db_path)
-    task = Task(
-        id="task-1",
-        context_id="ctx-1",
-        status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
-        artifacts=[
-            Artifact(
-                artifact_id="artifact-1",
-                name="energy saving intent report",
-                parts=[Part(text="Plan applied to cell-001.")],
-            )
-        ],
-    )
-    await store.save(
-        task,
-        ServerCallContext(state={}, user=UnauthenticatedUser()),
-    )
-    config = replace(offline_config, task_db_path=str(db_path))
-    app = create_app(config, runs_dir=tmp_path, finished_grace_seconds=0.0)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
-        response = await http_client.get("/api/tasks")
-
-    assert response.status_code == 200
-    document = response.json()
-    assert document["enabled"] is True
-    assert len(document["tasks"]) == 1
-    row = document["tasks"][0]
-    assert row["taskId"] == "task-1"
-    assert row["contextId"] == "ctx-1"
-    assert row["state"] == "TASK_STATE_COMPLETED"
-    assert row["summary"] == "Plan applied to cell-001."
-
-
-async def test_tasks_endpoint_is_disabled_without_a_task_database(
-    client: httpx.AsyncClient,
-) -> None:
-    response = await client.get("/api/tasks")
-
-    assert response.status_code == 200
-    assert response.json() == {"enabled": False, "tasks": []}
 
 
 async def test_cli_defaults_are_exposed_and_used_when_the_body_omits_them(
@@ -1105,44 +988,6 @@ async def test_intent_mode_is_exposed_and_applied_per_run(
     assert invalid.status_code == 400
 
 
-async def test_root_serves_the_run_explorer_shell(client: httpx.AsyncClient) -> None:
-    response = await client.get("/")
-
-    assert response.status_code == 200
-    page = response.text
-    assert "RAN energy saving negotiation" in page
-    assert "/static/app.css" in page
-    assert "/static/js/main.js" in page
-    for marker in (
-        'id="run-id"',
-        'id="status-pill"',
-        'id="elapsed"',
-        'id="token-total"',
-        'id="follow-toggle"',
-        'id="context-strip"',
-        'id="phase-steps"',
-        'id="scenario-select"',
-        'id="start-button"',
-        'id="analysis"',
-        'id="decision-log"',
-        'id="timeline-toolbar"',
-        'id="timeline"',
-        'id="inspector-tabs"',
-        'id="inspector-body"',
-        'id="connection-state"',
-        'id="manual-pinned"',
-        'id="shortcuts-dialog"',
-    ):
-        assert marker in page, marker
-    assert 'role="tablist"' in page
-    assert 'data-tab="llm-request"' in page
-    assert 'data-tab="llm-response"' in page
-    assert 'data-tab="tool"' in page
-    # Payloads are built as DOM nodes; the shell must not contain an inline script or innerHTML.
-    assert "innerHTML" not in page
-    assert page.count("<script") == 1
-
-
 async def test_run_lifecycle_streams_sse_events(client: httpx.AsyncClient, runtimes: list[FakeRuntime]) -> None:
     start = await client.post(
         "/api/runs",
@@ -1198,62 +1043,6 @@ async def test_manual_decision_submission_advances_the_run(
     assert finished["transcript"]["decisions"][0]["action"] == "accept"
     assert finished["transcript"]["decisions"][0]["rationale"] == decision["rationale"]
     assert runtimes[0].closed is True
-
-
-async def test_manual_answer_parse_returns_a_preview_without_submitting(
-    client: httpx.AsyncClient,
-    runtimes: list[FakeRuntime],
-) -> None:
-    start = await client.post(
-        "/api/runs",
-        json={"scenario": "information", "mode": "manual", "transport": "sse"},
-    )
-    assert start.status_code == 202
-    run_id = start.json()["runId"]
-    await _wait_status(client, run_id, lambda data: data["pendingDecision"] is True)
-
-    response = await client.post(
-        f"/api/runs/{run_id}/decisions/parse",
-        json={"text": "The served region is Region A."},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["decision"]["action"] == "accept"
-    assert payload["decision"]["filled_params"] == {"region": "Region A"}
-    assert payload["missingItems"] == ["region"]
-    # Parsing is a preview only: the run is still waiting for the confirmed decision.
-    status = await client.get(f"/api/runs/{run_id}")
-    assert status.json()["pendingDecision"] is True
-
-    submitted = await client.post(
-        f"/api/runs/{run_id}/decisions",
-        json=payload["decision"],
-    )
-    assert submitted.status_code == 200
-    finished = await _wait_status(client, run_id, lambda data: data["status"] != "running")
-    assert finished["finalState"] == FINAL_STATE_TASK_COMPLETED
-
-
-async def test_manual_answer_parse_rejects_a_run_without_a_structurer(
-    client: httpx.AsyncClient,
-    runtimes: list[FakeRuntime],
-) -> None:
-    start = await client.post(
-        "/api/runs",
-        json={"scenario": "information", "mode": "manual", "transport": "sse"},
-    )
-    run_id = start.json()["runId"]
-    await _wait_status(client, run_id, lambda data: data["pendingDecision"] is True)
-    runtimes[0].manual_structurer = None
-
-    response = await client.post(
-        f"/api/runs/{run_id}/decisions/parse",
-        json={"text": "Region A"},
-    )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == "manual_parse_unavailable"
 
 
 async def test_cancel_endpoint_stops_a_running_run(
@@ -1339,9 +1128,9 @@ async def test_manual_decision_row_is_attributed_to_the_human(
         if payload["type"] == "event" and payload["event"].get("entryType") == "decision"
     ]
     assert len(decisions) == 1
-    span = await client.get(f"/api/runs/{run_id}/spans/{decisions[0]['spanId']}")
-    assert span.status_code == 200
-    assert span.json()["actor"] == "human"
+    document = (await client.get(f"/api/runs/{run_id}/trace.json")).json()
+    span = next(item for item in document["spans"] if item["spanId"] == decisions[0]["spanId"])
+    assert span["actor"] == "human"
 
 
 async def test_auto_run_does_not_expose_a_pending_manual_decision(
@@ -1455,7 +1244,6 @@ async def test_intent_review_gate_blocks_the_task_until_the_engineer_confirms(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="presentation",
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1612,8 +1400,6 @@ async def test_unknown_run_returns_404(client: httpx.AsyncClient) -> None:
     assert (
         await client.post("/api/runs/missing/decisions", json={"action": "accept", "rationale": "ok"})
     ).status_code == 404
-    assert (await client.get("/api/runs/missing/transcript.json")).status_code == 404
-    assert (await client.get("/api/runs/missing/transcript.md")).status_code == 404
 
 
 async def test_decision_without_a_pending_request_returns_409(client: httpx.AsyncClient) -> None:
@@ -1637,26 +1423,6 @@ async def test_invalid_start_bodies_are_rejected(client: httpx.AsyncClient) -> N
     assert (await client.post("/api/runs", json=bad_scenario)).status_code == 400
     assert (await client.post("/api/runs", json=bad_mode)).status_code == 400
     assert (await client.post("/api/runs", json=bad_transport)).status_code == 400
-
-
-async def test_transcript_downloads(client: httpx.AsyncClient) -> None:
-    start = await client.post("/api/runs", json={"scenario": "information", "mode": "auto", "transport": "sse"})
-    run_id = start.json()["runId"]
-    await _wait_status(client, run_id, lambda data: data["status"] == "finished")
-
-    json_response = await client.get(f"/api/runs/{run_id}/transcript.json")
-    markdown_response = await client.get(f"/api/runs/{run_id}/transcript.md")
-
-    assert json_response.status_code == 200
-    assert "application/json" in json_response.headers["content-type"]
-    document = json_response.json()
-    assert document["finalState"] == FINAL_STATE_TASK_COMPLETED
-    assert document["scenario"] == "information"
-    assert [entry["seq"] for entry in document["timeline"]] == sorted(entry["seq"] for entry in document["timeline"])
-    assert markdown_response.status_code == 200
-    assert "text/markdown" in markdown_response.headers["content-type"]
-    assert "RAN energy-saving negotiation transcript" in markdown_response.text
-    assert "| # | Seq | Phase | Step |" in markdown_response.text
 
 
 async def test_meta_exposes_the_default_request_per_scenario(client: httpx.AsyncClient) -> None:
@@ -1836,11 +1602,6 @@ async def test_trace_json_span_lookup_and_ingestion(client: httpx.AsyncClient) -
     assert [span["seq"] for span in spans] == sorted(span["seq"] for span in spans)
     assert {span["phase"] for span in spans} >= {"dispatch", "task_prompt", "done"}
 
-    lookup = await client.get(f"/api/runs/{run_id}/spans/{spans[0]['spanId']}")
-    assert lookup.status_code == 200
-    assert lookup.json()["spanId"] == spans[0]["spanId"]
-    assert (await client.get(f"/api/runs/{run_id}/spans/missing-span")).status_code == 404
-
     remote = {
         "spanId": "server-span-1",
         "parentSpanId": "client-span",
@@ -1862,8 +1623,9 @@ async def test_trace_json_span_lookup_and_ingestion(client: httpx.AsyncClient) -
     assert accepted.status_code == 202
     assert accepted.json() == {"accepted": 1, "runId": run_id}
 
-    stored = (await client.get(f"/api/runs/{run_id}/spans/server-span-1")).json()
-    assert stored["runId"] == run_id
+    document = (await client.get(f"/api/runs/{run_id}/trace.json")).json()
+    stored = next(span for span in document["spans"] if span["spanId"] == "server-span-1")
+    assert document["runId"] == run_id
     assert stored["seq"] > spans[-1]["seq"]
     assert stored["detail"]["model"] == "fake-model"
 
@@ -1880,7 +1642,8 @@ async def test_trace_json_span_lookup_and_ingestion(client: httpx.AsyncClient) -
         headers={"x-a2at-trace-token": TRACE_TOKEN},
     )
     assert wrapped.status_code == 202
-    assert (await client.get(f"/api/runs/{run_id}/spans/server-span-2")).status_code == 200
+    wrapped_document = (await client.get(f"/api/runs/{run_id}/trace.json")).json()
+    assert any(span["spanId"] == "server-span-2" for span in wrapped_document["spans"])
 
     # A retried batch is deduplicated by the original span id: no new row, no new SSE frame.
     repeat = await client.post(
@@ -2284,7 +2047,7 @@ def _nms_app(
         runs_dir=tmp_path,
         runtime_factory=factory,
         finished_grace_seconds=0.0,
-        ui_mode="explorer",
+        intent_review=False,
     )
     return app, app.state.run_manager
 

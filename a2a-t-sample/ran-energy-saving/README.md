@@ -7,7 +7,7 @@ executed. Every decision is model-driven; there is no scripted/offline decision 
 
 The same client serves two inbound surfaces:
 
-- a **Web UI** (presentation or run explorer) operated by an engineer;
+- a **Web UI** (presentation) operated by an engineer;
 - an **A2A gateway** for callers such as Gemini Enterprise.
 
 It also ships a **local RAN reference server** so the client can be exercised without a vendor.
@@ -36,7 +36,8 @@ A real `--nms` run always uses the webhook transport and requires
 `A2AT_SAMPLE_LONG_TASK_TRACKING=1` in the delivered `.env` template.
 
 3. Open `http://127.0.0.1:8080/`, choose the protocol (A2A-T or standard A2A), enter the
-   operator request, and review the evidence in `/runs`.
+   operator request, and review the wire capture in `runs/<runId>/wire.jsonl`; use `/tester` for
+   catalog-driven acceptance batches.
 
 ### Gateway for Gemini Enterprise
 
@@ -95,7 +96,7 @@ only.
 
 ## 4. Observability
 
-- `/runs` is the read-only run console: persisted runs, wire captures, transcript, trace timeline.
+- `/tester` is the acceptance console: catalog-driven batches, per-case evidence and export.
 - Every run writes `runs/<runId>/wire.jsonl` and `runs/<runId>/server-trace.jsonl`.
 - Langfuse export is optional (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`); without keys it is a
   no-op. It never changes a protocol result.

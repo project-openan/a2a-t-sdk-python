@@ -41,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         required=True,
-        choices=[mode for mode in SUPPORTED_MODES if mode != "scripted"],
+        choices=list(SUPPORTED_MODES),
     )
     parser.add_argument("--transport", required=True, choices=list(SUPPORTED_TRANSPORTS))
     parser.add_argument(
@@ -49,11 +49,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=list(SUPPORTED_DISCOVERY_MODES),
         help="run discovery default; the process .env value is used when omitted",
-    )
-    parser.add_argument(
-        "--ui-mode",
-        default="presentation",
-        choices=("presentation", "explorer"),
     )
     parser.add_argument(
         "--brand",
@@ -88,7 +83,6 @@ def run_ui(
     mode: str,
     transport: str,
     discovery: str | None = None,
-    ui_mode: str = "presentation",
     brand: str = BRAND_ORANGE,
     host: str = "127.0.0.1",
     server_url: str = "",
@@ -124,7 +118,6 @@ def run_ui(
             default_transport=transport,
             default_discovery=discovery,
             bind_host=host,
-            ui_mode=ui_mode,
             default_brand=brand,
             server_url=server_url or None,
             allow_insecure_bind=allow_insecure_bind,
@@ -140,7 +133,7 @@ def run_ui(
         return 2
     trace_enabled = bool(os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip())
     print(
-        f"[ui] Web UI on http://{host}:{ui_port} (ui_mode={ui_mode}) "
+        f"[ui] Web UI on http://{host}:{ui_port} "
         f"(language={config.language}, model_mode={config.model_mode} [{config.model_label}], "
         f"provider={config.adk_model_provider}, "
         f"defaults: scenario={scenario}, mode={mode}, transport={transport}, "
@@ -148,7 +141,6 @@ def run_ui(
         f"server trace ingestion: {'enabled' if trace_enabled else 'disabled (no local token)'})"
     )
     print(f"[ui] tester console on http://{host}:{ui_port}/tester")
-    print(f"[ui] run console on http://{host}:{ui_port}/runs")
     if not is_loopback(host):
         try:
             lan_ip = socket.gethostbyname(socket.gethostname())
@@ -181,7 +173,6 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         transport=args.transport,
         discovery=args.discovery,
-        ui_mode=args.ui_mode,
         brand=args.brand,
         server_url=args.server_url,
         allow_insecure_bind=args.allow_insecure_bind,

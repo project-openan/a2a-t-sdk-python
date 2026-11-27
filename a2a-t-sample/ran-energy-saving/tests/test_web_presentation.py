@@ -1,9 +1,8 @@
 """Contract tests of the audience-facing presentation page.
 
 The page is the demo default. These tests pin what it must expose (scenario presets, the stage,
-the negotiation rail, the evidence panels and the human decision card), what must never leak into
-the business view (transport, model or webhook wording) and that the Run Explorer stays available
-behind ``--ui-mode explorer``.
+the negotiation rail, the evidence panels and the human decision card) and what must never leak into
+the business view (transport, model or webhook wording).
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ import httpx
 import pytest
 from demo.web.app import PRESENTATION_DIR, create_app
 from shared.config import SampleConfig
-from shared.trace import PHASE_TASK_MODIFY, PHASES
 
 #: Modules the page loads directly or transitively.
 PRESENTATION_MODULES = (
@@ -47,19 +45,6 @@ async def client(
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
         yield http_client
-
-
-def test_run_explorer_phase_vocabulary_matches_the_python_contract() -> None:
-    """The Run Explorer's JS phase list must not drift from the Python trace vocabulary."""
-    source = (PRESENTATION_DIR.parent / "static" / "js" / "store.js").read_text(encoding="utf-8")
-    base_block = re.search(r"export const PHASES = \[(.*?)\];", source, re.S)
-    optional_block = re.search(r"export const OPTIONAL_PHASES = \[(.*?)\];", source, re.S)
-    assert base_block is not None
-    assert optional_block is not None
-    base = tuple(re.findall(r'key: "([^"]+)"', base_block.group(1)))
-    optional = tuple(re.findall(r'key: "([^"]+)"', optional_block.group(1)))
-    assert base == PHASES
-    assert PHASE_TASK_MODIFY in optional
 
 
 async def test_root_serves_the_presentation_shell(client: httpx.AsyncClient) -> None:
@@ -148,7 +133,6 @@ async def test_meta_reports_the_presentation_mode_and_the_seven_scenarios(
 ) -> None:
     meta = (await client.get("/api/meta")).json()
 
-    assert meta["uiMode"] == "presentation"
     assert meta["defaultBrand"] == "orange"
     assert meta["brands"] == ["orange", "huawei"]
     assert meta["scenarios"] == [
@@ -437,11 +421,6 @@ def test_huawei_brand_css_keeps_the_semantic_and_focus_layers() -> None:
         assert marker in css, marker
 
 
-async def test_unknown_ui_mode_is_rejected(offline_config: SampleConfig, tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="Unsupported ui mode"):
-        create_app(offline_config, runs_dir=tmp_path, ui_mode="cinema")
-
-
 async def test_unknown_brand_is_rejected(offline_config: SampleConfig, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported presentation brand"):
         create_app(offline_config, runs_dir=tmp_path, default_brand="nokia")
@@ -485,18 +464,6 @@ async def test_process_language_is_injected_before_the_copy_pass(
     assert "__A2AT_LANGUAGE__" not in page
     # The bootstrap hides the Chinese template until the copy pass reveals it.
     assert 'document.documentElement.setAttribute("data-locale-pending", "")' in page
-
-
-async def test_explorer_mode_still_serves_the_run_explorer(
-    offline_config: SampleConfig,
-    tmp_path: Path,
-) -> None:
-    app = create_app(offline_config, runs_dir=tmp_path, ui_mode="explorer")
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
-        page = (await http_client.get("/")).text
-
-    assert "/static/js/main.js" in page
 
 
 def _node_binary() -> str:
