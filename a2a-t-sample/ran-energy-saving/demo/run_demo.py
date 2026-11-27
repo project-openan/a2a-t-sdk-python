@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Final, TextIO
 from urllib.parse import urlsplit
 
+from dotenv import dotenv_values
 from shared.config import (
     PURE_HOP_ENV_KEY,
     PURE_HOP_NMS,
@@ -173,17 +174,22 @@ def _resolve_source_env(explicit: str) -> tuple[Path | None, str | None]:
 
 
 def _read_env(path: Path) -> dict[str, str]:
-    """Read one dotenv file as plain string values."""
-    values: dict[str, str] = {}
+    """Read one dotenv file as plain string values, with python-dotenv's quoting rules.
+
+    This is the launcher's only .env parser, and its values are written back into the per-run
+    .env *and* exported into ``os.environ`` (see :func:`_export_observability_env`). It therefore
+    has to parse exactly like :mod:`shared.config` and :mod:`shared.sdk_env`, which use
+    ``dotenv_values``: a hand-rolled ``key=value`` split kept the surrounding quotes, so a
+    quoted ``LANGFUSE_SECRET_KEY`` reached every child as a 44-character credential and Langfuse
+    answered HTTP 401 "Invalid credentials" for a key that looked correct everywhere.
+    """
     if not path.exists():
-        return values
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        values[key.strip()] = value.strip()
-    return values
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in dotenv_values(path).items()
+        if key is not None and value is not None
+    }
 
 
 def _env_str(values: dict[str, str], key: str, default: str = "") -> str:

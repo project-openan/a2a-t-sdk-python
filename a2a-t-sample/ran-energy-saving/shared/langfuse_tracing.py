@@ -780,9 +780,11 @@ def _retrying_otlp_exporter(config: SampleConfig) -> Any | None:
     except Exception:  # noqa: BLE001 - fall back to the SDK default exporter
         return None
     _LOGGER.info(
-        "Langfuse OTLP exporter ready: compression=%s endpoint=%s",
+        "Langfuse OTLP exporter ready: compression=%s endpoint=%s publicKey=%s secretKeyLen=%d",
         "gzip" if compression is not None else "none",
         endpoint,
+        config.langfuse_public_key,
+        len(config.langfuse_secret_key),
     )
     _instrument_otlp_client(exporter)
     return _audited_exporter(exporter)

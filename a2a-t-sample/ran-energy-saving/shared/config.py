@@ -452,6 +452,21 @@ def _env_value(values: dict[str, str | None], key: str, default: str) -> str:
     return default
 
 
+def _langfuse_key(values: dict[str, str | None], key: str) -> str:
+    """Resolve one Langfuse key and drop accidental wrapping quotes.
+
+    ``dotenv_values`` already unquotes a file value, but a Windows shell export keeps its quotes
+    (``set LANGFUSE_SECRET_KEY="sk-..."``). Those two characters travel inside the OTLP Basic
+    credential, and Langfuse answers HTTP 401 "Invalid credentials" for a key that looks correct
+    in every log. A Langfuse key never contains quotes, so dropping them is safe.
+    """
+    value = _env_value(values, key, "")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        _LOGGER.warning("%s is wrapped in %s quotes; stripping them", key, value[0])
+        return value[1:-1].strip()
+    return value
+
+
 def _env_int(values: dict[str, str | None], key: str, default: int) -> int:
     """Resolve one integer key, raising a readable error on invalid input."""
     raw_value = _env_value(values, key, str(default))
@@ -1048,8 +1063,8 @@ def load_config(*, env_path: Path | None = None) -> SampleConfig:
         planner_api_key=_env_value(values, PLANNER_API_KEY_ENV_KEY, adk_model_api_key),
         planner_timeout_seconds=_positive_seconds(values, PLANNER_TIMEOUT_ENV_KEY, DEFAULT_LLM_TIMEOUT_SECONDS),
         planner_max_steps=_positive_int(values, PLANNER_MAX_STEPS_ENV_KEY, DEFAULT_PLANNER_MAX_STEPS),
-        langfuse_public_key=_env_value(values, LANGFUSE_PUBLIC_KEY_ENV_KEY, "").strip(),
-        langfuse_secret_key=_env_value(values, LANGFUSE_SECRET_KEY_ENV_KEY, "").strip(),
+        langfuse_public_key=_langfuse_key(values, LANGFUSE_PUBLIC_KEY_ENV_KEY),
+        langfuse_secret_key=_langfuse_key(values, LANGFUSE_SECRET_KEY_ENV_KEY),
         langfuse_base_url=_env_value(values, LANGFUSE_BASE_URL_ENV_KEY, DEFAULT_LANGFUSE_BASE_URL).rstrip("/"),
         langfuse_ui_base_url=_env_value(
             values, LANGFUSE_UI_BASE_URL_ENV_KEY, DEFAULT_LANGFUSE_UI_BASE_URL

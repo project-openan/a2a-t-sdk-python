@@ -742,6 +742,73 @@ def test_observability_keys_from_the_selected_file_reach_child_processes(
     assert "A2AT_SAMPLE_RUNS_DIR" not in os.environ
 
 
+def test_read_env_applies_dotenv_quoting_and_export_prefix(tmp_path: Path) -> None:
+    """The launcher must parse a .env exactly like python-dotenv does.
+
+    A quoted value used to keep its quotes, so the launcher exported ``"sk-..."`` (44 characters)
+    to every child and the OTLP Basic credential carried those two extra characters.
+    """
+    source = tmp_path / "source.env"
+    source.write_text(
+        'LANGFUSE_PUBLIC_KEY="pk-lf-b822aaa6-e1b6-4e98-a16c-4c7537f9f30d"\n'
+        "LANGFUSE_SECRET_KEY='sk-lf-94386c80-138f-4ead-b2fd-5ef7a5e74540'\n"
+        "export A2AT_SAMPLE_RUNS_DIR=runs\n",
+        encoding="utf-8",
+    )
+
+    values = run_demo._read_env(source)
+
+    assert values["LANGFUSE_PUBLIC_KEY"] == "pk-lf-b822aaa6-e1b6-4e98-a16c-4c7537f9f30d"
+    assert values["LANGFUSE_SECRET_KEY"] == "sk-lf-94386c80-138f-4ead-b2fd-5ef7a5e74540"
+    assert len(values["LANGFUSE_SECRET_KEY"]) == 42
+    assert values["A2AT_SAMPLE_RUNS_DIR"] == "runs"
+    assert values == {key: value for key, value in dotenv_values(source).items() if value is not None}
+
+
+def test_quoted_langfuse_keys_reach_the_child_config_unquoted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The launcher exports the selected file's OTel keys, so quoting must be gone before that.
+
+    The children read ``os.environ`` before their ``.env``; a quoted export therefore decides the
+    Langfuse credential for the whole process tree.
+    """
+    from shared.config import load_config
+
+    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    source = tmp_path / "source.env"
+    source.write_text(
+        "A2AT_LANGUAGE=en-US\n"
+        'LANGFUSE_PUBLIC_KEY="pk-lf-b822aaa6-e1b6-4e98-a16c-4c7537f9f30d"\n'
+        'LANGFUSE_SECRET_KEY="sk-lf-94386c80-138f-4ead-b2fd-5ef7a5e74540"\n',
+        encoding="utf-8",
+    )
+    run_demo._export_observability_env(run_demo._read_env(source))
+
+    config = load_config(env_path=source)
+
+    assert config.langfuse_public_key == "pk-lf-b822aaa6-e1b6-4e98-a16c-4c7537f9f30d"
+    assert config.langfuse_secret_key == "sk-lf-94386c80-138f-4ead-b2fd-5ef7a5e74540"
+
+
+def test_load_config_drops_quotes_exported_around_a_langfuse_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A Windows shell export keeps its quotes; a Langfuse key never contains them."""
+    from shared.config import load_config
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", '"pk-lf-test"')
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "'sk-lf-test'")
+    source = tmp_path / "source.env"
+    source.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
+
+    config = load_config(env_path=source)
+
+    assert config.langfuse_public_key == "pk-lf-test"
+    assert config.langfuse_secret_key == "sk-lf-test"
+
+
 class _FakeChild:
     """Minimal ``Popen`` stand-in that records the env of every started child."""
 
