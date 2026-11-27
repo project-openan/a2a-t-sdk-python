@@ -167,7 +167,6 @@ def write_report(
         "基线 taskId",
         "基线 state",
         "基线错误",
-        "决策模式",
         "传输",
         "发现",
         "拦截校验",
@@ -203,7 +202,6 @@ def write_report(
             baseline_map.get("taskId", ""),
             baseline_map.get("state", ""),
             baseline_map.get("error", ""),
-            batch.get("decisionMode", ""),
             batch.get("transport", ""),
             batch.get("discovery", ""),
             _interception_verdict(item),
@@ -294,7 +292,6 @@ def write_report(
     for key, value in summary_map.items():
         summary.append([key, value])
     summary.append(["stopAfter", batch.get("stopAfter", "")])
-    summary.append(["decisionMode", batch.get("decisionMode", "")])
     summary.append(["keepTasks", batch.get("keepTasks", "")])
     summary.append(["concurrency", batch.get("concurrency", 1)])
     if multi:

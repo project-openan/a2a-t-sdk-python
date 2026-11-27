@@ -139,13 +139,7 @@ async function loadMeta() {
   rounds.max = String(meta?.maxRounds || 1);
   rounds.value = String(meta?.defaults?.rounds || 1);
   syncRoundsKeepTasks();
-  const liveEnabled = (meta?.modelMode || "") !== "offline";
-  const decision = $("config-decision");
-  decision.value = meta?.defaults?.decisionMode || "scripted";
-  decision.querySelector('option[value="live"]').disabled = !liveEnabled;
-  if (!liveEnabled) decision.title = "离线模式只能使用 scripted";
-  $("scratch-decision").querySelector('option[value="live"]').disabled = !liveEnabled;
-  const sources = meta?.negotiationSources || ["script"];
+  const sources = meta?.negotiationSources || ["agent"];
   for (const id of ["config-negotiation-source", "scratch-negotiation-source"]) {
     const select = $(id);
     clear(select);
@@ -158,24 +152,7 @@ async function loadMeta() {
       option.value = source;
       select.append(option);
     }
-    select.value = meta?.defaults?.negotiationSource || "script";
-  }
-  syncNegotiationSources();
-}
-
-function syncNegotiationSources() {
-  const liveEnabled = (state.meta?.modelMode || "") !== "offline";
-  for (const [decisionId, sourceId] of [
-    ["config-decision", "config-negotiation-source"],
-    ["scratch-decision", "scratch-negotiation-source"],
-  ]) {
-    const decision = $(decisionId);
-    const select = $(sourceId);
-    const agent = select.querySelector('option[value="agent"]');
-    if (!agent) continue;
-    const allowed = liveEnabled && decision.value === "live";
-    agent.disabled = !allowed;
-    if (!allowed && select.value === "agent") select.value = "script";
+    select.value = meta?.defaults?.negotiationSource || "agent";
   }
 }
 
@@ -311,7 +288,6 @@ async function startBatch() {
       caseIds,
       protocols,
       stopAfter: $("config-stop-after").value,
-      decisionMode: $("config-decision").value,
       negotiationSource: $("config-negotiation-source").value,
       timeoutSeconds: $("config-timeout").value === "" ? null : Number($("config-timeout").value),
       workingTimeoutSeconds:
@@ -344,7 +320,6 @@ async function startScratch() {
     const created = await postJson("/api/tester/scratch", {
       userInput,
       protocol: $("scratch-protocol").value,
-      decisionMode: $("scratch-decision").value,
       negotiationSource: $("scratch-negotiation-source").value,
       timeoutSeconds: Number($("scratch-timeout").value) || 300,
       keepTasks: $("config-keep-tasks").checked,
@@ -515,12 +490,11 @@ async function loadHistory() {
   clear(select);
   wrap.hidden = state.history.length === 0;
   for (const batch of state.history) {
-    const mode = batch.decisionMode ? ` · ${batch.decisionMode}` : "";
     const transport = batch.transport ? ` · ${batch.transport}` : "";
     const keep = batch.keepTasks ? " · 保留任务" : "";
     const concurrency = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
     const rounds = batch.rounds > 1 ? ` · ${batch.rounds} 轮` : "";
-    const option = el("option", "", `${batch.stopAfter || "final"}${mode}${transport}${keep}${concurrency}${rounds} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
+    const option = el("option", "", `${batch.stopAfter || "final"}${transport}${keep}${concurrency}${rounds} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
     option.value = batch.batchId;
     select.append(option);
   }
@@ -587,9 +561,7 @@ function durationText(ms) {
 }
 
 function tokenText(tokens) {
-  if (!tokens || tokens.available !== true) {
-    return tokens?.scripted === true ? "离线脚本" : "—";
-  }
+  if (!tokens || tokens.available !== true) return "—";
   const total = typeof tokens.total === "number" ? tokens.total.toLocaleString() : "—";
   return `${total}`;
 }
@@ -1167,7 +1139,7 @@ function renderResultTab(item, body) {
     block.append(el("strong", "", "历史尝试"));
     for (const attempt of attempts) {
       const line = el("div", "attempt-line");
-      line.append(el("span", "summary", `${attempt.decisionMode || ""} · ${statusLabel(attempt.status)} · ${attempt.finishedAt || ""}`));
+      line.append(el("span", "summary", `${statusLabel(attempt.status)} · ${attempt.finishedAt || ""}`));
       if (attempt.runId) {
         const wire = el("a", "run-link", `wire ${attempt.runId}`);
         wire.href = `/api/runs/${encodeURIComponent(attempt.runId)}/wire`;
@@ -1705,8 +1677,6 @@ function wireEvents() {
     renderResults();
   });
   $("config-rounds").addEventListener("input", syncRoundsKeepTasks);
-  $("config-decision").addEventListener("change", syncNegotiationSources);
-  $("scratch-decision").addEventListener("change", syncNegotiationSources);
   $("drawer-close").addEventListener("click", closeDrawer);
   $("drawer-backdrop").addEventListener("click", closeDrawer);
   $("drawer-tab-result").addEventListener("click", () => switchDrawerTab("result"));

@@ -138,11 +138,6 @@ CASE_ERROR: Final[str] = "error"
 #: At least one stage is ``waiting`` but none failed: the request is not proven either way.
 CASE_PARTIAL: Final[str] = "partial"
 
-#: Decision mode of a batch. The tester always exercises the live client agent.
-DECISION_MODE_LIVE: Final[str] = "live"
-DECISION_MODES: Final[tuple[str, ...]] = (DECISION_MODE_LIVE,)
-DEFAULT_DECISION_MODE: Final[str] = DECISION_MODE_LIVE
-
 #: How many items one batch runs at the same time unless the operator asks for more. One keeps
 #: the historical sequential behaviour, including its single ``current_index``.
 DEFAULT_CONCURRENCY: Final[int] = 1
@@ -161,12 +156,6 @@ DEFAULT_ROUNDS: Final[int] = 1
 MAX_ROUNDS: Final[int] = 8
 
 
-def default_decision_mode(model_mode: str) -> str:
-    """Return the default decision mode of a tester process."""
-    del model_mode
-    return DEFAULT_DECISION_MODE
-
-
 #: The client agent authors every negotiation reply.
 NEGOTIATION_SOURCE_AGENT: Final[str] = "agent"
 NEGOTIATION_SOURCES: Final[tuple[str, ...]] = (NEGOTIATION_SOURCE_AGENT,)
@@ -177,7 +166,7 @@ def default_negotiation_source(model_mode: str) -> str:
     del model_mode
     return NEGOTIATION_SOURCE_AGENT
 
-#: Persisted batch schema; v1-v4 batches are still readable and load as the script source.
+#: Persisted batch schema; v1-v4 batches are still readable and load with the live defaults.
 SCHEMA: Final[str] = "osp-tester/v5"
 SCHEMA_V1: Final[str] = "osp-tester/v1"
 SCHEMA_V2: Final[str] = "osp-tester/v2"
@@ -316,9 +305,8 @@ BASELINE_WINDOW: Final[str] = "00:00-06:00"
 #: One-day rate plan of the shared fallback baseline: the Task-T the testers use as the manual
 #: baseline (``00:00-07:00 2Mbps``, ``07:00-18:00 10Mbps``, ``18:00-24:00 20Mbps``). It is a
 #: complete Create the vendor accepts without a pre-task negotiation, so baselines reuse it instead
-#: of inventing a per-site plan. The plan is written in prose: an explicit
-#: ``{HH:MM-HH:MM,NMbps}`` list is rewritten by the scripted provider into the Task Context and
-#: then fails semantic validation on the offline path. Every Modify case ships its own
+#: of inventing a per-site plan. The plan is written in prose rather than an explicit
+#: ``{HH:MM-HH:MM,NMbps}`` list. Every Modify case ships its own
 #: ``baseline.request`` (see eval/osp/README.md 3.5); this plan is the fallback.
 BASELINE_SCHEDULE: Final[str] = (
     "guarantee 2Mbps from 00:00 to 07:00, 10Mbps from 07:00 to 18:00 "
@@ -501,8 +489,7 @@ class _Batch:
     #: request on each protocol side). They are reported instead of silently disappearing.
     excluded_case_ids: list[int] = field(default_factory=list)
     working_timeout_seconds: float | None = None
-    decision_mode: str = DECISION_MODE_LIVE
-    #: Who authors a case's negotiation reply: ``agent`` (live decision agent) or ``script``.
+    #: Who authors a case's negotiation reply: the live decision agent.
     negotiation_source: str = NEGOTIATION_SOURCE_AGENT
     #: Shared negotiation principles frozen when the batch is created (P1 fills these).
     principles_version: str = ""
@@ -621,7 +608,7 @@ class EvalBatchManager:
         #: Deployment hop of a standard-A2A run. ``oss`` is the deprecated proxy: it cannot host
         #: an agent-authored reply, because that answer would measure the proxy, not the client.
         self._pure_hop = pure_hop
-        #: One SDK client per model mode: a live batch must not reuse the offline scripted client.
+        #: One SDK client per model mode; a client is reused only within its own model mode.
         self._prompt_clients: dict[str, Any] = {}
         #: Idle clients per model mode, used only by the concurrent path. Each pool slot owns one
         #: client because ``A2ATClient`` is not documented as thread-safe.
@@ -659,7 +646,6 @@ class EvalBatchManager:
         stop_after: str,
         timeout_seconds: float | None = None,
         working_timeout_seconds: float | None = None,
-        decision_mode: str | None = None,
         negotiation_source: str | None = None,
         principles_version: str | None = None,
         nms_version: str | None = None,
@@ -687,12 +673,8 @@ class EvalBatchManager:
         resolved_rounds = validate_rounds(rounds)
         if resolved_rounds > DEFAULT_ROUNDS and keep_tasks:
             raise ValueError("多轮批次不支持保留任务。")
-        resolved_decision_mode = self._validate_decision_mode(
-            decision_mode or default_decision_mode(self._model_mode)
-        )
         resolved_negotiation_source = self._validate_negotiation_source(
-            negotiation_source or default_negotiation_source(self._model_mode),
-            resolved_decision_mode,
+            negotiation_source or default_negotiation_source(self._model_mode)
         )
         # The shared principles are frozen with the batch: a later edit of the asset must not
         # change what this batch's agent was told when it decided.
@@ -734,7 +716,6 @@ class EvalBatchManager:
             stop_after=stop_after,
             timeout_seconds=_positive_or_none(timeout_seconds),
             working_timeout_seconds=_positive_or_none(working_timeout_seconds),
-            decision_mode=resolved_decision_mode,
             negotiation_source=resolved_negotiation_source,
             principles_version=principles.version,
             principles_text=principles.text,
@@ -760,7 +741,6 @@ class EvalBatchManager:
         user_input: str,
         protocol: str,
         timeout_seconds: float | None = 300.0,
-        decision_mode: str | None = None,
         negotiation_source: str | None = None,
         keep_tasks: bool = False,
         owner: str = "",
@@ -772,12 +752,8 @@ class EvalBatchManager:
             raise ValueError("临时请求不能为空。")
         if protocol not in {PROTOCOL_A2A_T, PROTOCOL_A2A}:
             raise ValueError(f"unknown protocol {protocol!r}")
-        resolved_decision_mode = self._validate_decision_mode(
-            decision_mode or default_decision_mode(self._model_mode)
-        )
         resolved_negotiation_source = self._validate_negotiation_source(
-            negotiation_source or default_negotiation_source(self._model_mode),
-            resolved_decision_mode,
+            negotiation_source or default_negotiation_source(self._model_mode)
         )
         principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
@@ -788,7 +764,6 @@ class EvalBatchManager:
             protocols=[protocol],
             stop_after="accepted",
             timeout_seconds=_positive_or_none(timeout_seconds) or 300.0,
-            decision_mode=resolved_decision_mode,
             negotiation_source=resolved_negotiation_source,
             principles_version=principles.version,
             principles_text=principles.text,
@@ -803,15 +778,7 @@ class EvalBatchManager:
         self._persist(batch)
         return self._snapshot(batch)
 
-    def _validate_decision_mode(self, decision_mode: str) -> str:
-        """Validate one batch decision mode; a live batch requires an online model."""
-        if decision_mode not in DECISION_MODES:
-            raise ValueError(f"unknown decision_mode {decision_mode!r}")
-        return decision_mode
-
-    def _validate_negotiation_source(
-        self, negotiation_source: str, decision_mode: str | None = None
-    ) -> str:
+    def _validate_negotiation_source(self, negotiation_source: str) -> str:
         """Validate one batch reply source."""
         if negotiation_source not in NEGOTIATION_SOURCES:
             raise ValueError(f"unknown negotiation_source {negotiation_source!r}")
@@ -996,7 +963,6 @@ class EvalBatchManager:
             stop_after=batch.stop_after,
             timeout_seconds=batch.timeout_seconds,
             working_timeout_seconds=batch.working_timeout_seconds,
-            decision_mode=batch.decision_mode,
             keep_tasks=batch.keep_tasks,
             concurrency=batch.concurrency,
             rounds=batch.rounds,
@@ -1052,7 +1018,6 @@ class EvalBatchManager:
                     "finishedAt": document.get("finishedAt"),
                     "summary": document.get("summary", {}),
                     "stopAfter": document.get("stopAfter"),
-                    "decisionMode": document.get("decisionMode"),
                     "keepTasks": bool(document.get("keepTasks")),
                     "concurrency": _clamp_concurrency(document.get("concurrency")),
                     "rounds": _clamp_rounds(document.get("rounds")),
@@ -1187,7 +1152,6 @@ class EvalBatchManager:
             {
                 "runId": item.run_id,
                 "round": item.round_index,
-                "decisionMode": batch.decision_mode,
                 "status": item.status,
                 "finishedAt": _now_iso(),
             }
@@ -1421,7 +1385,6 @@ class EvalBatchManager:
                     case,
                     item,
                     batch.stop_after,
-                    batch.decision_mode,
                     outcome_case=effective_case if blocked_followup else None,
                     concurrent=concurrent,
                 )
@@ -1471,7 +1434,6 @@ class EvalBatchManager:
         case: Mapping[str, Any],
         item: CaseItem,
         stop_after: str,
-        decision_mode: str = DECISION_MODE_LIVE,
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
@@ -1491,7 +1453,6 @@ class EvalBatchManager:
             results, interception, error = await self._sdk_stage_results(
                 case,
                 stop_after,
-                decision_mode,
                 outcome_case=outcome_case,
                 concurrent=concurrent,
             )
@@ -1514,7 +1475,6 @@ class EvalBatchManager:
         self,
         case: Mapping[str, Any],
         stop_after: str,
-        decision_mode: str,
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
@@ -3263,15 +3223,9 @@ class EvalBatchManager:
             if isinstance(item, Mapping)
         ]
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
-        loaded_decision_mode = DECISION_MODE_LIVE
         loaded_version = _optional_text(document.get("principlesVersion"))
         loaded_text = _optional_text(document.get("principlesText"))
-        try:
-            loaded_source = self._validate_negotiation_source(
-                _loaded_negotiation_source(document), loaded_decision_mode
-            )
-        except ValueError:
-            loaded_source = NEGOTIATION_SOURCE_AGENT
+        loaded_source = _loaded_negotiation_source(document)
         if loaded_source == NEGOTIATION_SOURCE_AGENT and not loaded_text:
             try:
                 loaded_principles = load_principles(loaded_version or None)
@@ -3287,7 +3241,6 @@ class EvalBatchManager:
             stop_after=str(document.get("stopAfter") or "accepted"),
             timeout_seconds=_optional_float(document.get("timeoutSeconds")),
             working_timeout_seconds=_optional_float(document.get("workingTimeoutSeconds")),
-            decision_mode=loaded_decision_mode,
             negotiation_source=loaded_source,
             principles_version=loaded_version,
             principles_text=loaded_text,
@@ -3363,9 +3316,7 @@ class EvalBatchManager:
             "stopAfter": batch.stop_after,
             "timeoutSeconds": batch.timeout_seconds,
             "workingTimeoutSeconds": batch.working_timeout_seconds,
-            "decisionMode": batch.decision_mode,
-            # Who authors a case's negotiation reply (``agent`` / ``script``). A batch created
-            # before the switch replayed the case script.
+            # Who authors a case's negotiation reply: ``agent`` for every tester batch.
             "negotiationSource": batch.negotiation_source,
             "principlesVersion": batch.principles_version,
             "principlesText": batch.principles_text,
@@ -3754,7 +3705,6 @@ def _status_batch(batch: _Batch) -> dict[str, object]:
         "concurrency": batch.active_concurrency,
         "keepTasks": batch.keep_tasks,
         "stopAfter": batch.stop_after,
-        "decisionMode": batch.decision_mode,
         "negotiationSource": batch.negotiation_source,
         "transport": batch.transport,
         "discovery": batch.discovery,
@@ -4422,8 +4372,6 @@ __all__ = [
     "CASE_PASSED",
     "CASE_PENDING",
     "CASE_RUNNING",
-    "DECISION_MODES",
-    "DECISION_MODE_LIVE",
     "DEFAULT_CONCURRENCY",
     "DEFAULT_ROUNDS",
     "DEFAULT_WORKING_TIMEOUT_SECONDS",

@@ -53,7 +53,6 @@ def _batch() -> dict[str, object]:
         "stopAfter": "negotiate",
         "transport": "webhook",
         "discovery": "nms",
-        "decisionMode": "live",
         "excludedCaseIds": [22],
         "items": [
             item("run-a2at", "a2a-t", "passed", 1),

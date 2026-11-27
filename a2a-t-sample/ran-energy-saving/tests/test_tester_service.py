@@ -26,7 +26,6 @@ from demo.web.tester.service import (
     CASE_PASSED,
     CASE_PENDING,
     CASE_RUNNING,
-    DECISION_MODE_LIVE,
     DEFAULT_CONCURRENCY,
     DEFAULT_ROUNDS,
     MAX_CONCURRENCY,
@@ -847,14 +846,13 @@ async def test_the_case_runner_block_drives_the_run(tmp_path: Path) -> None:
     assert manager._resolved_timeout(batch, case) == 7
 
 
-async def test_live_decision_mode_uses_auto_for_a2a_t(tmp_path: Path) -> None:
+async def test_an_a2a_t_run_uses_the_auto_decision_mode(tmp_path: Path) -> None:
     manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
     created = manager.create(
         case_ids=[1],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
         timeout_seconds=2,
-        decision_mode=DECISION_MODE_LIVE,
     )
 
     await manager.start(str(created["batchId"]))
@@ -863,7 +861,7 @@ async def test_live_decision_mode_uses_auto_for_a2a_t(tmp_path: Path) -> None:
     runs = manager._runs
     assert isinstance(runs, _FakeRuns)
     assert runs.calls[0]["mode"] == MODE_AUTO
-    assert manager.get(str(created["batchId"]))["decisionMode"] == DECISION_MODE_LIVE
+    assert "decisionMode" not in created
 
 
 def test_an_unknown_negotiation_source_is_rejected(tmp_path: Path) -> None:
@@ -1151,20 +1149,6 @@ def test_a_persisted_batch_without_a_stage_loads_as_accepted(tmp_path: Path) -> 
 
     assert snapshot is not None
     assert snapshot["stopAfter"] == "accepted"
-
-
-def test_an_agent_source_needs_the_live_decision_mode(tmp_path: Path) -> None:
-    """A live process still cannot pair the agent source with the scripted decision mode."""
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
-
-    with pytest.raises(ValueError):
-        manager.create(
-            case_ids=[1],
-            protocols=[PROTOCOL_A2A_T],
-            stop_after="validate",
-            decision_mode="scripted",
-            negotiation_source="agent",
-        )
 
 
 def test_create_freezes_the_shared_principles(tmp_path: Path) -> None:
@@ -1696,11 +1680,8 @@ async def test_an_a2a_t_modify_continues_the_task_it_just_created(tmp_path: Path
 async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
     tmp_path: Path,
 ) -> None:
-    """A live batch must not seed the baseline with the empty scripted decision script.
-
-    The baseline is a normal Create, but the server may still ask a question (INPUT_REQUIRED).
-    ``MODE_SCRIPTED`` with no scripted decisions then fails with "The scripted decision sequence
-    is exhausted" before the Modify is ever sent.
+    """The baseline is a normal Create, but the server may still ask a question (INPUT_REQUIRED)
+    before the Modify is ever sent; it must keep the live decision mode throughout.
     """
     runs = _FakeRuns(_seed_then_modify(TASK_STATE_SUBMITTED))
     manager = _manager(tmp_path, runs, model_mode="live")
@@ -1709,7 +1690,6 @@ async def test_a_live_a2a_t_modify_baseline_uses_the_live_decision_provider(
         protocols=[PROTOCOL_A2A_T],
         stop_after="send",
         timeout_seconds=2,
-        decision_mode=DECISION_MODE_LIVE,
     )
 
     await manager.start(str(created["batchId"]))
@@ -2660,19 +2640,6 @@ async def test_shutdown_releases_the_runs_of_finished_batches(tmp_path: Path) ->
     await manager.shutdown()
 
     assert [run_id for run_id, _ in runs.released] == ["run-1"]
-
-
-def test_the_default_decision_mode_is_live_for_an_online_model(tmp_path: Path) -> None:
-    manager = _manager(tmp_path, _FakeRuns(_finish), model_mode="live")
-
-    created = manager.create(
-        case_ids=[1],
-        protocols=[PROTOCOL_A2A_T],
-        stop_after="validate",
-        timeout_seconds=None,
-    )
-
-    assert created["decisionMode"] == "live"
 
 
 async def test_a_rerun_clears_the_previous_arbitration_evidence(tmp_path: Path) -> None:

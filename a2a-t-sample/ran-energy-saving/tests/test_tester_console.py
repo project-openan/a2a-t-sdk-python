@@ -254,7 +254,8 @@ async def test_the_meta_lists_the_stage_chain(client: httpx.AsyncClient) -> None
         "final",
     ]
     assert payload["stageOrder"] == payload["stopAfter"]
-    assert payload["decisionModes"] == ["live"]
+    assert "decisionModes" not in payload
+    assert "decisionMode" not in payload["defaults"]
     assert payload["defaults"]["workingTimeoutSeconds"] == 60
     assert payload["runnerDefaultsIndicateCase"] is True
     assert payload["transport"] in {"sse", "webhook"}
@@ -871,8 +872,8 @@ async def test_meta_exposes_the_acceptance_stage_model_and_transport(
         assert stage in stage_order
     assert stage_order.index("accepted") < stage_order.index("working") < stage_order.index("final")
     assert meta["defaults"]["stopAfter"] == "accepted"
-    assert meta["defaults"]["decisionMode"] == "live"
-    assert meta["decisionModes"] == ["live"]
+    assert "decisionMode" not in meta["defaults"]
+    assert "decisionModes" not in meta
     assert meta["transport"] in {"sse", "webhook"}
     assert meta["discovery"]
 
@@ -917,7 +918,7 @@ def test_the_tester_page_binds_the_case_detail_drawer_and_rerun() -> None:
         "drawer-tab-result",
         "drawer-tab-trace",
         "drawer-tab-case",
-        "config-decision",
+        "config-negotiation-source",
         "config-working-timeout",
     ):
         assert re.search(rf'id="{element_id}"', page), element_id

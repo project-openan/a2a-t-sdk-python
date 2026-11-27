@@ -101,7 +101,6 @@ def _context(batch: Mapping[str, Any]) -> list[str]:
         f"| 协议 | {', '.join(str(p) for p in batch.get('protocols') or [])} |",
         f"| 执行到 | {batch.get('stopAfter')} |",
         f"| transport / discovery | {batch.get('transport')} / {batch.get('discovery')} |",
-        f"| decisionMode | {batch.get('decisionMode')} |",
         f"| 用例数 | {len(batch.get('items') or [])} 项 / {len(batch.get('pairs') or [])} 对 |",
         f"| 排除用例（blocked，两臂文本不同） | {', '.join(str(v) for v in excluded) or '无'} |",
     ]

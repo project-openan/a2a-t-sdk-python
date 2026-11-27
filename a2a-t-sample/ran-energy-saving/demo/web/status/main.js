@@ -140,7 +140,7 @@ function renderBatches(batches) {
         + (batch.queued ? ` · 排队重跑 ${batch.queued}` : "")
       : "—";
     const mode = document.createDocumentFragment();
-    mode.append(el("div", "", `${batch.decisionMode || "?"} · ${batch.negotiationSource || "?"}`));
+    mode.append(el("div", "", `${batch.negotiationSource || "?"}`));
     if (batch.keepTasks) mode.append(badge("保留 Task", "warn"));
     if (batch.stopAfter) mode.append(el("div", "muted", `执行到 ${batch.stopAfter}`));
     const endpoint = `${batch.transport || "?"} / ${batch.discovery || "?"}`;

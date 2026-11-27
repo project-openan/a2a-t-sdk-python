@@ -79,7 +79,6 @@ def _snapshot() -> dict[str, Any]:
         "schema": "osp-tester/v3",
         "batchId": "batch-1",
         "status": "finished",
-        "decisionMode": "scripted",
         "transport": "sse",
         "discovery": "direct",
         "summary": {"total": 1, "passed": 1},
