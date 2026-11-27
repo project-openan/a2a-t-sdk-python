@@ -2,7 +2,7 @@
 
 The protocol module (:mod:`protocol.pure_a2a`) knows how to ask and resume a Task; this module
 knows the RAN dataset's baseline/corrected targets and the deterministic answers used by the
-offline demo and tests. Keeping the two apart lets the pure mode reuse the demonstration data
+demo and tests. Keeping the two apart lets the pure mode reuse the demonstration data
 without teaching the protocol layer about any scenario.
 """
 
@@ -184,8 +184,8 @@ def render_pure_answer(decision: NegotiationDecision) -> str:
 def recommendation_decision(value: object) -> NegotiationDecision | None:
     """Build the advisory decision from one OSS recommendation payload.
 
-    The OSS Agent sends a structured recommendation (action plus ``filledParams``); older/scripted
-    relays may send a plain string. A reject/abort recommendation is not an answer, so it returns
+    The OSS Agent sends a structured recommendation (action plus ``filledParams``); older relays
+    may send a plain string. A reject/abort recommendation is not an answer, so it returns
     ``None`` and the operator decides without advice.
     """
     if isinstance(value, Mapping):

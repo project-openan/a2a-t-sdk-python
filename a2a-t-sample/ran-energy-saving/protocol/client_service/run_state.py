@@ -237,7 +237,7 @@ class RunState:
     #: Structured Task payload the downstream returned on a status frame. Any state may carry it:
     #: a real NMS reports an accepted Modify as ``TASK_STATE_WORKING`` or, on its pure-A2A hop, as
     #: ``TASK_STATE_INPUT_REQUIRED``. The payload is the downstream's own reading of the Task-T
-    #: (the vendor NMS and the simulator append it to the localized copy), kept verbatim.
+    #: (the vendor NMS appends it to the localized copy), kept verbatim.
     server_intent: dict[str, object] | None = None
     #: Downstream Task the server continued on its own far side (NMS / RAN Agent), when it reports
     #: one. These never replace ``result.task_id``/``context_id``: those belong to this run's hop.

@@ -21,15 +21,14 @@ run-level keys overridden) in a temporary run directory, so the shared configura
 mutated. Language and model mode are process-level: they are written into the run ``.env`` and into
 the child environment (design D18).
 
-With ``--keep-alive``, the PID file also records the model mode, language and trace token of the
-background processes. A later launch reuses them only when the record matches the requested run; a
-mismatch stops them and starts fresh, so an offline UI can never talk to a server still running live
-LiteLlm. A listening port with no PID record is refused instead of reused.
+With ``--keep-alive``, the PID file also records the language and trace token of the background
+processes. A later launch reuses them only when the record matches the requested run; a mismatch
+stops them and starts fresh. A listening port with no PID record is refused instead of reused.
 
 Usage:
     python run_demo.py --scenario information
     python run_demo.py --scenario target --mode manual --ui
-    python run_demo.py --scenario reject --transport webhook --model-mode offline
+    python run_demo.py --scenario reject --transport webhook
     python run_demo.py --ui --ui-port 8080 --language zh-CN
     python run_demo.py --keep-alive          # leave the local server running; stop with --stop
     python run_demo.py --stop
@@ -362,7 +361,7 @@ def _trace_summary(spans: list[dict[str, object]]) -> str:
         if isinstance(total_value, int):
             total += total_value
             measured = True
-    usage = f"prompt={prompt} completion={completion} total={total}" if measured else "n/a (scripted)"
+    usage = f"prompt={prompt} completion={completion} total={total}" if measured else "n/a (no usage)"
     return f"llm={len(llm)} tool={len(tools)} tokens={usage}"
 
 
@@ -806,7 +805,6 @@ def _server_reuse_decision(
     *,
     port_open: bool,
     state: dict[str, object],
-    model_mode: str,
     language: str,
     protocol_mode: str = PROTOCOL_A2A_T,
     ui: bool,
@@ -816,16 +814,14 @@ def _server_reuse_decision(
     """Decide whether a listening A2A server may be reused for the requested run.
 
     PID reuse is only safe when the recorded process is demonstrably the same configuration: a
-    reused server keeps its own client/ADK provider, so an offline UI talking to a live server would
-    silently make live LiteLlm calls (and the UI would report ``offline``). The trace token pairs
-    the server with this UI, so a UI run cannot reuse a server recording server spans to a file
+    reused server keeps its own client/ADK provider and language. The trace token pairs the server
+    with this UI, so a UI run cannot reuse a server recording server spans to a file
     (CLI keep-alive), and vice versa. A UI run must also post to the same trace URL/UI port: a
     server launched for another port would send its spans to a UI that is not serving this run.
 
     Args:
         port_open: whether the configured server port already accepts connections.
         state: persisted launcher state (empty when no PID file exists).
-        model_mode: requested model mode (``offline`` / ``live``).
         language: requested process-level language.
         ui: whether this launch serves the Web UI.
         trace_url: trace endpoint requested for this launch (UI mode).
@@ -840,7 +836,7 @@ def _server_reuse_decision(
         return REUSE_START
     if not _state_pids(state):
         return REUSE_REFUSE
-    if state.get("model_mode") != model_mode or state.get("language") != language:
+    if state.get("language") != language:
         return REUSE_RESTART
     if str(state.get("protocol_mode") or PROTOCOL_A2A_T) != protocol_mode:
         return REUSE_RESTART
@@ -1517,12 +1513,10 @@ def main() -> int:
             existing = []
 
         # A followed run is only reusable when its recorded configuration matches the request; the
-        # server owns the model mode and language, so a mismatch stops it instead of silently
-        # keeping live LiteLlm behind an offline UI.
+        # server owns the language, so a mismatch stops it instead of silently reusing it.
         reuse = _server_reuse_decision(
             port_open=_port_open(server_port),
             state=state,
-            model_mode="live",
             language=args.language,
             protocol_mode=args.protocol,
             ui=args.ui,

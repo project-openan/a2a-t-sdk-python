@@ -281,13 +281,8 @@ _INTERCEPTION_MISS_DISPATCHED_MESSAGE: Final[str] = (
 BASELINE_SCENARIO: Final[str] = "night"
 
 #: Region placeholder of the baseline request; ``_baseline_request`` replaces it with the region
-#: the configured NMS (or simulator) actually serves.
+#: the configured NMS actually serves.
 BASELINE_REGION: Final[str] = "A2ATestRegion"
-
-#: Default activation window of the simulator. Only used by the fallback baseline: a configured
-#: window that differs from it replaces the day plan with one segment, because two segments
-#: covering the same hours would describe an ambiguous prior task.
-BASELINE_WINDOW: Final[str] = "00:00-06:00"
 
 #: One-day rate plan of the shared fallback baseline: the Task-T the testers use as the manual
 #: baseline (``00:00-07:00 2Mbps``, ``07:00-18:00 10Mbps``, ``18:00-24:00 20Mbps``). It is a
@@ -3067,8 +3062,8 @@ class EvalBatchManager:
             # evidence visible; it must not turn the row green.
             return CASE_PARTIAL
         if item.error:
-            # The run failed, but its only red stage was recorded (assertion off / simulator
-            # dialogue). A green row would overstate what the batch proved.
+            # The run failed, but its only red stage was recorded (assertion off). A green row
+            # would overstate what the batch proved.
             return CASE_PARTIAL
         return CASE_PASSED
 
@@ -3299,8 +3294,8 @@ class EvalBatchManager:
                 "stopAfter": batch.stop_after,
                 "rounds": batch.rounds,
             },
-            # The annotation console groups evidence by model and by downstream, so the batch
-            # records the process identity it ran against. Older files lack these keys.
+            # The report groups evidence by model and by downstream, so the batch records the
+            # process identity it ran against. Older files lack these keys.
             "modelLabel": self._model_label,
             "modelMode": self._model_mode,
             "nms": self._nms,
@@ -3779,9 +3774,9 @@ def _baseline_request(case: Mapping[str, Any] | None = None) -> str:
     negotiation (see eval/osp/README.md 3.5). This function returns it. A case without one falls
     back to the shared fixture below, which keeps the previous behaviour for hand-written rows.
 
-    The demo's ``Region A`` placeholder is not a served region: the real NMS and the simulator
-    answer it with an information negotiation. A Modify baseline must therefore name the
-    configured ``A2AT_SAMPLE_NMS_REGION`` (the simulator's region in a ``--nms-sim`` run).
+    The demo's ``Region A`` placeholder is not a served region: the real NMS answers it with an
+    information negotiation. A Modify baseline must therefore name the configured
+    ``A2AT_SAMPLE_NMS_REGION``.
     """
     override = _case_baseline_request(case)
     if override is not None:

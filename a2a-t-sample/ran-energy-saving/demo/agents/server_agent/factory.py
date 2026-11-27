@@ -78,7 +78,7 @@ def server_agent_factory(
     *,
     model_factory: Any | None = None,
 ) -> Any:
-    """Return a factory with an optional model override (tests use a scripted model)."""
+    """Return a factory with an optional model override (tests inject a deterministic model)."""
 
     def factory(
         config: SampleConfig | None,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Final
 
-#: AgentCard name registered in the registry.
+#: AgentCard name advertised by the local reference server.
 AGENT_CARD_NAME: Final[str] = "RAN NMS Agent"
 
 #: AgentCard description.

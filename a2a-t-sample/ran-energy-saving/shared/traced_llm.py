@@ -3,17 +3,16 @@
 The A2A-T SDK resolves its provider through ``LLMClientFactory`` and calls ``structured`` for every
 LLM-assisted step (Task-T extraction, validations, Negotiation-T extraction). This module provides:
 
-* :class:`TracedOpenAIClient` — live mode, captures the raw OpenAI response before the JSON
-  validation of :class:`~a2a_t.llm.providers.openai.OpenAIClient`;
-* :class:`TracedStructuredMixin` — the span wrapper a provider (including the demo's offline
-  client) subclasses.
+* :class:`TracedOpenAIClient` — captures the raw OpenAI response before the JSON validation of
+  :class:`~a2a_t.llm.providers.openai.OpenAIClient`;
+* :class:`TracedStructuredMixin` — the span wrapper a provider subclasses.
 
 The mixin emits one ``llm`` span per call (request, raw content, parsed JSON, usage, latency,
 error) and **never changes behavior**: the wrapped response and every exception are returned/raised
 unchanged, and a failing trace is swallowed.
 
-The stage of a call comes from :func:`~shared.trace.trace_stage` or the response metadata. Offline
-calls report ``n/a (scripted)`` tokens instead of fabricating a zero usage.
+The stage of a call comes from :func:`~shared.trace.trace_stage` or the response metadata. A call
+whose provider reported no usage stays unmeasured instead of reporting a fabricated zero.
 """
 
 from __future__ import annotations
@@ -76,7 +75,7 @@ def _now_iso() -> str:
 
 
 def _metadata_stage(response: LLMResponse | None) -> str | None:
-    """Return the ``scripted_stage`` of one scripted response, ``None`` otherwise."""
+    """Return the stage a test double recorded on its response, ``None`` otherwise."""
     if response is None:
         return None
     value = response.metadata.get("scripted_stage")

@@ -2,8 +2,8 @@
 
 The A2A Task state is the machine-readable submission signal (:data:`shared.run_constants.
 TASK_STATE_SUBMITTED`): the localized copy of that status must never decide whether the Task was
-created. The copy *does* carry data, though: the vendor NMS and the simulator append their own
-structured understanding of the Task-T right after it, e.g. ``Task creation succeeded{"Operation
+created. The copy *does* carry data, though: the vendor NMS appends its own structured
+understanding of the Task-T right after it, e.g. ``Task creation succeeded{"Operation
 type":"Create",...}``. This module reads that payload as evidence only.
 
 The payload is not tied to one state: a real NMS accepts a Create as ``SUBMITTED`` but reports an

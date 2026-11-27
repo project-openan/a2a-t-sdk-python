@@ -729,7 +729,7 @@ async def run_client_flow(
         apply_client_policy: Apply ``client_policy`` to an automatic decision. A tester agent run
             passes ``False``: the agent's own conditions are its acceptance ground, so the process
             floor must not rewrite a reject of a feasible alternative. Grounding still runs. The
-            default keeps the historical behaviour for every scripted and presentation path.
+            default keeps the policy for every non-tester path.
         run_mode: ``create`` starts a new A2A Task; ``modify`` sends the scenario's Modify Task-T
             as the first message so an existing running Task is continued.
         target_task_id: Task the Modify-only run continues; required by ``run_mode="modify"``.
@@ -737,8 +737,7 @@ async def run_client_flow(
         correction: Optional gate provider. A blocked pre-send validation asks it once for a
             corrected operator request; the run then re-extracts, re-validates and continues in
             the same run. ``None`` keeps the historical behaviour (the blocked run ends with
-            ``input_invalid``). A second block is terminal, so a scripted correction can never
-            loop.
+            ``input_invalid``). A second block is terminal, so a correction can never loop.
 
     Returns:
         The collected events, provider decisions and terminal state.
@@ -950,7 +949,7 @@ async def run_client_flow(
 
         Returns ``False`` when no usable correction exists, so the caller ends the run blocked.
         The correction is deliberately single-shot: a request that is blocked again is terminal,
-        which keeps a scripted correction from looping and matches the operator contract.
+        which keeps a correction from looping and matches the operator contract.
         """
         nonlocal request_text, prepared, attempt
         if correction is None or attempt > 1:

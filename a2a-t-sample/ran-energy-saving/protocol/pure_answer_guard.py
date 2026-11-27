@@ -147,7 +147,7 @@ def sanitize_pure_decision(
                     "an affirmative answer to a confirmation question carries no Task-T value"
                 ]
             # "Not feasible, please confirm" names no value and no alternative: there is nothing to
-            # agree to. Returning nothing relays the question to the caller (the tester's scripted
+            # agree to. Returning nothing relays the question to the caller (the tester's recorded
             # answer or the operator's card) instead of sending a useless "Accepted. Please proceed."
             return None, [
                 "the confirmation question states no concrete plan; the question is relayed to the "

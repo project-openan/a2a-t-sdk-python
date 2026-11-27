@@ -336,7 +336,7 @@ def create_app(
         PROTOCOL_PURE: {
             "discovery": DISCOVERY_NMS if pure_hop_nms else DISCOVERY_DIRECT,
             # The direct hop talks to the vendor with the deployment transport (webhook on the
-            # real NMS, SSE on the simulator); the proxy hop keeps its historical SSE form.
+            # real NMS); the proxy hop keeps its historical SSE form.
             "transport": resolved_default_transport if pure_hop_nms else TRANSPORT_SSE,
         },
     }
@@ -394,9 +394,9 @@ def create_app(
     # The independent decision-quality judge is a separate model; an unconfigured process passes
     # None and the appendix records every semantic check as unjudged.
     tester_judge = build_judge_client(config) if config.judge_configured else None
-    # The tester report and the review console fetch Langfuse traces with the same credentials the
-    # client uses. The sample's `.env` is above the runs directory, so passing the loaded config
-    # avoids making them rediscover it (``langfuse_export`` only reads the cwd).
+    # The tester report fetches Langfuse traces with the same credentials the client uses. The
+    # sample's `.env` is above the runs directory, so passing the loaded config avoids making it
+    # rediscover them (``langfuse_export`` only reads the cwd).
     trace_config: LangfuseConfig | None = None
     if config.langfuse_public_key and config.langfuse_secret_key:
         try:
@@ -491,7 +491,7 @@ def create_app(
                     name: _scenario_request(resolved_catalog, name, config.language) for name in active_scenarios
                 },
                 # The presentation can list running Tasks only when the client talks to the real
-                # NMS; the local registry/direct server has no vendor task list endpoint.
+                # NMS; a direct local server has no vendor task list endpoint.
                 "nmsTasksEnabled": config.discovery == DISCOVERY_NMS,
                 "modifyRequest": _modify_request(config, config.language),
                 "modes": list(UI_MODES),

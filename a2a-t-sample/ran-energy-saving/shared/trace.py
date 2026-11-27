@@ -957,7 +957,7 @@ def record_span(
         status: ``ok`` / ``error``.
         purpose: Why the call happened.
         model: Model id of an LLM span.
-        tokens: Token usage map (``None`` values for the scripted provider).
+        tokens: Token usage map (``None`` values when the provider reported none).
         error: Error text of a failed call.
         detail: Request/response payload (redacted and truncated).
         parent_span_id: Parent span, when known.

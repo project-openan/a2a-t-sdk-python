@@ -532,7 +532,7 @@ def pure_proposal_view(
     """Build the proposal view of one relayed pure A2A question.
 
     The pure hop has no Negotiation-T metadata, so the view is derived from the question text and
-    the sample-local ``pure`` tags. Both the confirmation card and the plain scripted answer use
+    the sample-local ``pure`` tags. Both the confirmation card and the deterministic answer use
     this view, which keeps the run's negotiation panel and the tester's round assertion honest.
 
     Args:

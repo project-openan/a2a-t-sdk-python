@@ -1,16 +1,14 @@
 """Application assembly of the RAN energy-saving A2A-T server.
 
 The module builds the AgentCard (declaring the Task-T and Negotiation-T extensions), the A2A
-request handler, the Starlette app and the registry registration. One agent serves both request
-forms: the pre-task negotiation handler runs in front of the deterministic RAN NMS executor when a
-request declares or carries the Task-T extension, and a standard A2A Task lifecycle otherwise. All
-negotiation happens before a Task is created and the server uses no ADK agent.
+request handler, the Starlette app and its discovery card. One agent serves both request forms:
+the pre-task negotiation handler runs in front of the local RAN executor when a request declares
+or carries the Task-T extension, and a standard A2A Task lifecycle otherwise. All negotiation
+happens before a Task is created and the server uses no ADK agent.
 
-Offline mode registers the traced scripted SDK provider and points the SDK at a temporary ``.env``
-carrying ``A2AT_LLM_PROVIDER=scripted_traced`` / ``A2AT_LLM_MODEL=scripted`` /
-``A2AT_LLM_API_KEY=not-needed``; the SDK reads its configuration from a file, not from process
-environment variables, so the temporary copy is the non-destructive way to honor the sample's
-offline switch. Live mode uses ``A2AT_LLM_PROVIDER=openai_traced``.
+The SDK is pointed at a temporary ``.env`` carrying ``A2AT_LLM_PROVIDER=openai_traced``; the SDK
+reads its configuration from a file, not from process environment variables, so the temporary copy
+is the non-destructive way to honor the sample configuration.
 
 Run Explorer: when ``A2AT_SAMPLE_TRACE_URL`` (Web UI) or ``A2AT_SAMPLE_TRACE_DIR`` (CLI file) is
 set, the runtime attaches the matching trace emitter as the process-wide span sink, so the server
@@ -347,8 +345,7 @@ def build_server_runtime(
         The assembled runtime, including the Starlette app.
 
     Raises:
-        ValueError: when offline mode has no deterministic provider installer, or when
-            ``protocol_mode`` is unknown.
+        ValueError: when ``protocol_mode`` is unknown.
     """
     protocol_mode = normalize_protocol_name(protocol_mode)
     if protocol_mode not in SERVER_PROTOCOL_MODES:

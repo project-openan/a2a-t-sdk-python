@@ -232,7 +232,7 @@ def build_judge_client(
     """Build the judge client from the resolved sample configuration.
 
     ``transport`` is the test seam: when supplied, no SDK client is created, so a configured
-    judge can be exercised offline. An unconfigured judge still builds, and every call then
+    judge can be exercised without a network. An unconfigured judge still builds, and every call then
     raises :class:`JudgeUnavailable`.
     """
     return JudgeClient(_judge_config(config), transport=transport)

@@ -5,9 +5,9 @@ infeasible only when the outage lasts **strictly longer** than four hours **and*
 rate is **strictly above** 2 Mbps. Its time convention is also code: an interval that ends on the
 whole hour excludes that hour, while an interval ending at ``:59`` includes its hour.
 
-The local RAN precheck and the NMS simulator each implemented one half of that rule, so the same
-request could open a negotiation locally and be accepted on the real network. This module is the
-single implementation; the evaluation runner uses it as the expected-value oracle.
+The local RAN precheck used to implement only one half of that rule, so the same request could open
+a negotiation locally and be accepted on the real network. This module is the single
+implementation; the evaluation runner uses it as the expected-value oracle.
 """
 
 from __future__ import annotations

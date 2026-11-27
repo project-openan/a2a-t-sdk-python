@@ -1,9 +1,8 @@
 """Run specification and the demo/production seams of the client runtime.
 
 A client run needs the natural-language request and the expected negotiation sequence (a scenario
-catalog) plus the deterministic decision script used in offline mode. The composition root (the
-demo launcher, the Web UI, the gateway CLI or a customer service) supplies them; ``protocol`` and
-``shared`` only see these interfaces.
+catalog). The composition root (the demo launcher, the Web UI, the gateway CLI or a customer
+service) supplies them; ``protocol`` and ``shared`` only see these interfaces.
 
 Business values are never part of the specification: the operator's text is the request, and both
 the business intent and the negotiation values are parsed from it by the model/agent layers.

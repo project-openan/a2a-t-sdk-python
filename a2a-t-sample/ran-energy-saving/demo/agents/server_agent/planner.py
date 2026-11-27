@@ -22,7 +22,7 @@ from demo import ran_data
 
 #: Planner configuration error.
 class PlannerError(RuntimeError):
-    """Raised when the planner model cannot be built or a scripted turn is invalid."""
+    """Raised when the planner model cannot be built or a planner turn is invalid."""
 
 
 def build_planner_model(

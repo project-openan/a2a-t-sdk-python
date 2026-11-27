@@ -55,7 +55,7 @@ SAMPLE_NEGOTIATION_OPTIONS_METADATA_KEY: Final[str] = "sampleNegotiationOptions"
 SAMPLE_RUN_ID_METADATA_KEY: Final[str] = "sampleRunId"
 
 #: Metadata key carrying the decision mode of the run that opened an OSS Task
-#: (``auto`` / ``confirm`` / ``manual`` / ``scripted``).
+#: (``auto`` / ``confirm`` / ``manual``).
 #:
 #: The mode travels on ``x-a2at-decision-mode`` for the live request; this copy is what lets a
 #: background pump resumed after an OSS restart keep the same human-decision policy. It is a sample

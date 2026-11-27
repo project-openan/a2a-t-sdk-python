@@ -46,8 +46,8 @@ DOWNSTREAM_TRACE_ID_HEADER: Final[str] = "x-a2at-downstream-trace-id"
 #: in observation metadata instead of overwriting the trace name/session owned by the anchor.
 WORKFLOW_TRACE_HEADER: Final[str] = "x-a2at-workflow-trace"
 
-#: Decision mode of the run that opened the outer A2A Task (``auto`` / ``confirm`` / ``manual`` /
-#: ``scripted``). A local hop carries it so the OSS Agent knows whether a downstream question may
+#: Decision mode of the run that opened the outer A2A Task (``auto`` / ``confirm`` / ``manual``).
+#: A local hop carries it so the OSS Agent knows whether a downstream question may
 #: be handed to a human. It is sample-local correlation, like the run id: the A2A message and Task
 #: contract are unchanged.
 DECISION_MODE_HEADER: Final[str] = "x-a2at-decision-mode"

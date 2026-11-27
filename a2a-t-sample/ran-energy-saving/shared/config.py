@@ -32,7 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 #: Model modes.
 MODEL_MODE_LIVE = "live"
 SUPPORTED_MODEL_MODES = (MODEL_MODE_LIVE,)
-ModelMode = Literal["live", "offline"]
+ModelMode = Literal["live"]
 
 #: Discovery modes.
 DISCOVERY_DIRECT = "direct"
@@ -310,7 +310,7 @@ DEFAULT_NMS_SEND_TIMEOUT_SECONDS = 300.0
 DEFAULT_NMS_POLL_INTERVAL_SECONDS = 30.0
 
 #: The region of the 910 test environment is intentionally not a default. A real-NMS run must
-#: configure it explicitly; the launcher pins it only for the local simulator. The example requests
+#: configure it explicitly. The example requests
 #: do name sites the vendor serves (``NRES_XCS_6102937``, ``NES_27A_321071``,
 #: ``LTE_26441_LNR_OCL``, ``LNR_KPI_7745``), because the NMS rejects any other site.
 

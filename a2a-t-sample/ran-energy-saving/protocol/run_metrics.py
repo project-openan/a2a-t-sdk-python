@@ -27,7 +27,7 @@ from protocol.pure_a2a import canonical_target
 from protocol.run_spec import RunSpec
 from protocol.transcript import NegotiationTranscript
 
-#: Token counters that mean "the provider reported no usage" (offline/scripted runs).
+#: Token counter aliases different providers report.
 TOKEN_KEYS_PROMPT: Final[tuple[str, ...]] = ("prompt", "prompt_tokens", "input_tokens")
 TOKEN_KEYS_COMPLETION: Final[tuple[str, ...]] = (
     "completion",
@@ -104,7 +104,7 @@ def build_run_metrics(
         mode: Client decision mode.
         transport: Event transport.
         language: Process-level language.
-        model_mode: ``live`` or ``offline``.
+        model_mode: process model mode (always ``live``).
         model_label: Display label of the model.
         status: Run status (``finished`` / ``failed`` / ``interrupted``).
         transcript: Run transcript, when one exists.
@@ -184,7 +184,6 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
     estimated = False
     estimated_calls = 0
     estimated_prompt_total = 0
-    scripted = model_mode == "offline"
     for span in spans:
         if span.get("kind") != "llm":
             continue
@@ -198,7 +197,6 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
             continue
         known += 1
         estimated = estimated or bool(usage.get("estimated"))
-        scripted = scripted or bool(usage.get("scripted"))
         for key in totals:
             value = usage.get(key)
             if isinstance(value, int):
@@ -214,13 +212,12 @@ def _tokens(spans: list[dict[str, object]], *, model_mode: str) -> dict[str, obj
         component = _component_key(span)
         _add_usage(by_side.setdefault(side, _empty_usage()), usage)
         _add_usage(by_component.setdefault(component, _empty_usage()), usage)
-    available = known > 0 and not scripted
+    available = known > 0
     cache_reported = available and cached_calls > 0
     _finalize_cache_buckets(by_side)
     _finalize_cache_buckets(by_component)
     return {
         "available": available,
-        "scripted": scripted,
         "estimated": estimated,
         "llmCalls": calls,
         "reportedCalls": known,
@@ -318,7 +315,6 @@ def _normalize_usage(raw: object) -> dict[str, object] | None:
         "reasoning": reasoning,
         "cached": cached,
         "estimated": bool(raw.get("estimated")),
-        "scripted": bool(raw.get("scripted")),
     }
 
 

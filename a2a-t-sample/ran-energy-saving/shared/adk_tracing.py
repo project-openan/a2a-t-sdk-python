@@ -2,7 +2,7 @@
 
 The ADK agents of both sides run through this module:
 
-* :class:`TracingLlm` wraps a ``BaseLlm`` (the deterministic fake model or ``LiteLlm``) and emits
+* :class:`TracingLlm` wraps a ``BaseLlm`` (``LiteLlm`` in production, a test double in tests) and emits
   one ``llm`` span per model turn with the full request (system instruction, contents, tools,
   response schema, generation params) and response (text, function calls, usage, finish reason,
   errors) plus latency. It delegates ``model``, ``capabilities`` and ``generate_content_async`` and
@@ -309,7 +309,7 @@ SHARED_LINKER: Final[SpanLinker] = SpanLinker()
 class TracingLlm(BaseLlm):
     """``BaseLlm`` decorator emitting one ``llm`` span per model turn.
 
-    The wrapped model is the deterministic fake model in offline mode and ``LiteLlm`` in live mode.
+    The wrapped model is ``LiteLlm`` in production and a test double in tests.
     ``model`` and ``capabilities`` are delegated, and no per-call state is stored on the instance
     (ADK shares one model across sessions).
     """

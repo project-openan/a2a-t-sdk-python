@@ -3,8 +3,8 @@
 Two state sets matter. A2A refuses to append a message to a terminal Task, so a Modify can
 continue only ``SUBMITTED`` (accepted, not started yet) and ``WORKING``. A Task waiting for input
 (``INPUT_REQUIRED``) cannot be modified by this sample but still holds NMS quota, so the picker can
-also list and cancel it. The mapping is deliberately tolerant: the vendor and the local simulator
-expose the same Task envelope but may fill different optional fields.
+also list and cancel it. The mapping is deliberately tolerant: vendor revisions expose the same
+Task envelope but may fill different optional fields.
 """
 
 from __future__ import annotations

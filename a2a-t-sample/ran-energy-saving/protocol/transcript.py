@@ -154,8 +154,8 @@ class NegotiationTranscript:
     Attributes:
         scenario: Scenario name of the run.
         language: Process-level language shown in the transcript.
-        model_mode: ``live`` or ``offline``.
-        mode: Client decision mode (``auto`` / ``manual`` / ``scripted``).
+        model_mode: process model mode (always ``live``).
+        mode: Client decision mode (``auto`` / ``manual`` / ``confirm``).
         transport: Event transport (``sse`` / ``webhook``).
         trace_id: Vendor-facing W3C trace id of the run (32 lowercase hex digits).
         started_at: UTC start time (ISO 8601).

@@ -307,8 +307,8 @@ def _create_workflow_roots(connection: sqlite3.Connection) -> None:
     """Create the chain-scoped workflow root table and the trace lookup index.
 
     One row per correction chain. ``root_span_id`` is the neutral anchor's OTel span id; it stays
-    empty until the first exported attempt creates the anchor, so an offline first attempt and a
-    later live retry still converge on one root. ``trace_id`` is unique so two chains can never
+    empty until the first exported attempt creates the anchor, so a first attempt and a later retry
+    still converge on one root. ``trace_id`` is unique so two chains can never
     merge into one Langfuse trace.
     """
     connection.executescript(

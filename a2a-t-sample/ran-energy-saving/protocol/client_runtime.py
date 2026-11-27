@@ -5,9 +5,9 @@
 * it builds a **per-run** A2A-T SDK ``.env`` from the sample ``.env`` (the SDK reads its
   configuration from a file, never from process environment variables) and never mutates the source
   file;
-* it registers the scripted SDK provider before constructing ``A2ATClient`` in offline mode;
-* it discovers the server with :func:`protocol.discovery.discover_agent` (registry by default, or
-  the direct AgentCard);
+* it registers the traced SDK provider before constructing ``A2ATClient``;
+* it discovers the server with :func:`protocol.discovery.discover_agent` (a direct vendor endpoint
+  or a direct AgentCard);
 * it creates the a2a-sdk client with streaming enabled for SSE and disabled for webhook, owns the
   embedded webhook receiver and its queue, and selects the configured decision provider;
 * :meth:`ClientRuntime.run` executes :func:`protocol.client_flow.run_client_flow` with the optional
@@ -365,7 +365,7 @@ def _configure_pure_answer(
     shared principles, case conditions and policy switch the A2A-T decision provider receives.
     Without them an agent-authored A2A reply would be decided with a different ground than the
     A2A-T row of the same batch. An answer object that does not expose a hook is left untouched,
-    which keeps the scripted and confirmation answers unchanged.
+    which keeps the confirmation answer unchanged.
     """
     for setter_name, value in (
         ("set_user_request", request_text),
@@ -467,7 +467,7 @@ class ClientRuntime:
     activity_sink: ActivitySink | None = None
     pure_answer: Callable[[dict[str, object]], str | Awaitable[str]] | None = None
     intent_processor: IntentProcessor | None = None
-    #: Optional in-run correction of a blocked pre-send gate (a scripted replacement request).
+    #: Optional in-run correction of a blocked pre-send gate (a fixed replacement request).
     correction_provider: CorrectionProvider | None = None
     #: A Task-T the caller already generated and validated (the tester's interception preflight).
     #: When set, the run reuses it instead of re-extracting and re-validating the same request.
@@ -727,7 +727,7 @@ class ClientRuntime:
                         and on_decision_requested is not None
                         and not callable(getattr(answer, "set_proposal_sink", None))
                     ):
-                        # A scripted/policy answer is a plain callable: wrap it so the run still
+                        # A fixed/policy answer is a plain callable: wrap it so the run still
                         # reports the relayed question. Without this, ``run.proposals`` stayed empty
                         # and the tester's ``negotiate`` stage waited for the run instead of the round.
                         answer = _announce_pure_proposals(
@@ -1004,7 +1004,7 @@ async def build_client_runtime(
     if config.discovery == DISCOVERY_NMS:
         # The vendor NMS has no AgentCard and no a2a-sdk-compatible transport. The real machine
         # uses the non-streaming ``message:send`` + webhook; the SSE/stream path remains available
-        # for the offline simulator and contract tests.
+        # for contract tests and NMS-compatible local deployments.
         nms_client = NmsClient(NmsConfig.from_config(config))
         if transport == TRANSPORT_WEBHOOK:
             # Process-level receiver: the callback port is fixed by the launch script and reused

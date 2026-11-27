@@ -4,7 +4,7 @@ The dataset lives in ``resources/ran_data/cells.json``. It holds two radio cells
 Administration Committee area, each with a representative 24-hour load and energy curve, the
 energy-saving windows the cell accepts, and its capacity / SLA limits.
 
-Plans are written to a process-local store. Everything here is deterministic and offline; the only
+Plans are written to a process-local store. Everything here is deterministic and process-local; the only
 mutable state is the plan store, which :func:`reset` clears for tests and repeatable demos.
 """
 

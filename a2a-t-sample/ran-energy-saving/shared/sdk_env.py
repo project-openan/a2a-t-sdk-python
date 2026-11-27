@@ -6,11 +6,10 @@ The builder lives in ``shared`` so neither runtime has to import the other: the 
 delegate to :mod:`protocol.client_runtime`, and the client used to import the server assembly just
 for its AgentCard constants (which built an unused ADK model at import time).
 
-Offline mode pins the traced scripted provider; live mode keeps the SDK endpoint values of the
-source file and fills any missing one from the ADK model configuration, so both SDK and ADK address
-the same endpoint (design §5.1).
+The builder keeps the SDK endpoint values of the source file and fills any missing one from the ADK
+model configuration, so both SDK and ADK address the same endpoint (design §5.1).
 
-Both modes also write the sample's live fail-fast policy into the SDK ``.env``:
+It also writes the sample's live fail-fast policy into the SDK ``.env``:
 ``A2AT_LLM_TIMEOUT_SECONDS`` and ``A2AT_LLM_MAX_ATTEMPTS`` come from the sample configuration and
 always override the source values. A live server gate may perform several LLM calls before it emits
 any event, while the client gives up after ``A2AT_SAMPLE_HTTP_TIMEOUT_SECONDS``; letting the SDK
@@ -94,9 +93,9 @@ def prepare_sdk_env(
 ) -> SdkEnvFile:
     """Build a per-run SDK ``.env`` without mutating the caller's file.
 
-    ``A2AT_LANGUAGE`` always follows the process-level configuration. Offline mode pins the
-    scripted provider; live mode keeps the SDK endpoint values of the source file and fills any
-    missing one from the ADK model configuration, so both SDK and ADK address the same endpoint.
+    ``A2AT_LANGUAGE`` always follows the process-level configuration. The builder keeps the SDK
+    endpoint values of the source file and fills any missing one from the ADK model configuration,
+    so both SDK and ADK address the same endpoint.
 
     The SDK prompt source is always ``packaged``; an inherited ``local_file`` root is dropped so
     the packaged slot schema stays the single, authoritative baseline.

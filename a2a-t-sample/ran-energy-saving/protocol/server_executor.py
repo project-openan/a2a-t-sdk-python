@@ -11,8 +11,8 @@ The graph is sample business logic, not a protocol rule: it reads cell-001's pro
 applies a 30% saving plan in 00:00-06:00, and writes the report. A real deployment replaces the
 planner/tool set with its own RAN NMS planning logic.
 
-Offline mode uses the deterministic :class:`~agents.server_agent.planner.ScriptedChatModel`; live
-mode uses ``ChatOpenAI``. Both run through the same graph and the same guarded tools.
+The planner uses ``ChatOpenAI``; tests inject a deterministic model through the same graph and the
+same guarded tools.
 """
 
 from __future__ import annotations

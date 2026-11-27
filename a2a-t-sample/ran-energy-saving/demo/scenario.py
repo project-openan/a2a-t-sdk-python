@@ -1,8 +1,7 @@
 """Business scripts of the eight RAN energy-saving demonstration scenarios.
 
 Every scenario carries the natural-language request (both languages), the expected negotiation
-kind, the exact performative/round sequence from the design, the expected final state, and the
-decisions a scripted (offline) client returns.
+kind, the exact performative/round sequence from the design and the expected final state.
 
 The request text is the single source of business values: the page shows it, the client sends it,
 and the intent/Task-T layers parse it. There is no built-in intent or parameter table. The
@@ -245,7 +244,7 @@ SCENARIO_INFORMATION_SPEC = Scenario(
     user_request=EXAMPLE_REQUESTS[SCENARIO_INFORMATION],
     # The request omits the task object. The SDK slot extraction reports it as
     # ``slot.not_provided`` before a Task-T exists, so the demo shows the local block instead of a
-    # server negotiation; no scripted decision is consumed. The rate guarantee target is optional
+    # server negotiation. The rate guarantee target is optional
     # (the vendor executes an area-level request without one), so it cannot serve as the missing
     # field.
     expected_sequence=(),

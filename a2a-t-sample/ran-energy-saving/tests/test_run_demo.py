@@ -296,7 +296,6 @@ class TestServerReuseDecision:
         params: dict[str, Any] = {
             "port_open": True,
             "state": self.STATE,
-            "model_mode": "live",
             "language": "en-US",
             "ui": True,
             "trace_url": "http://127.0.0.1:8080",
@@ -310,10 +309,6 @@ class TestServerReuseDecision:
 
     def test_matching_metadata_reuses_the_process(self) -> None:
         assert self.decide() == run_demo.REUSE_REUSE
-
-    def test_model_mode_mismatch_restarts(self) -> None:
-        """The offline-UI/live-server bug: the recorded live server must not be reused."""
-        assert self.decide(state={**self.STATE, "model_mode": "offline"}) == run_demo.REUSE_RESTART
 
     def test_language_mismatch_restarts(self) -> None:
         assert self.decide(state={**self.STATE, "language": "zh-CN"}) == run_demo.REUSE_RESTART
@@ -558,13 +553,13 @@ def test_web_serve_parser_accepts_the_launcher_arguments(tmp_path: Path) -> None
 
 
 def test_trace_summary_reports_llm_and_tool_counts() -> None:
-    """The CLI summary prints LLM/tool counts and never fabricates scripted tokens."""
-    scripted: list[dict[str, object]] = [
+    """The CLI summary prints LLM/tool counts and never fabricates usage."""
+    unmeasured: list[dict[str, object]] = [
         {"kind": "llm", "tokens": {"prompt": None, "completion": None, "total": None}},
         {"kind": "tool"},
         {"kind": "message_sent"},
     ]
-    assert run_demo._trace_summary(scripted) == "llm=1 tool=1 tokens=n/a (scripted)"
+    assert run_demo._trace_summary(unmeasured) == "llm=1 tool=1 tokens=n/a (no usage)"
 
     live: list[dict[str, object]] = [{"kind": "llm", "tokens": {"prompt": 10, "completion": 5, "total": 15}}]
     assert run_demo._trace_summary(live) == "llm=1 tool=0 tokens=prompt=10 completion=5 total=15"

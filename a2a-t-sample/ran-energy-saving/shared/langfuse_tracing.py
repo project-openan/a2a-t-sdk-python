@@ -10,9 +10,9 @@ instrumentation layer:
 * ``tool`` spans become ``tool`` observations;
 * every other span stays a generic observation.
 
-The exporter never changes the protocol flow. Langfuse is optional: without the keys, without
-the package, or in offline mode it is a no-op, and every export failure is swallowed into a
-warning that the run snapshot can display.
+The exporter never changes the protocol flow. Langfuse is optional: without the keys or without
+the package it is a no-op, and every export failure is swallowed into a warning that the run
+snapshot can display.
 
 Python SDK v5's high-level ``start_observation`` uses the current time and cannot replay a finished
 span, so the exporter talks to OpenTelemetry directly and passes the recorded ``startedAt`` /
@@ -120,7 +120,7 @@ _PHASE_EXPORT_KINDS: Final[frozenset[str]] = (
 def exported_span_kinds(level: str) -> frozenset[str] | None:
     """Return the span kinds the exporter keeps at one detail level.
 
-    ``full`` exports every kind, so it returns ``None``. The review console derives its expected
+    ``full`` exports every kind, so it returns ``None``. The tester report derives its expected
     trace points from this function instead of copying the private tables, so a change to the
     export contract fails a single contract test rather than silently changing the acceptance
     oracle.

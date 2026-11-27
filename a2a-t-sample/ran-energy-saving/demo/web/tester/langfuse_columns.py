@@ -1,7 +1,7 @@
 """Langfuse-derived columns of the tester arbitration sheet.
 
 Each run's nine cells come from the vendored ``langfuse_export`` package: ``export_full``
-fetches the trace observations and derives the same metrics the observe console uses. The
+fetches the trace observations and derives the token and cache metrics. The
 export is fail-open — a missing trace id, an unavailable project, a network error or an
 unreadable metrics document yields nine empty cells plus one note on the report row, never an
 exception that would abort the workbook.

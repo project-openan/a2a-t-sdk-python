@@ -4,7 +4,7 @@ The tester console lists the catalog, lets the operator filter it, and starts on
 (case, protocol). The YAML files stay the source of truth for the generated fields; the two
 hand-authored expectation blocks (``slot_errors`` and ``negotiation.messages``) may instead live in
 one overlay file next to the case directory. The overlay is applied at load time, so every consumer
-(offline runner, tester, annotation console, review console) sees the same merged document.
+(the evaluation runner and the tester) sees the same merged document.
 
 Why an overlay: in the yellow zone the generated case files are hot-replaced between runs, so a
 direct edit is lost. Keeping the hand-authored values in one separate file makes them survive the

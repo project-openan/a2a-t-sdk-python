@@ -46,7 +46,7 @@ class DecisionBasis:
 
 
 class NegotiationDecision(BaseModel):
-    """One client negotiation decision produced by an ADK agent or a manual/scripted provider.
+    """One client negotiation decision produced by an ADK agent or a manual provider.
 
     Attributes:
         action: Intent of the decision.

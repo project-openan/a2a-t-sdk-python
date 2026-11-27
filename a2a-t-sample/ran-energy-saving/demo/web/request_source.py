@@ -35,8 +35,8 @@ _SOURCE_SECRET_KEYS: Final[frozenset[str]] = frozenset({"token", "auth", "author
 def request_source(request: Request, declared: object) -> dict[str, object]:
     """Build the source document from the page declaration and HTTP metadata.
 
-    The page declares its kind (``presentation`` / ``explorer`` / ``tester``); the server adds the
-    network origin so an internal console can tell a page request from a scripted API call.
+    The page declares its kind (``presentation`` / ``tester``); the server adds the network origin
+    so an internal console can tell a page request from an automated API call.
     Header values are bounded, and a referer's ``token`` query parameter is removed before storage.
     """
     base: dict[str, object] = {}

@@ -6,8 +6,8 @@ the client passes the operator's values through, uses a value the server itself 
 invents, corrects or rejects one on its own.
 
 This module is the deterministic side of that boundary. It runs only for an automatic (live ADK)
-decision; a scripted decision is a recorded operator answer and a manual/confirm decision is the
-operator's own, so neither is filtered. It never calls a model and never sends a message.
+decision; a recorded operator answer and a manual/confirm decision are the operator's own, so
+neither is filtered. It never calls a model and never sends a message.
 
 The policy answers three questions:
 

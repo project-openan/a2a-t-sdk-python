@@ -148,7 +148,7 @@ class DemoIntentProcessor:
 
         Args:
             language: process-level language.
-            extractor: ADK intent extractor; ``None`` (offline mode) keeps the raw text.
+            extractor: ADK intent extractor; ``None`` keeps the raw text (model unavailable).
         """
         self._language = language
         self._extractor = extractor
