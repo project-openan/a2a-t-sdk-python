@@ -15,6 +15,7 @@ from shared.run_constants import (
     PROTOCOL_MODE_BOTH,
     PROTOCOL_PURE,
 )
+
 from tests.integration_helpers import (
     free_tcp_port,
     offline_direct_config,

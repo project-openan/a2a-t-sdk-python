@@ -1392,7 +1392,6 @@ async def test_a_rerun_can_be_queued_while_the_main_batch_still_runs(
         case_ids=[1, 2],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=10,
     )
     batch_id = str(created["batchId"])
@@ -1428,7 +1427,6 @@ async def test_two_reruns_can_be_queued_without_waiting_for_the_first(
         case_ids=[1, 2],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=10,
     )
     batch_id = str(created["batchId"])
@@ -1463,7 +1461,6 @@ async def test_a_queued_rerun_can_be_dropped_before_it_starts(tmp_path: Path) ->
         case_ids=[1, 2],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=10,
     )
     batch_id = str(created["batchId"])
@@ -1494,7 +1491,6 @@ async def test_retry_is_refused_while_a_rerun_queue_is_running(tmp_path: Path) -
         case_ids=[1, 2],
         protocols=[PROTOCOL_A2A_T],
         stop_after="final",
-        approval=None,
         timeout_seconds=10,
     )
     batch_id = str(created["batchId"])

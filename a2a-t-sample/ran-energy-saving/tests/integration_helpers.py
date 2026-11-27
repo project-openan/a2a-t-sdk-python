@@ -12,6 +12,7 @@ client's received events — without changing the production flow.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import uvicorn
 from a2a.client.client import ClientCallContext
@@ -44,9 +46,21 @@ from shared.config import (
     SampleConfig,
 )
 
+from tests.support.adk_fake_model import build_client_script, build_fake_model
+from tests.support.scenario_scripts import scripted_decisions_for
+
 #: Budgets of the in-process server: bind/publication and graceful shutdown.
 SERVER_START_TIMEOUT_SECONDS: float = 10.0
 SERVER_STOP_TIMEOUT_SECONDS: float = 5.0
+
+#: One build lock per event loop; the model patch it guards is process-wide.
+_BUILD_LOCKS: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
+
+
+def _runtime_build_lock() -> asyncio.Lock:
+    """Return the build lock of the running event loop."""
+    loop = asyncio.get_running_loop()
+    return _BUILD_LOCKS.setdefault(loop, asyncio.Lock())
 
 #: Backstop idle timeout of the webhook client transport used by tests.
 TEST_WEBHOOK_IDLE_TIMEOUT_SECONDS: int = 10
@@ -324,7 +338,25 @@ async def run_scenario_flow(
     Raises:
         AssertionError: when the auto mode silently used a different decision provider.
     """
-    client = await build_demo_runtime(config, scenario_name, MODE_AUTO, transport, config.discovery)
+    # The deterministic client model must serve the scenario's own decision script: a generic
+    # ACCEPT has no corrected target, and the server rightly rejects an accepted Task-T whose
+    # overlapping segments were never adjusted.
+    def scenario_model(config: object = None, *, model: object = None) -> object:
+        del config
+        return model if model is not None else build_fake_model(
+            [build_client_script(scripted_decisions_for(scenario_name))]
+        )
+
+    # The patch target is process-wide, so concurrent scenario builds have to take turns; once
+    # built, each provider keeps its own model instance.
+    async with _runtime_build_lock():
+        with (
+            patch("shared.model_factory.build_traced_adk_model", scenario_model),
+            patch("protocol.client_runtime.build_traced_adk_model", scenario_model),
+        ):
+            client = await build_demo_runtime(
+                config, scenario_name, MODE_AUTO, transport, config.discovery
+            )
     assert isinstance(client.provider, AdkDecisionProvider), (
         "The auto mode must keep the ADK runner in the decision loop"
     )
