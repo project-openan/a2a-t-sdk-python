@@ -646,33 +646,84 @@ def _is_module_child(pid: int, module: str) -> bool:
     return module in _process_command_line(pid)
 
 
-def _is_ui_child(pid: int) -> bool:
-    """Return whether ``pid`` is the managed ``demo.web.serve`` UI child.
-
-    Only this leaf process is safe to restart from the launcher: killing an older launcher that
-    served the UI in-process would also take down the server child it owns.
-    """
-    return _is_module_child(pid, "demo.web.serve")
+def _comparable_command_text(command: str) -> str:
+    """Return a command line with quoting and path separators normalized for comparison."""
+    text = command.replace('"', "").replace("\\", "/")
+    return text.casefold() if os.name == "nt" else text
 
 
-def _is_demo_process(pid: int) -> bool:
-    """Return whether ``pid`` runs this sample's launcher or its Web UI.
+def _command_option_value(command: str, option: str) -> str:
+    """Return the value of ``option`` in a command line, or an empty string when absent."""
+    tokens = command.replace('"', "").split()
+    for index, token in enumerate(tokens):
+        if token == option and index + 1 < len(tokens):
+            return tokens[index + 1]
+        if token.startswith(f"{option}="):
+            return token.partition("=")[2]
+    return ""
 
-    The check guards :func:`_kill_port_listener`: a port can be occupied by an unrelated service,
-    so only a command line that names ``demo.web.serve`` (managed UI child) or the launcher with
-    ``--ui`` (UI served inside an older launcher) may be stopped.
+
+def _is_instance_ui(pid: int, port: int) -> bool:
+    """Return whether ``pid`` is the Web UI *this* launcher instance started on ``port``.
+
+    "The command line names ``demo.web.serve``" only proves the process belongs to this sample,
+    not to this instance: a second instance on the same machine runs the same modules with the
+    same command line. The managed UI child is spawned with ``--env-file <RUN_DIR>/.env``, and
+    that per-run file path names the launcher state directory, so it is the ownership proof. An
+    older launcher that served the UI inside its own process has no such argument; for it the
+    ``--ui-port`` value it was started with must match ``port``.
     """
     command = _process_command_line(pid)
     if not command:
         return False
-    if "demo.web.serve" in command:
-        return True
-    return ("demo.run_demo" in command or "run_demo.py" in command) and "--ui" in command
+    if UI_MODULE in command:
+        run_env_file = _comparable_command_text(str(RUN_DIR / ".env"))
+        return run_env_file in _comparable_command_text(command)
+    return (
+        ("demo.run_demo" in command or "run_demo.py" in command)
+        and "--ui" in command
+        and _command_option_value(command, "--ui-port") == str(port)
+    )
 
 
-def _kill_port_listener(port: int) -> int:
-    """Stop the listener of ``port`` when it is demonstrably this sample; return the count."""
-    return _stop_pids([pid for pid in _listener_pids(port) if _is_demo_process(pid)])
+def _is_instance_child(pid: int, module: str, port: int) -> bool:
+    """Return whether ``pid`` is a stale child of this instance that :func:`start` may restart."""
+    if module == UI_MODULE:
+        return _is_instance_ui(pid, port)
+    return _is_module_child(pid, module) or _is_instance_ui(pid, port)
+
+
+def _reclaim_recorded_ui(port: int, *, explicit: bool) -> int:
+    """Free ``port`` from this instance's orphaned Web UI and return how many processes stopped.
+
+    The scan only runs when the caller asks for it: an older launcher served the UI in its own
+    process and never recorded it, which is the only case a port is the last trace of a child.
+    Even then only a UI proven to belong to this instance is stopped, and the message names the
+    surviving PIDs so an operator can tell "another instance owns this port" from "our orphan".
+    """
+    listeners = _listener_pids(port)
+    owners = [pid for pid in listeners if _is_instance_ui(pid, port)]
+    if not owners:
+        detail = (
+            f"pid {', '.join(str(pid) for pid in listeners)}"
+            if listeners
+            else "an unidentified process"
+        )
+        print(
+            f"[run_demo] port {port} is still in use by {detail}, which this launcher does not "
+            f"own; left running"
+        )
+        return 0
+    detail = ", ".join(str(pid) for pid in owners)
+    if not explicit:
+        print(
+            f"[run_demo] port {port} is still held by this instance's Web UI (pid {detail}); "
+            f"pass --reclaim-port to stop an orphaned UI"
+        )
+        return 0
+    stopped = _stop_pids(owners)
+    print(f"[run_demo] reclaimed {stopped} orphaned Web UI process(es) on port {port} (pid {detail})")
+    return stopped
 
 
 def _load_state() -> dict[str, object]:
@@ -1271,6 +1322,14 @@ def _build_parser(
     parser.add_argument("--keep-alive", action="store_true", help="leave the local server running afterwards")
     parser.add_argument("--keep-logs", action="store_true", help="keep the temporary run directory (logs/.env)")
     parser.add_argument("--stop", action="store_true", help="stop a previous --keep-alive run and exit")
+    parser.add_argument(
+        "--reclaim-port",
+        action="store_true",
+        help=(
+            "with --stop: also stop this instance's orphaned Web UI still holding the recorded UI "
+            "port (an older launcher never recorded it). Never stops a process another instance owns"
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=30.0, help="seconds to wait for each port")
     return parser
 
@@ -1329,6 +1388,8 @@ def main() -> int:
 
     configure_logging()
 
+    if args.reclaim_port and not args.stop:
+        parser.error("--reclaim-port only applies to --stop")
     if args.stop:
         state = _load_state()
         pids = _state_pids(state)
@@ -1340,17 +1401,11 @@ def main() -> int:
             return 0
         stopped = _stop_pids(pids)
         # Older launchers served the UI in their own foreground process and never recorded it, so
-        # its port is the only trace left. Reclaim it only when the command line proves ownership.
+        # its port is the only trace left. That scan is opt-in: two instances on one machine run
+        # the same ``demo.web.serve`` command line, so a default scan can stop the other instance.
         reclaimed = 0
         if isinstance(ui_port, int) and _port_open(ui_port):
-            reclaimed = _kill_port_listener(ui_port)
-            if reclaimed:
-                print(f"[run_demo] reclaimed {reclaimed} orphaned Web UI process(es) on port {ui_port}")
-            else:
-                print(
-                    f"[run_demo] port {ui_port} is still in use by a process this launcher does not "
-                    f"recognize; free it manually or start with another --ui-port"
-                )
+            reclaimed = _reclaim_recorded_ui(ui_port, explicit=args.reclaim_port)
         PID_FILE.unlink(missing_ok=True)
         print(
             f"[run_demo] stopped {stopped + reclaimed} process(es) "
@@ -1554,9 +1609,7 @@ def main() -> int:
         if _port_open(port, probe_host):
             if not reuse:
                 stale = [
-                    pid
-                    for pid in _listener_pids(port)
-                    if _is_module_child(pid, module) or _is_ui_child(pid)
+                    pid for pid in _listener_pids(port) if _is_instance_child(pid, module, port)
                 ]
                 if not stale:
                     print(

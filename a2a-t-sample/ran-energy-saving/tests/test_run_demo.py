@@ -380,54 +380,151 @@ def test_probe_host_maps_wildcard_binds_to_loopback() -> None:
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
-        ("python -m demo.web.serve --port 8080", True),
+        # managed child of THIS instance: the per-run env file names our state directory
+        ("python -m demo.web.serve --env-file {run_env} --port 8080", True),
+        # same sample, but the state directory belongs to a second instance
+        ("python -m demo.web.serve --env-file C:/elsewhere/adk/.env --port 8080", False),
+        # managed child without the instance marker cannot be proven ours
+        ("python -m demo.web.serve --port 8080", False),
+        # an older launcher served the UI itself; the port it was started with is the proof
         ("python -m demo.run_demo --ui --ui-port 8080", True),
-        ("python run_demo.py --ui", True),
+        ("python -m demo.run_demo --ui --ui-port 8084", False),
+        ("python run_demo.py --ui", False),
         ("python -m demo.run_demo --scenario night", False),
         ("nginx -g daemon off;", False),
         ("", False),
     ],
 )
-def test_is_demo_process_only_accepts_this_samples_ui(
-    monkeypatch: pytest.MonkeyPatch, command: str, expected: bool
+def test_instance_ui_requires_proof_of_ownership(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str, expected: bool
 ) -> None:
-    """The port fallback of ``--stop`` must never kill an unrelated service."""
-    monkeypatch.setattr(run_demo, "_process_command_line", lambda pid: command)
+    """Matching the sample is not enough: another instance runs the same command line."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    run_env = str(tmp_path / ".env")
+    monkeypatch.setattr(
+        run_demo, "_process_command_line", lambda pid: command.replace("{run_env}", run_env)
+    )
 
-    assert run_demo._is_demo_process(1234) is expected
+    assert run_demo._is_instance_ui(1234, 8080) is expected
 
 
-def test_is_ui_child_only_matches_the_managed_ui_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Restarting a stale UI must not kill an older launcher (it owns the server too)."""
-    monkeypatch.setattr(run_demo, "_process_command_line", lambda pid: "python -m demo.web.serve")
-    assert run_demo._is_ui_child(111) is True
+def test_instance_child_only_restarts_a_child_of_this_instance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Starting the UI replaces our stale child, never another instance's live one."""
+    monkeypatch.setattr(run_demo, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(
+        run_demo,
+        "_process_command_line",
+        lambda pid: f"python -m demo.web.serve --env-file {tmp_path / '.env'}",
+    )
+    assert run_demo._is_instance_child(111, run_demo.UI_MODULE, 8080) is True
 
     monkeypatch.setattr(
         run_demo,
         "_process_command_line",
-        lambda pid: "python -m demo.run_demo --ui --keep-alive",
+        lambda pid: f"python -m demo.web.serve --env-file {tmp_path}/../other/.env",
     )
-    assert run_demo._is_ui_child(111) is False
+    assert run_demo._is_instance_child(111, run_demo.UI_MODULE, 8080) is False
+
+    # A background module carries no instance marker on its command line; the module name is the
+    # only check available, and an occupied port there is a real conflict.
+    monkeypatch.setattr(run_demo, "_process_command_line", lambda pid: "python -m protocol.server_app")
+    assert run_demo._is_instance_child(111, run_demo.SERVER_MODULE, 8000) is True
 
 
-def test_kill_port_listener_skips_unrelated_listeners(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A foreign listener on the recorded UI port is left alone."""
+def test_reclaim_is_opt_in_and_leaves_our_orphan_running(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--stop`` alone never scans the recorded port; it names the orphan instead."""
+    killed: list[list[int]] = []
+    monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [111])
+    monkeypatch.setattr(run_demo, "_is_instance_ui", lambda pid, port: True)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: killed.append(pids) or len(pids))
+
+    assert run_demo._reclaim_recorded_ui(8080, explicit=False) == 0
+
+    assert killed == []
+    assert "--reclaim-port" in capsys.readouterr().out
+
+
+def test_reclaim_stops_this_instances_orphan_when_asked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--stop --reclaim-port`` frees the port from an orphan this instance owns."""
     killed: list[list[int]] = []
     monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [111, 222])
-    monkeypatch.setattr(run_demo, "_is_demo_process", lambda pid: False)
-    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: killed.append(pids) or 0)
+    monkeypatch.setattr(run_demo, "_is_instance_ui", lambda pid, port: pid == 222)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: killed.append(pids) or len(pids))
 
-    assert run_demo._kill_port_listener(8080) == 0
-    assert killed == [[]]
+    assert run_demo._reclaim_recorded_ui(8080, explicit=True) == 1
+
+    assert killed == [[222]]
+    assert "reclaimed 1 orphaned Web UI process(es) on port 8080 (pid 222)" in capsys.readouterr().out
 
 
-def test_kill_port_listener_stops_a_verified_ui(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An orphaned UI whose command line names this sample is reclaimed."""
-    monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [111, 222])
-    monkeypatch.setattr(run_demo, "_is_demo_process", lambda pid: pid == 222)
-    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: len(pids))
+def test_reclaim_never_stops_another_instances_ui(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The field incident: the recorded port was held by another instance's Web UI."""
+    killed: list[list[int]] = []
+    monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [222])
+    monkeypatch.setattr(run_demo, "_is_instance_ui", lambda pid, port: False)
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: killed.append(pids) or len(pids))
 
-    assert run_demo._kill_port_listener(8080) == 1
+    assert run_demo._reclaim_recorded_ui(8080, explicit=True) == 0
+
+    assert killed == []
+    assert "does not own" in capsys.readouterr().out
+
+
+def test_stop_leaves_another_instances_web_ui_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Field regression 2026-11-26: a 8084 ``--stop`` killed the 8080 instance's Web UI.
+
+    The recorded state pointed at a port another instance's ``demo.web.serve`` was holding; a
+    default ``--stop`` must stop only its own recorded PIDs and report the foreign listener.
+    """
+    run_dir = tmp_path / "state"
+    run_dir.mkdir()
+    monkeypatch.setattr(run_demo, "RUN_DIR", run_dir)
+    monkeypatch.setattr(run_demo, "PID_FILE", run_dir / "pids.json")
+    run_demo._write_state({"pids": [111], "ui_port": 8080})
+    monkeypatch.setattr(run_demo, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(run_demo, "_port_open", lambda port, *a, **k: port == 8080)
+    monkeypatch.setattr(run_demo, "_listener_pids", lambda port: [222] if port == 8080 else [])
+    monkeypatch.setattr(
+        run_demo,
+        "_process_command_line",
+        lambda pid: "python -m demo.web.serve --env-file C:/elsewhere/adk/.env --port 8080",
+    )
+    stopped: list[int] = []
+    monkeypatch.setattr(run_demo, "_stop_pids", lambda pids: stopped.extend(pids) or 0)
+    env_file = tmp_path / "source.env"
+    env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["run_demo.py", "--env-file", str(env_file), "--stop"])
+
+    assert run_demo.main() == 0
+
+    assert 222 not in stopped
+    out = capsys.readouterr().out
+    assert "does not own" in out
+    assert "reclaimed" not in out
+
+
+def test_reclaim_port_requires_stop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--reclaim-port`` on its own is a usage error, not a silent no-op."""
+    env_file = tmp_path / "source.env"
+    env_file.write_text("A2AT_LANGUAGE=en-US\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["run_demo.py", "--env-file", str(env_file), "--reclaim-port"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        run_demo.main()
+
+    assert exit_info.value.code == 2
 
 
 def test_web_serve_parser_accepts_the_launcher_arguments(tmp_path: Path) -> None:
