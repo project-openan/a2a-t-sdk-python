@@ -181,6 +181,9 @@ class _FakeRuns:
     def get(self, run_id: str) -> RunState | None:
         return self.runs.get(run_id)
 
+    def live_runs(self) -> list[RunState]:
+        return [run for run in self.runs.values() if not run.finished()]
+
     async def cancel(self, run_id: str) -> bool:
         self.cancelled.append(run_id)
         return True
@@ -1237,6 +1240,98 @@ async def test_load_restores_the_persisted_stages(tmp_path: Path) -> None:
     assert stage["actual"] == {"taskId": "task-1"}
     assert stage["diffs"] == [{"path": "taskId", "expected": "x", "actual": "y"}]
     assert stage["durationMs"] == 12
+
+
+def test_the_status_snapshot_shows_every_browsers_running_batch(tmp_path: Path) -> None:
+    """The one global view: two browsers, two IPs, both visible; the owner filter still applies."""
+    manager = _manager(tmp_path, _FakeRuns(lambda run: None))
+    first = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="accepted",
+        owner="browser-a",
+        owner_source={
+            "kind": "tester",
+            "remoteAddress": "10.0.0.1",
+            "forwardedFor": "10.0.0.1, 10.0.0.9",
+            "userAgent": "Mozilla/5.0 Chrome/131.0",
+        },
+    )
+    second = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="accepted",
+        owner="browser-b",
+        owner_source={"kind": "tester", "remoteAddress": "10.0.0.2"},
+    )
+    for batch in manager._batches.values():
+        batch.status = "running"
+
+    status: dict[str, Any] = manager.status_snapshot()
+
+    assert status["process"]["runningBatches"] == 2
+    owners = {row["ownerId"]: row["ownerSource"] for row in status["batches"]}
+    assert owners["browser-a"]["remoteAddress"] == "10.0.0.1"
+    assert owners["browser-a"]["userAgent"].endswith("Chrome/131.0")
+    assert owners["browser-b"]["remoteAddress"] == "10.0.0.2"
+    assert status["batches"][0]["total"] == 1
+    assert status["batches"][0]["done"] == 0
+    # The rest of the console keeps hiding another browser's batch.
+    assert manager.get(str(second["batchId"]), owner="browser-a") is None
+    assert manager.get(str(first["batchId"]), owner="browser-a") is not None
+
+
+def test_the_status_snapshot_counts_live_runs_and_the_tasks_they_hold(tmp_path: Path) -> None:
+    runs = _FakeRuns(lambda run: None)
+    manager = _manager(tmp_path, runs)
+    live = RunState(
+        run_id="r-live", scenario="night", mode="auto", transport="sse", protocol=PROTOCOL_A2A_T
+    )
+    live.source = {
+        "kind": "presentation",
+        "remoteAddress": "10.0.0.5",
+        "receivedAt": "2026-11-26T00:00:00Z",
+    }
+    live.remote_task_id = "task-live"
+    live.detached = True
+    finished = RunState(
+        run_id="r-done", scenario="night", mode="auto", transport="sse", protocol=PROTOCOL_A2A_T
+    )
+    finished.status = "finished"
+    runs.runs = {"r-live": live, "r-done": finished}
+
+    status: dict[str, Any] = manager.status_snapshot()
+
+    assert status["process"]["liveRuns"] == 1
+    assert status["process"]["runsHoldingTask"] == 1
+    assert status["process"]["detachedRuns"] == 1
+    row = status["runs"][0]
+    assert row["runId"] == "r-live"
+    assert row["sourceKind"] == "presentation"
+    assert row["remoteAddress"] == "10.0.0.5"
+    assert row["detached"] is True
+    assert row["remoteTaskId"] == "task-live"
+    assert row["startedAt"] == "2026-11-26T00:00:00Z"
+    assert isinstance(row["elapsedSeconds"], int)
+
+
+def test_a_batch_keeps_its_owner_origin_across_a_reload(tmp_path: Path) -> None:
+    manager = _manager(tmp_path, _FakeRuns(lambda run: None))
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="accepted",
+        owner="browser-a",
+        owner_source={"kind": "tester", "remoteAddress": "10.0.0.1"},
+    )
+    batch_id = str(created["batchId"])
+
+    assert created["ownerSource"] == {"kind": "tester", "remoteAddress": "10.0.0.1"}
+    reloaded = _manager(tmp_path, _FakeRuns(lambda run: None)).get(
+        batch_id, owner="browser-a"
+    )
+    assert reloaded is not None
+    assert reloaded["ownerSource"] == {"kind": "tester", "remoteAddress": "10.0.0.1"}
 
 
 async def test_rerun_uses_a_new_run_identity(tmp_path: Path) -> None:

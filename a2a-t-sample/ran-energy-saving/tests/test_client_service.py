@@ -225,6 +225,25 @@ async def _finish(manager: RunManager, run_id: str) -> None:
     await run.task
 
 
+async def test_live_runs_lists_only_runs_this_process_still_tracks(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The status page must not count finished runs that are only retained in the manager map."""
+    gate = asyncio.Event()
+    manager, _store, _runtimes = _manager(tmp_path, offline_config, wait=gate)
+
+    running = await manager.start("night", "auto", "sse")
+    await asyncio.sleep(0)
+
+    assert [run.run_id for run in manager.live_runs()] == [running.run_id]
+
+    gate.set()
+    await _finish(manager, running.run_id)
+
+    assert manager.live_runs() == []
+
+
 async def test_a_run_correction_reaches_the_client_flow(
     tmp_path: Path,
     offline_config: SampleConfig,

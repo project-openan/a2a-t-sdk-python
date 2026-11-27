@@ -576,6 +576,39 @@ async def test_the_tester_page_issues_a_browser_identity_cookie(
     assert client.cookies.get(CLIENT_COOKIE)
 
 
+async def test_the_status_page_reports_the_process_and_is_linked_from_the_tester(
+    client: httpx.AsyncClient,
+) -> None:
+    page = await client.get("/tester")
+    assert 'href="/status"' in page.text
+
+    status_page = await client.get("/status")
+    assert status_page.status_code == 200
+    assert "运行状态" in status_page.text
+
+    response = await client.get("/api/status")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    payload = response.json()
+    assert payload["process"]["maxConcurrency"] == MAX_CONCURRENCY
+    assert payload["process"]["liveRuns"] == 0
+    assert payload["batches"] == []
+    assert payload["runs"] == []
+
+
+async def test_a_batch_records_the_creating_browsers_network_origin(
+    client: httpx.AsyncClient,
+) -> None:
+    await client.get("/tester")
+    created = await _create_tester_batch(client)
+
+    source = created["ownerSource"]
+    assert source["kind"] == "tester"
+    assert source["channel"] == "tester-console"
+    assert source["entryPath"] == "/api/tester/batches"
+    assert source["remoteAddress"]
+
+
 async def test_batches_are_listed_only_for_the_browser_that_created_them(
     client: httpx.AsyncClient,
 ) -> None:

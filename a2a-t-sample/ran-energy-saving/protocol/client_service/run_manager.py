@@ -513,6 +513,15 @@ class RunManager:
         """Return one run by id, ``None`` when unknown."""
         return self._runs.get(run_id)
 
+    def live_runs(self) -> list[RunState]:
+        """Return every run this process is still tracking, in creation order.
+
+        A finished run stays in the manager until the process exits, so a status view cannot use
+        the raw map. ``detached`` runs are included: their page stopped watching but the remote
+        Task is still tracked, and they are exactly the runs that occupy the NMS quota.
+        """
+        return [run for run in self._runs.values() if not run.finished()]
+
     async def cancel(self, run_id: str, *, remote: bool = True, reason: str | None = None) -> bool:
         """Cancel one active run, asking the remote side to cancel its Task first.
 

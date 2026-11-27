@@ -25,7 +25,7 @@ import shutil
 import time
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,7 +94,8 @@ from demo.web.tester.langfuse_columns import build_trace_columns
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
 
 #: Delay after a run finishes before its Langfuse columns are prefetched (OTel ingestion lag).
-TRACE_PREFETCH_DELAY_SECONDS: Final[float] = 5.0
+#: Longer than ``TRACE_SETTLE_SECONDS``, so the first prefetch is normally already settled.
+TRACE_PREFETCH_DELAY_SECONDS: Final[float] = 20.0
 #: A fetch taken earlier than this after the run finished may miss late spans: it is cached but
 #: marked unsettled, so the next export refetches it.
 TRACE_SETTLE_SECONDS: Final[float] = 15.0
@@ -520,6 +521,9 @@ class _Batch:
     transport: str = "sse"
     discovery: str = "direct"
     owner_id: str = ""
+    #: HTTP origin of the browser that created the batch: anonymous cookie, source address and
+    #: user agent. The status page shows it to answer "whose run is holding the quota".
+    owner_source: dict[str, object] = field(default_factory=dict)
     status: str = BATCH_DRAFT
     created_at: str = field(default_factory=_now_iso)
     started_at: str | None = None
@@ -614,7 +618,12 @@ class EvalBatchManager:
         self._sdk_lock = asyncio.Lock()
         #: Bounds the ``run_case`` threads across every concurrent batch of the process.
         self._sdk_slots = asyncio.Semaphore(MAX_CONCURRENCY)
+        #: SDK-stage threads holding a pool slot right now. ``Semaphore`` exposes no public
+        #: count, and the status page needs to say how much of the process-wide pool is in use.
+        self._sdk_inflight = 0
         self._batches: dict[str, _Batch] = {}
+        #: Wall-clock start of this manager (one per UI process); the status page shows uptime.
+        self._started_at = _now_iso()
 
     # ------------------------------------------------------------------
     # Catalog and batch lifecycle
@@ -640,6 +649,7 @@ class EvalBatchManager:
         concurrency: int = DEFAULT_CONCURRENCY,
         rounds: int = DEFAULT_ROUNDS,
         owner: str = "",
+        owner_source: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """Register one draft batch from the selected cases and protocols.
 
@@ -720,6 +730,7 @@ class EvalBatchManager:
             # Kept for the persisted-batch schema and the pair report; nothing is excluded now.
             excluded_case_ids=[],
             owner_id=owner,
+            owner_source=_mapping_or_empty(owner_source),
         )
         self._batches[batch.batch_id] = batch
         self._persist(batch)
@@ -735,6 +746,7 @@ class EvalBatchManager:
         negotiation_source: str | None = None,
         keep_tasks: bool = False,
         owner: str = "",
+        owner_source: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         """Create a one-item batch for an ad-hoc request (full flow only)."""
         text = user_input.strip()
@@ -767,6 +779,7 @@ class EvalBatchManager:
             discovery=defaults.get("discovery", "direct"),
             items=[item],
             owner_id=owner,
+            owner_source=_mapping_or_empty(owner_source),
         )
         self._batches[batch.batch_id] = batch
         self._persist(batch)
@@ -2857,9 +2870,11 @@ class EvalBatchManager:
                 client = await self._ensure_prompt_client(model_mode)
                 return await asyncio.to_thread(runner, case, client, stop_after=stop_after)
         await self._sdk_slots.acquire()
+        self._sdk_inflight += 1
         try:
             client = await self._checkout_prompt_client(model_mode)
         except BaseException:
+            self._sdk_inflight -= 1
             self._sdk_slots.release()
             raise
         # ``to_thread`` cannot stop its thread. A task plus ``shield`` lets the item unwind on
@@ -2870,6 +2885,7 @@ class EvalBatchManager:
         )
 
         def _finished(finished: asyncio.Task[CaseOutcome]) -> None:
+            self._sdk_inflight -= 1
             self._sdk_slots.release()
             if not finished.cancelled():
                 # Consume a late exception so a cancelled item does not log "never retrieved".
@@ -2963,6 +2979,49 @@ class EvalBatchManager:
     # ------------------------------------------------------------------
     # Persistence and snapshots
     # ------------------------------------------------------------------
+
+    def status_snapshot(self) -> dict[str, object]:
+        """Return the process-wide running status of every browser's work.
+
+        This is the one view that deliberately ignores the owner filter: the status page exists so
+        an operator can see whether someone else already occupies the shared SDK pool or the NMS
+        quota before starting another batch. It is read-only and never touches a batch.
+        """
+        running = [
+            batch for batch in self._batches.values() if batch.status == BATCH_RUNNING
+        ]
+        running.sort(key=lambda batch: batch.started_at or batch.created_at)
+        runs = self._runs.live_runs()
+        return {
+            "generatedAt": _now_iso(),
+            "process": {
+                "pid": os.getpid(),
+                "startedAt": self._started_at,
+                "uptimeSeconds": _elapsed_seconds(self._started_at),
+                "modelMode": self._model_mode,
+                "modelLabel": self._model_label,
+                "nms": self._nms,
+                "serverUrl": self._server_url,
+                "runsDir": str(self._history_dir.parent) if self._history_dir is not None else "",
+                "maxConcurrency": MAX_CONCURRENCY,
+                "sdkInFlight": self._sdk_inflight,
+                "sdkSerialBusy": self._sdk_lock.locked(),
+                "activeItems": sum(len(batch.active_indices) for batch in running),
+                "runningBatches": len(running),
+                "draftBatches": sum(
+                    1 for batch in self._batches.values() if batch.status == BATCH_DRAFT
+                ),
+                "keptTaskBatches": sum(
+                    1 for batch in self._batches.values() if batch.keep_tasks
+                ),
+                "liveRuns": len(runs),
+                "runsHoldingTask": sum(1 for run in runs if run.remote_task_id),
+                "detachedRuns": sum(1 for run in runs if run.detached),
+            },
+            "batches": [_status_batch(batch) for batch in running],
+            "runs": [_status_run(run) for run in runs],
+            "recent": _status_recent(self._batches.values()),
+        }
 
     def _persist(self, batch: _Batch) -> None:
         if self._history_dir is None:
@@ -3078,6 +3137,7 @@ class EvalBatchManager:
                 if isinstance(value, int)
             ],
             owner_id=str(document.get("ownerId") or ""),
+            owner_source=_mapping_or_empty(document.get("ownerSource")),
             status=str(document.get("status") or BATCH_DRAFT),
             created_at=str(document.get("createdAt") or _now_iso()),
             started_at=document.get("startedAt") if isinstance(document.get("startedAt"), str) else None,
@@ -3178,6 +3238,7 @@ class EvalBatchManager:
                 "workingTimeoutSeconds": batch.working_timeout_seconds,
             },
             "ownerId": batch.owner_id,
+            "ownerSource": dict(batch.owner_source),
             "createdAt": batch.created_at,
             "startedAt": batch.started_at,
             "finishedAt": batch.finished_at,
@@ -3481,6 +3542,114 @@ def _summary(items: Sequence[CaseItem]) -> dict[str, int]:
             elif stage.status == STAGE_WARNING:
                 counts["stageWarning"] += 1
     return counts
+
+
+def _status_batch(batch: _Batch) -> dict[str, object]:
+    """Render one running batch for the status page, including its running items."""
+    items = batch.items
+    finished = sum(
+        1 for item in items if item.status not in {CASE_PENDING, CASE_RUNNING}
+    )
+    active = [
+        {
+            "caseId": item.case_id,
+            "name": item.name,
+            "protocol": item.protocol,
+            "round": item.round_index,
+            "status": item.status,
+            "runId": item.run_id or "",
+        }
+        for item in (
+            items[index] for index in batch.active_indices if 0 <= index < len(items)
+        )
+    ]
+    started_at = batch.started_at or batch.created_at
+    return {
+        "batchId": batch.batch_id,
+        "ownerId": batch.owner_id,
+        "ownerSource": dict(batch.owner_source),
+        "protocols": list(batch.protocols),
+        "status": batch.status,
+        "round": batch.current_round,
+        "rounds": batch.rounds,
+        "done": finished,
+        "total": len(items),
+        "active": active,
+        "concurrency": batch.active_concurrency,
+        "keepTasks": batch.keep_tasks,
+        "stopAfter": batch.stop_after,
+        "decisionMode": batch.decision_mode,
+        "negotiationSource": batch.negotiation_source,
+        "transport": batch.transport,
+        "discovery": batch.discovery,
+        "startedAt": started_at,
+        "elapsedSeconds": _elapsed_seconds(started_at),
+    }
+
+
+def _status_run(run: RunState) -> dict[str, object]:
+    """Render one live run for the status page: enough to place it, not its whole state."""
+    source = run.source if isinstance(run.source, Mapping) else {}
+    started_at = source.get("receivedAt")
+    return {
+        "runId": run.run_id,
+        "sourceKind": str(source.get("kind") or ""),
+        "remoteAddress": str(source.get("remoteAddress") or ""),
+        "forwardedFor": str(source.get("forwardedFor") or ""),
+        "userAgent": str(source.get("userAgent") or ""),
+        "protocol": run.protocol,
+        "transport": run.transport,
+        "status": run.status,
+        "detached": run.detached,
+        "remoteTaskId": run.remote_task_id or "",
+        "latestTaskState": run.latest_task_state or "",
+        "startedAt": str(started_at or ""),
+        "elapsedSeconds": _elapsed_seconds(started_at),
+    }
+
+
+def _status_recent(batches: Iterable[_Batch]) -> list[dict[str, object]]:
+    """Return the ten most recently finished batches this process still remembers."""
+    finished = [
+        batch
+        for batch in batches
+        if batch.status not in {BATCH_RUNNING, BATCH_DRAFT}
+    ]
+    finished.sort(
+        key=lambda batch: batch.finished_at or batch.started_at or batch.created_at,
+        reverse=True,
+    )
+    rows: list[dict[str, object]] = []
+    for batch in finished[:10]:
+        items = batch.items
+        rows.append(
+            {
+                "batchId": batch.batch_id,
+                "ownerId": batch.owner_id,
+                "ownerSource": dict(batch.owner_source),
+                "status": batch.status,
+                "protocols": list(batch.protocols),
+                "done": sum(
+                    1 for item in items if item.status not in {CASE_PENDING, CASE_RUNNING}
+                ),
+                "total": len(items),
+                "startedAt": batch.started_at or "",
+                "finishedAt": batch.finished_at or "",
+                "error": batch.error or "",
+            }
+        )
+    return rows
+
+
+def _elapsed_seconds(value: object) -> int:
+    """Return whole seconds since one ISO timestamp, ``0`` when it cannot be parsed."""
+    if not isinstance(value, str) or not value:
+        return 0
+    try:
+        started = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    return max(0, int((datetime.now(UTC) - started).total_seconds()))
 
 
 def _round_summaries(items: Sequence[CaseItem], rounds: int) -> list[dict[str, object]]:

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>A2A / A2A-T · 运行状态</title>
+  <link rel="stylesheet" href="/status/app.css">
+  <script type="module" src="/status/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">A2A-T</span>
+      <div class="brand-text">
+        <small>RAN 节能 · A2A / A2A-T</small>
+        <h1>运行状态</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/tester">评测控制台</a>
+      <a class="ghost" href="/runs">Run 控制台</a>
+      <a class="ghost" href="/">演示页面</a>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="status-line">
+      <span id="refreshed">正在读取状态…</span>
+      <span id="paused" hidden>页面不可见，已暂停刷新</span>
+    </div>
+
+    <div class="warning" id="error" role="alert" hidden></div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>进程与环境</h2>
+        <span class="summary" id="process-mode"></span>
+      </div>
+      <div class="facts" id="process-facts"></div>
+      <div class="facts" id="limits"></div>
+      <p class="empty">
+        重启 UI 进程会终止正在执行的批次；开始新批次前，先确认这里没有其他人正在跑。
+      </p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>正在执行的批次（所有浏览器）</h2>
+        <span class="summary" id="batch-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="batches">
+          <thead>
+            <tr>
+              <th>批次</th>
+              <th>触发人</th>
+              <th>协议</th>
+              <th>进度</th>
+              <th>当前用例</th>
+              <th>已运行</th>
+              <th>并发</th>
+              <th>模式</th>
+              <th>端点</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="batches-empty">当前没有正在执行的批次。</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>运行中的 run（所有来源）</h2>
+        <span class="summary" id="run-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="runs">
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>来源</th>
+              <th>协议 / 传输</th>
+              <th>状态</th>
+              <th>远端 Task</th>
+              <th>开始</th>
+              <th>最近状态</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="runs-empty">当前没有运行中的 run。</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>最近结束（本进程）</h2>
+        <span class="summary" id="recent-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="recent">
+          <thead>
+            <tr>
+              <th>批次</th>
+              <th>触发人</th>
+              <th>协议</th>
+              <th>结果</th>
+              <th>进度</th>
+              <th>开始</th>
+              <th>结束</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="recent-empty">本进程还没有结束的批次。</p>
+    </section>
+  </main>
+</body>
+</html>
