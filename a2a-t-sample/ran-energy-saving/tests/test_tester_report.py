@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from demo.web.tester.report import write_report
@@ -28,7 +29,7 @@ REFERENCE_HEADERS: tuple[str, ...] = (
     "期望意图",
     "answer与reference差异点",
     "被测模型生成答案",
-    "仲裁人-EVAL-额外结果-origin_answer",
+    "交互报文",
     "仲裁人-EVAL-额外结果-执行轨迹",
     "仲裁人-EVAL-额外结果-任务状态",
     "仲裁人-EVAL-额外结果-端到端时延(ms)",
@@ -152,7 +153,8 @@ def test_the_arbitration_row_carries_the_intent_diff_and_answer() -> None:
     assert json.loads(str(row[14]))["Operation type"] == "Create"
     assert row[15] == "完全一致"
     assert json.loads(str(row[16]))["code"] == "SUCCESS"
-    assert json.loads(str(row[17]))["taskId"] == "task-1"
+    # Without a runs directory the interaction column says why it is empty; the answer stays in Q.
+    assert row[17] == "导出时未提供 run 目录，无法读取交互报文。"
     assert row[18] == (
         "### Round 1 | Client | Task-T\n\n"
         "### Round 0 | Server | TASK_STATE_SUBMITTED"
@@ -268,6 +270,134 @@ def test_a_v2_item_without_export_fields_still_exports() -> None:
     assert row[11] in (None, "")
     assert row[16] in (None, "")
     assert "本批次未采集意图" in str(row[33])
+
+
+def _write_wire(run_dir: Path, name: str, records: list[dict[str, Any]]) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / name).write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def _wire_cell(tmp_path: Path, batch: dict[str, Any]) -> str:
+    workbook = load_workbook(BytesIO(write_report(batch, runs_dir=tmp_path)))
+    rows = list(workbook["仲裁格式"].iter_rows(values_only=True))
+    return str(rows[1][17])
+
+
+def test_the_interaction_column_prints_every_raw_frame(tmp_path: Path) -> None:
+    """A reviewer (or a model) must see the request, the SSE reply and the webhook push verbatim."""
+    batch = _snapshot()
+    run_id = str(batch["items"][0]["runId"])
+    _write_wire(
+        tmp_path / run_id,
+        "wire.jsonl",
+        [
+            {
+                "ts": "2026-11-26T01:00:00.000Z",
+                "dir": "out",
+                "method": "POST",
+                "url": "http://nms.test/a2a/json/message:stream",
+                "headers": {"Content-Type": "application/json", "Authorization": "***"},
+                "body": {"message": {"messageId": "m-1", "parts": [{"text": "create task"}]}},
+            },
+            {
+                "ts": "2026-11-26T01:00:00.100Z",
+                "dir": "in",
+                "method": "POST",
+                "url": "http://nms.test/a2a/json/message:stream",
+                "status": 200,
+                "headers": {"content-type": "text/event-stream"},
+                "elapsedMs": 12,
+                "stream": True,
+            },
+            {
+                "ts": "2026-11-26T01:00:00.200Z",
+                "dir": "in",
+                "line": 'data: {"kind": "status", "state": "TASK_STATE_SUBMITTED"}',
+            },
+            {
+                "ts": "2026-11-26T01:00:01.000Z",
+                "dir": "in",
+                "source": "webhook",
+                "dropped": "duplicate",
+                "body": {"taskId": "t-1", "status": {"state": "WORKING"}},
+            },
+        ],
+    )
+
+    cell = _wire_cell(tmp_path, batch)
+
+    assert cell.startswith(f"run {run_id} | 4 帧 | wire.jsonl / wire-oss.jsonl / wire-error.jsonl")
+    assert "[1] 2026-11-26T01:00:00.000Z OUT POST http://nms.test/a2a/json/message:stream" in cell
+    assert '"messageId":"m-1"' in cell
+    assert "IN 200 POST http://nms.test/a2a/json/message:stream 12ms stream" in cell
+    assert 'line: data: {"kind": "status", "state": "TASK_STATE_SUBMITTED"}' in cell
+    assert "IN webhook (dropped: duplicate)" in cell
+    assert '"taskId":"t-1"' in cell
+
+
+def test_a_rejected_frame_is_included_from_the_error_log(tmp_path: Path) -> None:
+    """A frame the SDK rejected never reaches wire.jsonl; the column must still show it."""
+    batch = _snapshot()
+    run_id = str(batch["items"][0]["runId"])
+    _write_wire(
+        tmp_path / run_id,
+        "wire.jsonl",
+        [{"ts": "2026-11-26T01:00:00.000Z", "dir": "out", "method": "POST",
+          "url": "http://nms.test/a2a/json/message:send", "body": {"message": {}}}],
+    )
+    _write_wire(
+        tmp_path / run_id,
+        "wire-error.jsonl",
+        [{
+            "ts": "2026-11-26T01:00:02.000Z",
+            "type": "sdk_rejected",
+            "message": "content.param_missing",
+            "status": 400,
+            "headers": {"x-reason": "bad"},
+            "frame": {"message": {"parts": []}},
+        }],
+    )
+
+    cell = _wire_cell(tmp_path, batch)
+
+    assert "[2] 2026-11-26T01:00:02.000Z ERROR sdk_rejected: content.param_missing" in cell
+    assert "status: 400" in cell
+    assert 'headers: {"x-reason":"bad"}' in cell
+    assert 'frame: {"message":{"parts":[]}}' in cell
+
+
+def test_an_oversized_transcript_keeps_every_frame_on_the_fallback_sheet(tmp_path: Path) -> None:
+    """Excel caps one cell at 32767 characters; the tail must move to its own sheet, not vanish."""
+    batch = _snapshot()
+    run_id = str(batch["items"][0]["runId"])
+    body = "x" * 40000
+    _write_wire(
+        tmp_path / run_id,
+        "wire.jsonl",
+        [
+            {"ts": "2026-11-26T01:00:00.000Z", "dir": "out", "method": "POST",
+             "url": "http://nms.test/a2a/json/message:send",
+             "body": {"message": {"parts": [{"text": body}]}}},
+            {"ts": "2026-11-26T01:00:01.000Z", "dir": "in", "source": "webhook",
+             "body": {"ok": True}},
+        ],
+    )
+
+    workbook = load_workbook(BytesIO(write_report(batch, runs_dir=tmp_path)))
+    rows = list(workbook["仲裁格式"].iter_rows(values_only=True))
+    cell = str(rows[1][17])
+
+    assert len(cell) <= 32000
+    assert "已截断" in cell and "「交互报文」工作表" in cell
+    wire_rows = list(workbook["交互报文"].iter_rows(values_only=True))
+    assert wire_rows[0] == ("用例编号", "协议", "轮次", "Run ID", "帧号", "分段", "交互报文")
+    assert wire_rows[1][4] == 1 and wire_rows[1][5] == "1/2"
+    assert wire_rows[2][5] == "2/2"
+    assert wire_rows[3][4] == 2
+    assert body in "".join(str(row[6]) for row in wire_rows[1:])
 
 
 def _results_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:

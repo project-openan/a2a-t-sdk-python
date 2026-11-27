@@ -412,6 +412,95 @@ def render_trajectory(exchanges: Sequence[Mapping[str, object]]) -> str:
     return "\n\n".join(lines)
 
 
+#: Label of a blank SSE line in the interaction transcript (the frame separator).
+_SSE_BLANK_LINE: Final = "(空行)"
+
+
+def render_wire_frames(records: Sequence[Mapping[str, object]]) -> list[str]:
+    """Render the raw wire records of one run as one text block per frame.
+
+    This is the evidence the arbitration sheet's interaction column shows: the request line, its
+    headers and body, every SSE ``data`` line, every webhook push (including a dropped duplicate)
+    and every frame the SDK rejected. A record is printed verbatim, one frame per block, so a
+    reader (human or model) can follow the exchange in order; nothing is summarized.
+    """
+    return [_wire_frame(index, record) for index, record in enumerate(records, start=1)]
+
+
+def _wire_frame(index: int, record: Mapping[str, object]) -> str:
+    """Render one wire record as a headed block."""
+    ts = str(record.get("ts") or "")
+    if _is_wire_error(record):
+        return _wire_error_frame(index, ts, record)
+    if "line" in record:
+        line = str(record.get("line") or "")
+        return f"[{index}] {ts} IN SSE\nline: {line or _SSE_BLANK_LINE}"
+    source = record.get("source")
+    if isinstance(source, str) and source:
+        dropped = str(record.get("dropped") or "")
+        suffix = f" (dropped: {dropped})" if dropped else ""
+        lines = [f"[{index}] {ts} IN {source}{suffix}"]
+        _append_wire_value(lines, "body", record.get("body"))
+        return "\n".join(lines)
+    lines = [f"[{index}] {ts} {_wire_heading(record)}"]
+    _append_wire_value(lines, "headers", record.get("headers"))
+    _append_wire_value(lines, "body", record.get("body"))
+    return "\n".join(lines)
+
+
+def _wire_heading(record: Mapping[str, object]) -> str:
+    """Return the direction line of one HTTP wire record."""
+    parts: list[str] = [str(record.get("dir") or "").upper() or "?"]
+    status = record.get("status")
+    if status is not None:
+        parts.append(str(status))
+    method = str(record.get("method") or "")
+    if method:
+        parts.append(method)
+    url = str(record.get("url") or "")
+    if url:
+        parts.append(url)
+    elapsed = record.get("elapsedMs")
+    if isinstance(elapsed, int | float) and not isinstance(elapsed, bool):
+        parts.append(f"{elapsed}ms")
+    if record.get("stream") is True:
+        parts.append("stream")
+    return " ".join(parts)
+
+
+def _is_wire_error(record: Mapping[str, object]) -> bool:
+    """Return whether one record comes from ``wire-error.jsonl``."""
+    return "type" in record and "message" in record and "dir" not in record
+
+
+def _wire_error_frame(index: int, ts: str, record: Mapping[str, object]) -> str:
+    """Render one rejected frame kept in ``wire-error.jsonl``."""
+    label = str(record.get("type") or "")
+    message = str(record.get("message") or "")
+    detail = f"{label}: {message}" if label and message else (label or message)
+    head = " ".join(part for part in (f"[{index}]", ts, "ERROR", detail) if part)
+    lines = [head]
+    status = record.get("status")
+    if status is not None:
+        lines.append(f"status: {status}")
+    _append_wire_value(lines, "headers", record.get("headers"))
+    _append_wire_value(lines, "frame", record.get("frame"))
+    return "\n".join(lines)
+
+
+def _append_wire_value(lines: list[str], key: str, value: object) -> None:
+    """Append one ``key: value`` line, JSON-encoding structured values on a single line."""
+    if value is None:
+        return
+    if isinstance(value, str):
+        if value:
+            lines.append(f"{key}: {value}")
+        return
+    if isinstance(value, Mapping | list) and not value:
+        return
+    lines.append(f"{key}: {json.dumps(value, ensure_ascii=False, separators=(',', ':'))}")
+
+
 #: Stage names in execution order, used to name the first unexplained stage of a row.
 _STAGE_ORDER: Final[tuple[str, ...]] = (
     "intent",
@@ -510,6 +599,7 @@ __all__ = [
     "DIFF_IDENTICAL",
     "render_intent_diff",
     "render_trajectory",
+    "render_wire_frames",
     "result_label",
     "score_for",
     "verdict_reason",

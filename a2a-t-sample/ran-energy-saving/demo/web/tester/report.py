@@ -5,14 +5,17 @@ sheet is the arbitration view the test team compares with the reference workbook
 result / stage-difference / summary sheets follow it and stay the troubleshooting view.
 
 The arbitration sheet is built from the data collected while the batch ran: the SDK intent, the
-frozen case reference, the run answer and the trace id. Nothing here reads a run directory.
+frozen case reference, the run answer and the trace id. Its interaction column is the one exception:
+the raw wire frames are read from the run directory at export time, because copying every frame
+into the batch snapshot would multiply the one-second polling payload and the history file.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Final
 
 from openpyxl import Workbook
@@ -23,10 +26,12 @@ from openpyxl.worksheet.worksheet import Worksheet
 from demo.web.tester.export_view import (
     render_intent_diff,
     render_trajectory,
+    render_wire_frames,
     result_label,
     score_for,
     verdict_reason,
 )
+from demo.web.wire_records import read_wire_records
 
 _STAGE_ORDER: Final[tuple[str, ...]] = (
     "intent",
@@ -58,7 +63,7 @@ _REFERENCE_HEADERS: Final[tuple[str, ...]] = (
     "期望意图",
     "answer与reference差异点",
     "被测模型生成答案",
-    "仲裁人-EVAL-额外结果-origin_answer",
+    "交互报文",
     "仲裁人-EVAL-额外结果-执行轨迹",
     "仲裁人-EVAL-额外结果-任务状态",
     "仲裁人-EVAL-额外结果-端到端时延(ms)",
@@ -80,6 +85,17 @@ _REFERENCE_HEADERS: Final[tuple[str, ...]] = (
 #: Excel's hard limit of one cell's text length.
 _MAX_CELL_CHARS: Final[int] = 32000
 
+#: Suffix of an interaction cell that did not fit one Excel cell.
+_WIRE_TRUNCATED_NOTE: Final[str] = "…（已截断，完整逐帧报文见「交互报文」工作表）"
+#: Note of an item that never started a run (a validate-only or intercepted-miss item).
+_NO_RUN_NOTE: Final[str] = "本用例未启动 run。"
+#: Note of an export asked for without the runs directory.
+_NO_RUNS_DIR_NOTE: Final[str] = "导出时未提供 run 目录，无法读取交互报文。"
+#: Note of a run whose wire logs are absent (capture off, or the run directory was cleaned up).
+_NO_WIRE_NOTE: Final[str] = "run {run_id} 无 wire 报文（未开启报文记录或文件已清理）。"
+#: Header of the interaction cell, naming the files it merges.
+_WIRE_HEADER: Final[str] = "run {run_id} | {frames} 帧 | wire.jsonl / wire-oss.jsonl / wire-error.jsonl"
+
 #: Note written when an item never produced a run answer (validate-only batch).
 _NO_ANSWER_NOTE: Final[str] = "未执行发送阶段"
 #: Note written when the downstream accepted the Task without returning its reading.
@@ -92,14 +108,21 @@ _NO_INTENT_NOTE: Final[str] = "本批次未采集意图"
 _REBUILT_TRACE_NOTE: Final[str] = "traceparent 为重建值"
 
 
-def write_report(batch: Mapping[str, Any]) -> bytes:
-    """Build the XLSX report of one batch snapshot."""
+def write_report(batch: Mapping[str, Any], *, runs_dir: Path | None = None) -> bytes:
+    """Build the XLSX report of one batch snapshot.
+
+    Args:
+        batch: The batch snapshot served to the UI.
+        runs_dir: Directory holding ``<runId>/wire*.jsonl``, used for the interaction column.
+            ``None`` keeps the report exportable when only the snapshot is available.
+    """
     rounds = _rounds_of(batch)
     multi = rounds > 1
     workbook = Workbook()
     reference = workbook.active
     reference.title = "仲裁格式"
-    _write_reference_sheet(reference, batch, multi=multi)
+    overflow: list[tuple[Mapping[str, Any], list[str]]] = []
+    _write_reference_sheet(reference, batch, multi=multi, runs_dir=runs_dir, overflow=overflow)
     results = workbook.create_sheet("用例结果")
     headers: list[str] = [
         "用例编号",
@@ -252,6 +275,11 @@ def write_report(batch: Mapping[str, Any]) -> bytes:
     summary.append(["batchId", batch.get("batchId", "")])
     _set_widths(summary, (28, 36))
 
+    # An interaction transcript that does not fit one Excel cell keeps every frame here instead
+    # of losing its tail: one row per wire frame, chunked only when a single frame is oversized.
+    if overflow:
+        _write_wire_sheet(workbook.create_sheet("交互报文"), overflow)
+
     if multi:
         _write_round_sheet(workbook.create_sheet("轮次汇总"), batch, rounds)
 
@@ -403,9 +431,18 @@ def _write_client_quality_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> N
 
 
 def _write_reference_sheet(
-    sheet: Worksheet, batch: Mapping[str, Any], *, multi: bool
+    sheet: Worksheet,
+    batch: Mapping[str, Any],
+    *,
+    multi: bool,
+    runs_dir: Path | None,
+    overflow: list[tuple[Mapping[str, Any], list[str]]],
 ) -> None:
-    """Write the arbitration worksheet: one row per batch item, reference column order."""
+    """Write the arbitration worksheet: one row per batch item, reference column order.
+
+    An item whose interaction transcript exceeds one Excel cell is also appended to ``overflow``
+    so the caller can give every frame its own row on the fallback sheet.
+    """
     headers = list(_REFERENCE_HEADERS)
     if multi:
         headers.insert(2, "轮次")
@@ -413,13 +450,19 @@ def _write_reference_sheet(
     _style_header(sheet)
     items = batch.get("items")
     for item in items if isinstance(items, list) else []:
-        if isinstance(item, Mapping):
-            row = _reference_row(item)
-            if multi:
-                row.insert(2, item.get("round", 1))
-            sheet.append([_cell(value) for value in row])
+        if not isinstance(item, Mapping):
+            continue
+        wire_text, frames = _wire_text(item, runs_dir)
+        oversized = len(wire_text) > _MAX_CELL_CHARS
+        shown = _truncated_wire(wire_text) if oversized else wire_text
+        row = _reference_row(item, wire_text=shown)
+        if multi:
+            row.insert(2, item.get("round", 1))
+        sheet.append([_cell(value) for value in row])
+        if oversized:
+            overflow.append((item, frames))
     widths = [
-        34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 60, 50,
+        34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 90, 50,
         16, 14, 10, 10, 10, 12, 12, 10, 10, 10, 10, 10, 12, 40,
     ]
     if multi:
@@ -545,7 +588,7 @@ def _round_matrix(batch: Mapping[str, Any], rounds: int) -> list[list[object]]:
     return rows
 
 
-def _reference_row(item: Mapping[str, Any]) -> list[object]:
+def _reference_row(item: Mapping[str, Any], *, wire_text: str) -> list[object]:
     """Build one arbitration row from the data collected while the item ran."""
     refs = _map_of(item.get("refs"))
     intent_meta = _map_of(item.get("intentMeta"))
@@ -589,7 +632,7 @@ def _reference_row(item: Mapping[str, Any]) -> list[object]:
             server_intent,
         ),
         _json_cell(answer, indent=2),
-        _json_cell(answer, indent=None),
+        wire_text,
         render_trajectory(exchanges if isinstance(exchanges, list) else []),
         _task_state(item, answer),
         item.get("durationMs", ""),
@@ -649,6 +692,62 @@ def _reference_note(
     if isinstance(langfuse_warning, str) and langfuse_warning:
         notes.append(f"Langfuse 导出失败：{langfuse_warning}")
     return "；".join(notes)
+
+
+def _wire_text(item: Mapping[str, Any], runs_dir: Path | None) -> tuple[str, list[str]]:
+    """Return the item's interaction transcript and its per-frame blocks."""
+    run_id = str(item.get("runId") or "")
+    if not run_id:
+        return _NO_RUN_NOTE, [_NO_RUN_NOTE]
+    if runs_dir is None:
+        return _NO_RUNS_DIR_NOTE, [_NO_RUNS_DIR_NOTE]
+    records = read_wire_records(runs_dir, run_id, include_errors=True)
+    if not records:
+        note = _NO_WIRE_NOTE.format(run_id=run_id)
+        return note, [note]
+    frames = render_wire_frames(records)
+    header = _WIRE_HEADER.format(run_id=run_id, frames=len(frames))
+    return f"{header}\n\n" + "\n\n".join(frames), frames
+
+
+def _truncated_wire(text: str) -> str:
+    """Cut the interaction cell to Excel's limit and point at the fallback sheet."""
+    keep = _MAX_CELL_CHARS - len(_WIRE_TRUNCATED_NOTE)
+    return text[:keep] + _WIRE_TRUNCATED_NOTE
+
+
+def _write_wire_sheet(
+    sheet: Worksheet, overflow: Sequence[tuple[Mapping[str, Any], list[str]]]
+) -> None:
+    """Write every frame of an oversized interaction transcript, one row per frame."""
+    sheet.append(["用例编号", "协议", "轮次", "Run ID", "帧号", "分段", "交互报文"])
+    _style_header(sheet)
+    for item, frames in overflow:
+        for number, frame in enumerate(frames, start=1):
+            chunks = _split_cell(frame)
+            for part, chunk in enumerate(chunks, start=1):
+                sheet.append(
+                    [
+                        item.get("caseId", ""),
+                        item.get("protocol", ""),
+                        item.get("round", 1),
+                        item.get("runId", ""),
+                        number,
+                        f"{part}/{len(chunks)}" if len(chunks) > 1 else "",
+                        chunk,
+                    ]
+                )
+    _set_widths(sheet, (12, 10, 6, 34, 8, 8, 120))
+
+
+def _split_cell(text: str) -> list[str]:
+    """Split one oversized cell into Excel-sized chunks, keeping every character."""
+    if len(text) <= _MAX_CELL_CHARS:
+        return [text]
+    return [
+        text[index : index + _MAX_CELL_CHARS]
+        for index in range(0, len(text), _MAX_CELL_CHARS)
+    ]
 
 
 def _task_state(item: Mapping[str, Any], answer: Mapping[str, Any]) -> str:

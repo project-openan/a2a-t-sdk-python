@@ -14,6 +14,7 @@ from demo.web.tester.export_view import (
     read_traceparent,
     render_intent_diff,
     render_trajectory,
+    render_wire_frames,
     result_label,
     score_for,
 )
@@ -301,3 +302,44 @@ def _answer_run() -> RunState:
         report={"code": "SUCCESS", "message": "异步任务已创建", "finalResult": "Task creation succeeded"},
     )
     return run
+
+
+def test_wire_frames_render_the_request_headers_and_body() -> None:
+    frames = render_wire_frames(
+        [
+            {
+                "ts": "2026-11-26T01:00:00.000Z",
+                "dir": "out",
+                "method": "POST",
+                "url": "http://nms.test/a2a/json/message:send",
+                "headers": {"Content-Type": "application/json", "Authorization": "***"},
+                "body": {"message": {"messageId": "m-1"}},
+            }
+        ]
+    )
+
+    assert frames == [
+        "[1] 2026-11-26T01:00:00.000Z OUT POST http://nms.test/a2a/json/message:send\n"
+        'headers: {"Content-Type":"application/json","Authorization":"***"}\n'
+        'body: {"message":{"messageId":"m-1"}}'
+    ]
+
+
+def test_wire_frames_mark_sse_lines_webhook_pushes_and_rejected_frames() -> None:
+    frames = render_wire_frames(
+        [
+            {"ts": "t1", "dir": "in", "line": ""},
+            {
+                "ts": "t2",
+                "dir": "in",
+                "source": "webhook",
+                "dropped": "duplicate",
+                "body": {"ok": True},
+            },
+            {"ts": "t3", "type": "sdk_rejected", "message": "bad frame", "frame": {"a": 1}},
+        ]
+    )
+
+    assert frames[0] == "[1] t1 IN SSE\nline: (空行)"
+    assert frames[1] == '[2] t2 IN webhook (dropped: duplicate)\nbody: {"ok":true}'
+    assert frames[2] == '[3] t3 ERROR sdk_rejected: bad frame\nframe: {"a":1}'

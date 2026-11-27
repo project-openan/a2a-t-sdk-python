@@ -11,15 +11,26 @@ import json
 from pathlib import Path
 
 
-def read_wire_records(runs_dir: Path, run_id: str) -> list[dict[str, object]]:
+def read_wire_records(
+    runs_dir: Path, run_id: str, *, include_errors: bool = False
+) -> list[dict[str, object]]:
     """Return every redacted wire record of one run, in event order.
 
     The inspector must show the complete raw exchange: an early ``message:send`` is exactly what a
     long polling run is investigated for, so no head or tail record may be dropped.
+
+    Args:
+        runs_dir: Directory holding the per-run subdirectories.
+        run_id: Run whose wire logs are read.
+        include_errors: Also merge ``wire-error.jsonl``. A frame the SDK or the raw reader
+            rejected never reaches ``wire.jsonl``, so a troubleshooting view needs it; the Run
+            Explorer keeps its historical two-file view by default.
     """
     records: list[dict[str, object]] = []
     for name in ("wire.jsonl", "wire-oss.jsonl"):
         records.extend(_read_wire_file(Path(runs_dir) / run_id / name))
+    if include_errors:
+        records.extend(_read_wire_file(Path(runs_dir) / run_id / "wire-error.jsonl"))
     records.sort(key=lambda record: str(record.get("ts") or ""))
     return records
 

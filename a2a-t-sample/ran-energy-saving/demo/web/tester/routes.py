@@ -342,7 +342,7 @@ def build_tester_routes(
         if snapshot is None:
             return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
         return Response(
-            write_report(snapshot),
+            write_report(snapshot, runs_dir=runs_dir),
             media_type=XLSX_MEDIA_TYPE,
             headers={"Content-Disposition": f'attachment; filename="osp-tester-{batch_id}.xlsx"'},
         )
