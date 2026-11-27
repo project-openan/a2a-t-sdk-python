@@ -235,6 +235,77 @@ def test_the_wire_trajectory_drops_the_fixed_task_t_terminology_tail() -> None:
     )
 
 
+def test_the_wire_trajectory_unwraps_a_json_rpc_sse_result() -> None:
+    records = [
+        {
+            "dir": "in",
+            "line": (
+                'data: {"jsonrpc": "2.0", "id": 1, "result": {"task": {"status": '
+                '{"state": "TASK_STATE_SUBMITTED", "message": {"parts": '
+                '[{"text": "Task creation succeeded"}]}}}}}'
+            ),
+        }
+    ]
+
+    assert render_wire_trajectory(records) == "Server SUBMITTED | Task creation succeeded"
+
+
+def test_the_wire_trajectory_expands_a_json_array_sse_frame() -> None:
+    records = [
+        {
+            "dir": "in",
+            "line": (
+                'data: [{"statusUpdate": {"status": {"state": "TASK_STATE_WORKING", '
+                '"message": {"parts": [{"text": "working"}]}}}}, '
+                '{"statusUpdate": {"status": {"state": "TASK_STATE_COMPLETED", '
+                '"message": {"parts": [{"text": "done"}]}}}}]'
+            ),
+        }
+    ]
+
+    assert render_wire_trajectory(records) == (
+        "Server WORKING | working\nServer COMPLETED | done"
+    )
+
+
+def test_the_wire_trajectory_summarises_an_inbound_json_body_and_a_wrapped_push() -> None:
+    records = [
+        {
+            "dir": "in",
+            "method": "POST",
+            "status": 200,
+            "body": {
+                "result": {
+                    "task": {
+                        "status": {
+                            "state": "TASK_STATE_SUBMITTED",
+                            "message": {"parts": [{"text": "Task creation succeeded"}]},
+                        }
+                    }
+                }
+            },
+        },
+        {
+            "dir": "in",
+            "source": "webhook",
+            "body": {
+                "data": {
+                    "statusUpdate": {
+                        "status": {
+                            "state": "TASK_STATE_WORKING",
+                            "message": {"parts": [{"text": "Task is executing."}]},
+                        }
+                    }
+                }
+            },
+        },
+    ]
+
+    assert render_wire_trajectory(records) == (
+        "Server SUBMITTED | Task creation succeeded\nServer WORKING | Task is executing."
+    )
+
+
 def test_the_wire_trajectory_names_a_negotiation_performative_and_round() -> None:
     records = [
         {

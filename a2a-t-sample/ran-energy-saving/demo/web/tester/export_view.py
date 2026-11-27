@@ -426,74 +426,80 @@ def render_wire_trajectory(records: Sequence[Mapping[str, object]]) -> str:
 
     The interaction column prints every frame verbatim; this column answers "who said what, in
     which order" at a glance. Each business frame becomes one line: the round and side, the
-    message title (Task-T, a negotiation performative or a Task state) and the core body. Header
-    frames, blank SSE lines, heartbeats and dropped duplicate pushes stay in the interaction
-    column only. A rejected frame is kept as an ``ERROR`` line because it explains a negotiation
-    that never reached the wire log.
+    message title (Task-T, a negotiation performative or a Task state) and the core body. A frame
+    wrapped in a JSON-RPC ``result``, a vendor ``data``/``payload`` envelope or a JSON array is
+    unwrapped first, so every core frame the interaction column shows also reaches this column.
+    Header frames, blank SSE lines, heartbeats and dropped duplicate pushes stay in the
+    interaction column only. A rejected frame is kept as an ``ERROR`` line because it explains a
+    negotiation that never reached the wire log.
     """
     lines: list[str] = []
     current_round: int | None = None
     for record in records:
-        line, current_round = _wire_trajectory_line(record, current_round)
-        if line:
-            lines.append(line)
+        record_lines, current_round = _wire_trajectory_lines(record, current_round)
+        lines.extend(record_lines)
     return "\n".join(lines)
 
 
-def _wire_trajectory_line(
+def _wire_trajectory_lines(
     record: Mapping[str, object], current_round: int | None
-) -> tuple[str, int | None]:
-    """Return one wire record's trajectory line and the round the next frame belongs to."""
+) -> tuple[list[str], int | None]:
+    """Return one wire record's trajectory lines and the round the next frame belongs to."""
     if _is_wire_error(record):
         label = str(record.get("type") or "")
         message = str(record.get("message") or "")
         detail = f"{label}: {message}" if label and message else (label or message)
         line = f"ERROR | {_one_line(detail)}" if detail.strip() else "ERROR"
-        return line, current_round
+        return [line], current_round
     sse_line = record.get("line")
     if isinstance(sse_line, str):
-        summary = _sse_trajectory_summary(sse_line)
-        if summary is None:
-            return "", current_round
-        title, text, round_number = summary
-        return _rounded_row(round_number, _SIDE_SERVER, title, text, current_round)
+        summaries = _sse_trajectory_summaries(sse_line)
+        return _summary_lines(summaries, _SIDE_SERVER, current_round)
     source = record.get("source")
     if isinstance(source, str) and source:
         if record.get("dropped"):
-            return "", current_round
+            return [], current_round
         body = _decoded_body(record.get("body"))
-        if not isinstance(body, Mapping):
-            return f"{_SIDE_SERVER} {source}", current_round
-        title, text, round_number = _frame_summary(body)
-        return _rounded_row(round_number, _SIDE_SERVER, title or source, text, current_round)
+        summaries = _frame_summaries(body)
+        if not summaries:
+            # A push without a recognizable frame (or a body that is not JSON) still names the hop.
+            return [f"{_SIDE_SERVER} {source}"], current_round
+        return _summary_lines(summaries, _SIDE_SERVER, current_round, fallback_title=source)
     body = _decoded_body(record.get("body"))
-    if not isinstance(body, Mapping):
-        return "", current_round
-    message = body.get("message")
-    if not isinstance(message, Mapping):
-        return "", current_round
-    title, text, round_number = _message_summary(message)
-    return _rounded_row(round_number, _SIDE_CLIENT, title, text, current_round)
+    side = _SIDE_SERVER if str(record.get("dir") or "").lower() == "in" else _SIDE_CLIENT
+    return _summary_lines(_frame_summaries(body), side, current_round)
 
 
-def _sse_trajectory_summary(line: str) -> tuple[str, str, int | None] | None:
-    """Return one inbound SSE ``data:`` frame's summary; blank lines and heartbeats end here."""
+def _summary_lines(
+    summaries: Sequence[tuple[str, str, int | None]],
+    side: str,
+    current_round: int | None,
+    *,
+    fallback_title: str = "",
+) -> tuple[list[str], int | None]:
+    """Turn the summaries of one record into trajectory lines, carrying the round forward."""
+    lines: list[str] = []
+    for title, text, round_number in summaries:
+        line, current_round = _rounded_row(
+            round_number, side, title or fallback_title, text, current_round
+        )
+        lines.append(line)
+    return lines, current_round
+
+
+def _sse_trajectory_summaries(line: str) -> list[tuple[str, str, int | None]]:
+    """Return the business frames of one SSE ``data:`` line; blank lines and heartbeats end here."""
     stripped = line.strip()
     if not stripped.startswith("data:"):
-        return None
+        return []
     payload = stripped[len("data:") :].strip()
     if not payload:
-        return None
+        return []
     try:
         body = json.loads(payload)
     except json.JSONDecodeError:
-        return None
-    if not isinstance(body, Mapping):
-        return None
-    title, text, round_number = _frame_summary(body)
-    if not title:
-        return None
-    return title, text, round_number
+        return []
+    return _frame_summaries(body)
 
 
 def _rounded_row(
@@ -511,7 +517,42 @@ def _rounded_row(
     return _trajectory_row(current_round, side, title, body), current_round
 
 
-def _frame_summary(body: Mapping[str, object]) -> tuple[str, str, int | None]:
+#: Keys a JSON-RPC response or a vendor push may wrap the real frame payload in.
+_PAYLOAD_ENVELOPE_KEYS: Final = ("result", "response", "payload", "data")
+
+#: How deep a nested envelope is unwrapped before it is treated as an opaque frame.
+_ENVELOPE_DEPTH_LIMIT: Final = 4
+
+
+def _frame_summaries(payload: object, depth: int = 0) -> list[tuple[str, str, int | None]]:
+    """Return one summary per business frame inside a payload.
+
+    A frame may arrive as a JSON array, or wrapped in a JSON-RPC ``result`` or a vendor
+    ``data``/``payload`` envelope. Every recognized frame becomes one summary, so a record the
+    interaction column prints verbatim also reaches the trajectory as one line per frame.
+    """
+    if depth > _ENVELOPE_DEPTH_LIMIT:
+        return []
+    if isinstance(payload, (list, tuple)):
+        summaries: list[tuple[str, str, int | None]] = []
+        for item in payload:
+            summaries.extend(_frame_summaries(item, depth + 1))
+        return summaries
+    if not isinstance(payload, Mapping):
+        return []
+    title, text, round_number = _direct_frame_summary(payload)
+    if title:
+        return [(title, text, round_number)]
+    for key in _PAYLOAD_ENVELOPE_KEYS:
+        nested = payload.get(key)
+        if isinstance(nested, (Mapping, list, tuple)):
+            summaries = _frame_summaries(nested, depth + 1)
+            if summaries:
+                return summaries
+    return []
+
+
+def _direct_frame_summary(body: Mapping[str, object]) -> tuple[str, str, int | None]:
     """Return the title, core body and round of one inbound frame or webhook push."""
     for key in ("task", "statusUpdate"):
         envelope = body.get(key)
