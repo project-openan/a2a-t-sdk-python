@@ -31,6 +31,8 @@ from eval.osp.compare import (
 from eval.osp.intent_schema import OSP_INTENT_KEYS
 from protocol.client_service import RunState
 
+from demo.web.tester.messages import TesterMessages
+
 #: Rendered diff of an intent equal to its reference.
 DIFF_IDENTICAL: str = "完全一致"
 
@@ -810,14 +812,21 @@ _EXPLAINING_STAGE_STATUSES: Final[frozenset[str]] = frozenset(
 _RECORDED_REASON_STAGES: Final[frozenset[str]] = frozenset({"intent", "final"})
 
 
-def verdict_reason(item: Mapping[str, object]) -> str:
+def verdict_reason(
+    item: Mapping[str, object], messages: TesterMessages | None = None
+) -> str:
     """Explain why one row is not ``passed``.
 
     The arbitration workbook used to leave the whole column empty for a ``partial`` row: the
     evidence was spread across the stage-difference sheet and the run console. The reason is built
     from the same snapshot the UI shows, in the order a reviewer needs it: the run's own error, the
     first non-green stage message, then the human-review trigger of an undecided intent.
+
+    ``messages`` is the batch's message set; the reason is rendered once at snapshot time in the
+    language the batch was created in (D9).
     """
+    if messages is None:
+        messages = TesterMessages()
     status = str(item.get("status") or "")
     if status in {"", "passed"}:
         return ""
@@ -838,16 +847,25 @@ def verdict_reason(item: Mapping[str, object]) -> str:
                 # enough.
                 continue
             if stage_status in _EXPLAINING_STAGE_STATUSES:
-                reasons.append(f"{stage_name}: {message}" if message else stage_name)
+                reasons.append(
+                    messages.get("verdict_stage", stage=stage_name, message=message)
+                    if message
+                    else stage_name
+                )
             elif stage_status == "recorded" and stage_name in _RECORDED_REASON_STAGES:
                 reasons.append(
-                    f"{stage_name}: {message}" if message else f"{stage_name}: 只记录，未判定"
+                    messages.get("verdict_stage", stage=stage_name, message=message)
+                    if message
+                    else messages.get("verdict_recorded", stage=stage_name)
                 )
-    if item.get("needsReview") and not any("转人工复核" in reason for reason in reasons):
+    review_label = messages.get("verdict_needs_review_base")
+    if item.get("needsReview") and not any(review_label in reason for reason in reasons):
         paths = _residual_paths(item.get("intentVerdict"))
-        suffix = f"（{', '.join(paths[:3])}）" if paths else ""
-        reasons.append(f"转人工复核{suffix}")
-    return "；".join(_unique_reasons(reasons))
+        suffix = (
+            messages.get("verdict_review_paths", paths=", ".join(paths[:3])) if paths else ""
+        )
+        reasons.append(messages.get("verdict_needs_review", suffix=suffix))
+    return messages.get("verdict_separator").join(_unique_reasons(reasons))
 
 
 def _residual_paths(verdict: object) -> list[str]:

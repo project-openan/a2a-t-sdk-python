@@ -25,6 +25,7 @@ from starlette.routing import Route
 
 from demo.web.request_source import request_source
 from demo.web.tester.langfuse_columns import TRACE_COLUMN_HEADERS, build_trace_columns
+from demo.web.tester.messages import TesterMessages
 from demo.web.tester.report import write_report
 from demo.web.tester.service import (
     ALL_STAGES,
@@ -84,6 +85,7 @@ def build_tester_routes(
     """Build the tester routes and the process-level batch manager."""
     del scenarios_by_protocol
     resolved_language = language or LANGUAGE_ZH
+    messages = TesterMessages(resolved_language)
     page_html = (TESTER_DIR / "index.html").read_text(encoding="utf-8").replace(
         "__A2AT_LANGUAGE__", resolved_language
     )
@@ -96,7 +98,7 @@ def build_tester_routes(
         server_auth_token=server_auth_token,
         runs_dir=runs_dir,
         nms=nms_enabled,
-        language=language,
+        language=resolved_language,
         model_mode=model_mode,
         model_label=model_label,
         metrics_grace_seconds=metrics_grace_seconds,
@@ -191,34 +193,40 @@ def build_tester_routes(
         try:
             case_id = int(request.path_params["case_id"])
         except ValueError:
-            return JSONResponse({"error": "未知用例。", "code": "unknown_case"}, status_code=404)
+            return JSONResponse(
+                {"error": messages.get("unknown_case"), "code": "unknown_case"}, status_code=404
+            )
         case = resolved_catalog.get(case_id)
         summary = next(
             (row for row in resolved_catalog.summaries() if row.id == case_id), None
         )
         if case is None or summary is None:
-            return JSONResponse({"error": "未知用例。", "code": "unknown_case"}, status_code=404)
+            return JSONResponse(
+                {"error": messages.get("unknown_case"), "code": "unknown_case"}, status_code=404
+            )
         document = {key: value for key, value in case.items() if key != "_path"}
         return JSONResponse({"summary": summary.to_dict(), "case": document})
 
     async def create_batch(request: Request) -> Response:
         """Create a draft batch from selected cases and protocols."""
         try:
-            body = await _json_body(request)
+            body = await _json_body(request, messages)
             snapshot = batches.create(
-                case_ids=_int_list(body.get("caseIds"), "caseIds"),
-                protocols=_str_list(body.get("protocols"), "protocols"),
+                case_ids=_int_list(body.get("caseIds"), "caseIds", messages),
+                protocols=_str_list(body.get("protocols"), "protocols", messages),
                 # A test stops once the Task is accepted: the vendor pushes no final state (or
                 # pushes it minutes later), so waiting for it only turns a completed negotiation
                 # into a timeout. A caller that wants the final state asks for it explicitly.
                 stop_after=str(body.get("stopAfter") or "accepted"),
-                timeout_seconds=_optional_float(body.get("timeoutSeconds")),
-                working_timeout_seconds=_optional_float(body.get("workingTimeoutSeconds")),
+                timeout_seconds=_optional_float(body.get("timeoutSeconds"), messages),
+                working_timeout_seconds=_optional_float(
+                    body.get("workingTimeoutSeconds"), messages
+                ),
                 principles_version=_optional_str(body.get("principlesVersion")),
                 nms_version=_optional_str(body.get("nmsVersion")),
                 keep_tasks=bool(body.get("keepTasks")),
-                concurrency=_concurrency(body.get("concurrency")),
-                rounds=_rounds(body.get("rounds")),
+                concurrency=_concurrency(body.get("concurrency"), messages),
+                rounds=_rounds(body.get("rounds"), messages),
                 owner=_client_id(request),
                 owner_source=request_source(request, "tester"),
             )
@@ -229,11 +237,11 @@ def build_tester_routes(
     async def create_scratch(request: Request) -> Response:
         """Create a one-item ad-hoc batch."""
         try:
-            body = await _json_body(request)
+            body = await _json_body(request, messages)
             snapshot = batches.create_scratch(
                 user_input=str(body.get("userInput") or ""),
                 protocol=str(body.get("protocol") or PROTOCOL_A2A_T),
-                timeout_seconds=_optional_float(body.get("timeoutSeconds")),
+                timeout_seconds=_optional_float(body.get("timeoutSeconds"), messages),
                 keep_tasks=bool(body.get("keepTasks")),
                 owner=_client_id(request),
                 owner_source=request_source(request, "tester"),
@@ -262,7 +270,7 @@ def build_tester_routes(
             request.path_params["batch_id"], owner=_client_id(request)
         )
         if snapshot is None:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         return JSONResponse(snapshot)
 
     async def start_batch(request: Request) -> Response:
@@ -272,7 +280,7 @@ def build_tester_routes(
                 request.path_params["batch_id"], owner=_client_id(request)
             )
         except KeyError:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"error": str(exc), "code": "batch_not_startable"}, status_code=409)
         return JSONResponse(snapshot)
@@ -282,11 +290,12 @@ def build_tester_routes(
         batch_id = request.path_params["batch_id"]
         owner = _client_id(request)
         if batches.get(batch_id, owner=owner) is None:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         cancelled = await batches.cancel(batch_id, owner=owner)
         if not cancelled:
             return JSONResponse(
-                {"error": "该批次不在执行中。", "code": "batch_not_running"}, status_code=409
+                {"error": messages.get("batch_not_running"), "code": "batch_not_running"},
+                status_code=409,
             )
         return JSONResponse({"accepted": True, "batchId": batch_id})
 
@@ -297,7 +306,7 @@ def build_tester_routes(
                 request.path_params["batch_id"], owner=_client_id(request)
             )
         except KeyError:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"error": str(exc), "code": "batch_not_retryable"}, status_code=409)
         return JSONResponse(snapshot, status_code=201)
@@ -307,15 +316,15 @@ def build_tester_routes(
         try:
             index = int(request.path_params["index"])
         except ValueError:
-            return JSONResponse({"error": "用例下标无效。", "code": "invalid_index"}, status_code=404)
+            return JSONResponse({"error": messages.get("invalid_item_index"), "code": "invalid_index"}, status_code=404)
         try:
             payload = await batches.cancel_item(
                 request.path_params["batch_id"], index, owner=_client_id(request)
             )
         except KeyError:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         except IndexError:
-            return JSONResponse({"error": "用例下标无效。", "code": "invalid_index"}, status_code=404)
+            return JSONResponse({"error": messages.get("invalid_item_index"), "code": "invalid_index"}, status_code=404)
         except ValueError as exc:
             return JSONResponse(
                 {"error": str(exc), "code": "item_not_cancellable"}, status_code=409
@@ -327,13 +336,13 @@ def build_tester_routes(
         try:
             index = int(request.path_params["index"])
         except ValueError:
-            return JSONResponse({"error": "用例下标无效。", "code": "invalid_index"}, status_code=409)
+            return JSONResponse({"error": messages.get("invalid_item_index"), "code": "invalid_index"}, status_code=409)
         try:
             snapshot = await batches.rerun_item(
                 request.path_params["batch_id"], index, owner=_client_id(request)
             )
         except KeyError:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"error": str(exc), "code": "batch_not_rerunnable"}, status_code=409)
         return JSONResponse(snapshot, status_code=202)
@@ -343,7 +352,7 @@ def build_tester_routes(
         batch_id = request.path_params["batch_id"]
         snapshot = batches.get(batch_id, owner=_client_id(request))
         if snapshot is None:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         return Response(
             json.dumps(snapshot, ensure_ascii=False, indent=2),
             media_type="application/json",
@@ -360,12 +369,12 @@ def build_tester_routes(
         batch_id = request.path_params["batch_id"]
         snapshot = batches.get(batch_id, owner=_client_id(request))
         if snapshot is None:
-            return JSONResponse({"error": "未知测试批次。", "code": "unknown_batch"}, status_code=404)
+            return JSONResponse({"error": messages.get("unknown_batch"), "code": "unknown_batch"}, status_code=404)
         langfuse_columns = request.query_params.get("langfuseColumns", "auto")
         if langfuse_columns not in {"auto", "0", "1"}:
             return JSONResponse(
                 {
-                    "error": "langfuseColumns 只接受 auto、0 或 1。",
+                    "error": messages.get("invalid_langfuse_columns"),
                     "code": "invalid_langfuse_columns",
                 },
                 status_code=400,
@@ -424,26 +433,28 @@ def _client_id(request: Request) -> str:
     return (request.cookies.get(CLIENT_COOKIE) or "").strip()
 
 
-async def _json_body(request: Request) -> Mapping[str, Any]:
+async def _json_body(
+    request: Request, messages: TesterMessages
+) -> Mapping[str, Any]:
     try:
         payload = json.loads((await request.body()) or b"{}")
     except ValueError as exc:
-        raise ValueError("请求体不是合法 JSON。") from exc
+        raise ValueError(messages.get("invalid_json_body")) from exc
     if not isinstance(payload, Mapping):
-        raise ValueError("请求体必须是 JSON 对象。")
+        raise ValueError(messages.get("json_body_not_object"))
     return payload
 
 
-def _int_list(value: object, name: str) -> list[int]:
+def _int_list(value: object, name: str, messages: TesterMessages) -> list[int]:
     if not isinstance(value, list):
-        raise ValueError(f"{name} 必须是数组。")
+        raise ValueError(messages.get("list_must_be_array", name=name))
     result: list[int] = []
     for item in value:
         if isinstance(item, bool) or not isinstance(item, int):
-            raise ValueError(f"{name} 只能包含整数。")
+            raise ValueError(messages.get("list_must_be_int", name=name))
         result.append(item)
     if not result:
-        raise ValueError(f"{name} 不能为空。")
+        raise ValueError(messages.get("list_must_not_be_empty", name=name))
     return result
 
 
@@ -455,38 +466,38 @@ def _optional_str(value: object) -> str | None:
     return text or None
 
 
-def _concurrency(value: object) -> int:
+def _concurrency(value: object, messages: TesterMessages) -> int:
     """Return the requested item concurrency; an absent value keeps the default."""
     if value is None or value == "":
         return DEFAULT_CONCURRENCY
-    return validate_concurrency(value)
+    return validate_concurrency(value, messages)
 
 
-def _rounds(value: object) -> int:
+def _rounds(value: object, messages: TesterMessages) -> int:
     """Return the requested batch rounds; an absent value keeps the default."""
     if value is None or value == "":
         return DEFAULT_ROUNDS
-    return validate_rounds(value)
+    return validate_rounds(value, messages)
 
 
-def _optional_float(value: object) -> float | None:
+def _optional_float(value: object, messages: TesterMessages) -> float | None:
     """Return a numeric value or ``None`` (``None`` means per-case)."""
     if value is None or value == "":
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        raise ValueError("数值参数格式不正确。")
+        raise ValueError(messages.get("invalid_number"))
     try:
         return float(value)
     except ValueError as exc:
-        raise ValueError("数值参数格式不正确。") from exc
+        raise ValueError(messages.get("invalid_number")) from exc
 
 
-def _str_list(value: object, name: str) -> list[str]:
+def _str_list(value: object, name: str, messages: TesterMessages) -> list[str]:
     if not isinstance(value, list):
-        raise ValueError(f"{name} 必须是数组。")
+        raise ValueError(messages.get("list_must_be_array", name=name))
     result = [str(item) for item in value if isinstance(item, str)]
     if not result:
-        raise ValueError(f"{name} 不能为空。")
+        raise ValueError(messages.get("list_must_not_be_empty", name=name))
     return result
 
 

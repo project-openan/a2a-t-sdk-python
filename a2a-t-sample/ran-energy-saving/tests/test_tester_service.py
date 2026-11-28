@@ -57,6 +57,7 @@ from shared.run_constants import (
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_FAILED,
+    LANGUAGE_ZH,
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
 )
@@ -316,7 +317,9 @@ def _manager(
         server_url=None,
         server_auth_token=None,
         runs_dir=tmp_path,
-        language="en-US",
+        # The historical assertions in this module are Chinese; keep the fixture on the language
+        # whose messages they describe. English messages have their own catalog tests.
+        language=LANGUAGE_ZH,
         model_mode=model_mode,
         model_label=model_label,
         judge_model_label=judge_model_label,
@@ -2662,6 +2665,27 @@ def test_an_old_v2_batch_loads_with_empty_export_fields(tmp_path: Path) -> None:
     assert item["intent"] is None
     assert item["answer"] is None
     assert item["refs"] == {}
+
+
+def test_an_old_batch_without_a_language_loads_as_chinese(tmp_path: Path) -> None:
+    """Every batch persisted before the bilingual tester was generated in Chinese."""
+    manager = _manager(tmp_path, _FakeRuns(_finish))
+    history = tmp_path / "tester"
+    history.mkdir(parents=True)
+    document = {
+        "schema": "osp-tester/v2",
+        "batchId": "old-language-batch",
+        "caseIds": [1],
+        "protocols": [PROTOCOL_A2A_T],
+        "stopAfter": "validate",
+        "items": [],
+    }
+    (history / "old-language-batch.json").write_text(json.dumps(document), encoding="utf-8")
+
+    snapshot = manager.get("old-language-batch")
+
+    assert snapshot is not None
+    assert snapshot["language"] == LANGUAGE_ZH
 
 
 FOLLOWUP_INPUT = "Implement energy-saving in A2ATestRegion. Set the gain target to 30%."

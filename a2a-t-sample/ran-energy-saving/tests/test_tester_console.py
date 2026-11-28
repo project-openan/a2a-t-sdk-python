@@ -371,7 +371,7 @@ async def test_a2a_rejects_a_sdk_only_stop_stage(client: httpx.AsyncClient) -> N
         },
     )
     assert created.status_code == 400
-    assert "SDK 阶段" in created.json()["error"]
+    assert "SDK stages" in created.json()["error"]
 
 
 async def test_a_trace_of_an_unknown_previous_run_is_explicitly_unavailable(
@@ -670,6 +670,23 @@ async def test_the_tester_serves_its_copy_module(
     assert response.status_code == 200
     assert "text/javascript" in response.headers["content-type"]
     assert "export const COPY" in response.text
+
+
+async def test_error_bodies_follow_the_process_language(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/api/tester/batches/batch-missing")
+
+    assert response.status_code == 404
+    assert response.json() == {"error": "Unknown test batch.", "code": "unknown_batch"}
+
+
+async def test_a_batch_records_the_language_it_was_created_in(
+    client: httpx.AsyncClient,
+) -> None:
+    created = await _create_tester_batch(client)
+
+    assert created["language"] == LANGUAGE_EN
 
 
 def test_tester_copy_harness_runs_in_node() -> None:
@@ -1074,7 +1091,7 @@ async def test_a_multi_round_batch_rejects_keep_tasks(client: httpx.AsyncClient)
     )
 
     assert response.status_code == 400
-    assert "保留任务" in response.json()["error"]
+    assert "cannot keep tasks" in response.json()["error"]
 
 
 def test_the_console_shows_a_langfuse_export_warning() -> None:

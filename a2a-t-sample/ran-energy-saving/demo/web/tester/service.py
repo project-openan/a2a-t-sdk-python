@@ -77,7 +77,9 @@ from shared.run_constants import (
     FINAL_STATE_INTENT_NOT_CONFIRMED,
     FINAL_STATE_TASK_FAILED,
     FINAL_STATE_TASK_REJECTED,
+    LANGUAGE_ZH,
     PROTOCOL_PURE,
+    SUPPORTED_LANGUAGES,
     TASK_STATE_SUBMITTED,
 )
 from shared.run_constants import (
@@ -88,6 +90,7 @@ from shared.trace import reset_task_sink, set_task_sink
 from demo.web.tester.decisions import pure_answers
 from demo.web.tester.export_view import build_answer, read_traceparent, verdict_reason
 from demo.web.tester.langfuse_columns import build_trace_columns
+from demo.web.tester.messages import TesterMessages
 
 _LOGGER = logging.getLogger("ran_energy_saving.tester")
 
@@ -181,13 +184,6 @@ _ACCEPTED_TASK_STATES: Final[frozenset[str]] = frozenset(
     {TASK_STATE_SUBMITTED}
 ) | _WORKING_TASK_STATES
 
-#: Message of the ``accepted`` stage when the vendor reported ``SUBMITTED`` without the success
-#: copy its contract requires. The defect is on the NMS side; the tester only refuses to call it
-#: accepted and keeps observing until the Task turns terminal or the run ends.
-_ACCEPTANCE_UNPROVEN_MESSAGE: Final[str] = (
-    "NMS 只上报了 TASK_STATE_SUBMITTED，未按契约附带 “Task creation succeeded” 报文或结构化意图"
-    "（网管侧缺陷）；受理尚未确认，继续观察。"
-)
 #: Client outcomes that prove the request ended before any Task was sent.
 _PRE_SEND_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
     {
@@ -197,85 +193,11 @@ _PRE_SEND_TERMINAL_STATES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: Message of a stage whose assertion the case disabled.
-_ASSERTION_OFF_MESSAGE: Final[str] = "用例关闭了该断言。"
-
-#: Message of a negotiation case's Task-T stage: the expectation is the post-negotiation value.
-_NEGOTIATED_TASK_T_MESSAGE: Final[str] = (
-    "期望 Task-T 是协商后的结果；SDK runner 只看到初始请求，因此只记录。"
-)
-
-#: Message of a negotiation stage whose kind or message contradicts the case.
-_NEGOTIATE_FAILED_MESSAGE: Final[str] = "协商类型或报文与预期不一致。"
-
-#: Message of a negotiation stage that reached the expected answer in another number of rounds.
-_NEGOTIATE_ROUNDS_WARNING_MESSAGE: Final[str] = (
-    "协商轮次与用例预期不同（用例记录的轮次仅作参考，类型与报文一致）；请人工确认结果。"
-)
-
-#: Message of a final-state stage where the vendor confirmed the Task but never pushed a state.
-_FINAL_STATE_UNPUSHED_WARNING_MESSAGE: Final[str] = (
-    "NMS 已确认任务成功，但未推送终态；无法观察最终结果，请人工确认。"
-)
-
 #: Prefix of the reason the client flow records when the vendor answered with an ``INPUT_REQUIRED``
 #: that carried no question. ``protocol.pure_client_flow`` owns the full sentence; the marker is
-#: kept narrow so no client-side reason can match it by accident.
+#: kept narrow so no client-side reason can match it by accident. It stays Chinese on purpose:
+#: detection works on the raw protocol error, which is evidence and is never translated (D10).
 _VENDOR_DEFECT_MARKER: Final[str] = "NMS 侧 bug"
-
-#: Message of the intent stage when the downstream accepts a Task without returning its reading.
-_NO_SERVER_INTENT_MESSAGE: Final[str] = (
-    "下游的 TASK_STATE_SUBMITTED 报文没有结构化意图，意图阶段只记录。"
-)
-
-#: Message of the intent stage on a pure-A2A local hop: the client agent owns the outer Task and
-#: its business intent payload has a different key set, so only a direct vendor payload is judged.
-_A2A_PROXY_SERVER_INTENT_MESSAGE: Final[str] = (
-    "A2A 非直连厂商链路返回的意图只记录，不据此判定。"
-)
-
-#: Message of the intent stage when the case carries no expectation to compare with.
-_NO_EXPECTED_INTENT_MESSAGE: Final[str] = "用例没有期望意图，只记录。"
-
-#: Message of a failed intent stage: the case asks what the server understood.
-_SERVER_INTENT_MISMATCH_MESSAGE: Final[str] = "服务端意图理解结果与期望不一致。"
-_INTENT_UNJUDGED_MESSAGE: Final[str] = "未判定，转人工复核。"
-
-#: Message of a Task-T stage whose rendering differs from the case. The difference is a warning:
-#: the case verdict follows the downstream's own reading (``serverIntent``), never our rendering,
-#: because some corpus expectations are looser or stricter than what the vendor really accepts.
-_TASK_T_MISMATCH_MESSAGE: Final[str] = "Task-T 与期望不一致（告警，不作为用例失败依据）。"
-
-#: Message of a failed validation stage: the run blocked or sent a different verdict.
-_VALIDATION_MISMATCH_MESSAGE: Final[str] = "拦截结论与期望不一致。"
-
-#: Message of a validation stage whose case carries no expectation.
-_NO_EXPECTED_VALIDATION_MESSAGE: Final[str] = "用例没有期望拦截结论，只记录。"
-
-#: Message of a ``blocked_followup.input`` request that is itself intercepted. The original
-#: request of such a case is *expected* to be blocked, so the two outcomes must never be reported
-#: with the same wording: the follow-up is the request the case actually wants sent.
-_FOLLOWUP_STILL_BLOCKED_MESSAGE: Final[str] = (
-    "补充请求（blocked_followup.input）仍被拦截：原始请求被拦截是预期行为，补充请求必须通过校验。"
-)
-
-#: Message of a ``blocked_followup.input`` request the run ended before sending.
-_FOLLOWUP_NOT_SENT_MESSAGE: Final[str] = (
-    "补充请求（blocked_followup.input）未发出：run 在发送前结束（{final_state}）；"
-    "原始请求被拦截是预期行为。"
-)
-
-#: Message of an SDK-only blocked case whose original request was not intercepted: no run is
-#: started, so the replacement request is not dispatched and the interception is recorded.
-_INTERCEPTION_MISSED_MESSAGE: Final[str] = (
-    "原请求未被拦截（{detail}），未启动 run，补充请求（blocked_followup.input）未执行；按记录处理。"
-)
-
-#: Message of a full-flow blocked case whose original request was not intercepted: the run
-#: dispatches the original request instead of the replacement the corpus describes.
-_INTERCEPTION_MISS_DISPATCHED_MESSAGE: Final[str] = (
-    "原请求未被拦截（{detail}），已改按原请求下发；补充请求（blocked_followup.input）未执行；按记录处理。"
-)
 
 #: Scenario used to seed a Modify target task; it is a complete request that creates a task.
 BASELINE_SCENARIO: Final[str] = "night"
@@ -422,8 +344,12 @@ class CaseItem:
             return []
         return [row.to_dict() for row in flatten_intent(expected, self.server_intent)]
 
-    def to_dict(self) -> dict[str, object]:
-        """Return the JSON-friendly representation."""
+    def to_dict(self, messages: TesterMessages | None = None) -> dict[str, object]:
+        """Return the JSON-friendly representation.
+
+        ``messages`` is the batch's message set: the verdict reason is rendered in the language the
+        batch was created in, not the process language (D9).
+        """
         item: dict[str, object] = {
             "caseId": self.case_id,
             "name": self.name,
@@ -453,7 +379,7 @@ class CaseItem:
             "intentVerdict": self.intent_verdict,
             "needsReview": self.needs_review,
         }
-        item["verdictReason"] = verdict_reason(item)
+        item["verdictReason"] = verdict_reason(item, messages=messages)
         return item
 
 
@@ -490,6 +416,9 @@ class _Batch:
     active_concurrency: int = 1
     transport: str = "sse"
     discovery: str = "direct"
+    #: Process language the batch was created in. Its messages and export stay in this language
+    #: even when the batch is opened after the process restarted with another language (D9).
+    language: str = LANGUAGE_ZH
     owner_id: str = ""
     #: HTTP origin of the browser that created the batch: anonymous cookie, source address and
     #: user agent. The status page shows it to answer "whose run is holding the quota".
@@ -574,6 +503,9 @@ class EvalBatchManager:
         self._trace_prefetch_slots = asyncio.Semaphore(TRACE_PREFETCH_WORKERS)
         self._nms = nms
         self._language = language
+        #: Messages of new batches (the process language). Existing batches render through the
+        #: message set of the language they were created in.
+        self._messages = TesterMessages(language)
         self._model_mode = model_mode
         self._model_label = model_label
         self._metrics_grace_seconds = max(0.0, metrics_grace_seconds)
@@ -614,6 +546,15 @@ class EvalBatchManager:
     # Catalog and batch lifecycle
     # ------------------------------------------------------------------
 
+    @property
+    def language(self) -> str:
+        """Return the process language new batches are created in."""
+        return self._messages.language
+
+    def _batch_messages(self, batch: _Batch) -> TesterMessages:
+        """Return the message set a batch was created in."""
+        return TesterMessages(batch.language)
+
     def catalog(self) -> list[dict[str, object]]:
         """Return every catalog row."""
         return [summary.to_dict() for summary in self._catalog.summaries()]
@@ -648,20 +589,18 @@ class EvalBatchManager:
         """
         if stop_after not in ALL_STAGES:
             raise ValueError(f"unknown stop_after {stop_after!r}")
-        resolved_concurrency = validate_concurrency(concurrency)
-        resolved_rounds = validate_rounds(rounds)
+        resolved_concurrency = validate_concurrency(concurrency, self._messages)
+        resolved_rounds = validate_rounds(rounds, self._messages)
         if resolved_rounds > DEFAULT_ROUNDS and keep_tasks:
-            raise ValueError("多轮批次不支持保留任务。")
+            raise ValueError(self._messages.get("multi_round_keep_tasks"))
         # The shared principles are frozen with the batch: a later edit of the asset must not
         # change what this batch's agent was told when it decided.
         principles = self._load_principles(principles_version)
         selected_protocols = [protocol for protocol in protocols if protocol in {PROTOCOL_A2A_T, PROTOCOL_A2A}]
         if not selected_protocols:
-            raise ValueError("至少选择一个协议。")
+            raise ValueError(self._messages.get("select_protocol"))
         if PROTOCOL_A2A in selected_protocols and stop_after in SDK_STAGE_ORDER:
-            raise ValueError(
-                "A2A 协议没有 SDK 阶段；请把执行到设为 send / negotiate / accepted / working / final。"
-            )
+            raise ValueError(self._messages.get("pure_no_sdk_stage"))
         items: list[CaseItem] = []
         # Round-major expansion: the first round keeps the exact order a single-pass batch has.
         for round_index in range(1, resolved_rounds + 1):
@@ -683,7 +622,7 @@ class EvalBatchManager:
                         )
                     )
         if not items:
-            raise ValueError("没有可执行的用例。")
+            raise ValueError(self._messages.get("no_runnable_cases"))
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
         batch = _Batch(
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
@@ -700,6 +639,7 @@ class EvalBatchManager:
             rounds=resolved_rounds,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
+            language=self._messages.language,
             items=items,
             # Kept for the persisted-batch schema and the pair report; nothing is excluded now.
             excluded_case_ids=[],
@@ -723,12 +663,17 @@ class EvalBatchManager:
         """Create a one-item batch for an ad-hoc request (full flow only)."""
         text = user_input.strip()
         if not text:
-            raise ValueError("临时请求不能为空。")
+            raise ValueError(self._messages.get("scratch_empty"))
         if protocol not in {PROTOCOL_A2A_T, PROTOCOL_A2A}:
             raise ValueError(f"unknown protocol {protocol!r}")
         principles = self._load_principles(None)
         defaults = self._protocol_defaults.get(_runtime_protocol(protocol), {})
-        item = CaseItem(case_id=0, name="临时请求", protocol=protocol, scratch=text)
+        item = CaseItem(
+            case_id=0,
+            name=self._messages.get("scratch_item_name"),
+            protocol=protocol,
+            scratch=text,
+        )
         batch = _Batch(
             batch_id=f"batch-{uuid.uuid4().hex[:12]}",
             case_ids=[0],
@@ -740,6 +685,7 @@ class EvalBatchManager:
             keep_tasks=keep_tasks,
             transport=defaults.get("transport", "sse"),
             discovery=defaults.get("discovery", "direct"),
+            language=self._messages.language,
             items=[item],
             owner_id=owner,
             owner_source=_mapping_or_empty(owner_source),
@@ -753,7 +699,7 @@ class EvalBatchManager:
         try:
             return load_principles(version)
         except (FileNotFoundError, ValueError) as error:
-            raise ValueError(f"无法加载通用协商原则：{error}") from error
+            raise ValueError(self._messages.get("principles_load_failed", error=error)) from error
 
     def get(self, batch_id: str, *, owner: str = "") -> dict[str, object] | None:
         """Return one batch snapshot, or ``None`` when unknown or owned by someone else."""
@@ -766,7 +712,7 @@ class EvalBatchManager:
         if batch is None:
             raise KeyError(batch_id)
         if batch.status != BATCH_DRAFT:
-            raise ValueError("该批次已经执行过。")
+            raise ValueError(self._batch_messages(batch).get("batch_already_run"))
         batch.status = BATCH_RUNNING
         batch.started_at = _now_iso()
         batch.main_active = True
@@ -815,8 +761,9 @@ class EvalBatchManager:
             raise KeyError(batch_id)
         if index < 0 or index >= len(batch.items):
             raise IndexError(index)
+        messages = self._batch_messages(batch)
         if batch.status != BATCH_RUNNING:
-            raise ValueError("该批次不在执行中。")
+            raise ValueError(messages.get("batch_not_running"))
         item = batch.items[index]
         if index in batch.rerun_queue:
             # A queued rerun has not started; removing it leaves the previous result intact.
@@ -825,11 +772,11 @@ class EvalBatchManager:
             self._persist(batch)
             return {"cancelled": True, "batchId": batch.batch_id, "index": index, "queued": True}
         if item.status not in {CASE_PENDING, CASE_RUNNING}:
-            raise ValueError("该用例已经结束。")
+            raise ValueError(messages.get("item_already_finished"))
         item.cancel_requested = True
         if item.status == CASE_PENDING:
             # A worker checks this flag before it starts the item, so marking the row is enough.
-            _mark_item_cancelled(item)
+            _mark_item_cancelled(item, messages)
         else:
             await self._cancel_item_runs(item)
         self._persist(batch)
@@ -895,17 +842,18 @@ class EvalBatchManager:
         batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
+        messages = self._batch_messages(batch)
         if batch.status == BATCH_RUNNING:
             # A rerun queue may still be running or the main pass is not done; retrying the whole
             # set now would create a duplicate batch and double the quota it consumes.
-            raise ValueError("该批次仍在执行中。")
+            raise ValueError(messages.get("batch_still_running"))
         selected = [
             item
             for item in batch.items
             if item.status in {CASE_FAILED, CASE_ERROR, CASE_CANCELLED}
         ]
         if not selected:
-            raise ValueError("没有失败、错误或取消的用例可以重跑。")
+            raise ValueError(messages.get("no_failed_items"))
         for item in selected:
             await self._release_item_runs(
                 item, reason="The tester retried this case and released the previous run."
@@ -932,6 +880,8 @@ class EvalBatchManager:
             rounds=batch.rounds,
             transport=batch.transport,
             discovery=batch.discovery,
+            # A retry is a new batch and records the process language, not the old batch's.
+            language=self._messages.language,
             items=[
                 CaseItem(
                     case_id=item.case_id,
@@ -1010,16 +960,17 @@ class EvalBatchManager:
         batch = self._owned(batch_id, owner)
         if batch is None:
             raise KeyError(batch_id)
+        messages = self._batch_messages(batch)
         if index < 0 or index >= len(batch.items):
-            raise ValueError("用例下标无效。")
+            raise ValueError(messages.get("invalid_item_index"))
         item = batch.items[index]
         if item.status == CASE_RUNNING:
-            raise ValueError("该用例还在执行中，不能重跑。")
+            raise ValueError(messages.get("item_still_running"))
         if item.status == CASE_PENDING and batch.status == BATCH_RUNNING:
             # The main pass has not reached this row yet; rerunning it now would execute it twice.
-            raise ValueError("该用例尚未执行，不能重跑。")
+            raise ValueError(messages.get("item_not_run_yet"))
         if index in batch.rerun_queue or index in batch.rerun_pending:
-            raise ValueError("该用例已经在重跑队列中。")
+            raise ValueError(messages.get("item_already_queued"))
         # A stale flag from an earlier cancel must not swallow this request; only a cancel that
         # arrives during the release below aborts the enqueue.
         item.cancel_requested = False
@@ -1211,18 +1162,19 @@ class EvalBatchManager:
         exactly the code path it always took; the only addition is the per-item cancel check and
         the slot acquisition a rerun may be waiting on.
         """
+        messages = self._batch_messages(batch)
         for index in selected:
             if batch.cancel_requested:
                 break
             item = batch.items[index]
             if item.cancel_requested:
                 # Cancelled while queued: it must not start, and the batch keeps going.
-                _mark_item_cancelled(item)
+                _mark_item_cancelled(item, messages)
                 continue
             async with self._batch_slot(batch):
                 # A cancel may arrive while the item waited for a shared slot.
                 if item.cancel_requested:
-                    _mark_item_cancelled(item)
+                    _mark_item_cancelled(item, messages)
                     continue
                 batch.active_indices.append(index)
                 batch.current_index = index
@@ -1240,6 +1192,7 @@ class EvalBatchManager:
     ) -> None:
         """Run up to ``batch.concurrency`` items at once, taking them in catalog order."""
         pending = deque(selected)
+        messages = self._batch_messages(batch)
 
         async def worker() -> None:
             while pending:
@@ -1249,12 +1202,12 @@ class EvalBatchManager:
                 index = pending.popleft()
                 item = batch.items[index]
                 if item.cancel_requested:
-                    _mark_item_cancelled(item)
+                    _mark_item_cancelled(item, messages)
                     continue
                 async with self._batch_slot(batch):
                     # A cancel may arrive while the item waited for a shared slot.
                     if item.cancel_requested:
-                        _mark_item_cancelled(item)
+                        _mark_item_cancelled(item, messages)
                         continue
                     batch.active_indices.append(index)
                     batch.current_index = index
@@ -1272,24 +1225,26 @@ class EvalBatchManager:
         await asyncio.gather(*(worker() for _ in range(workers)))
 
     def _mark_pending_cancelled(self, batch: _Batch) -> None:
+        message = self._batch_messages(batch).get("batch_cancelled")
         for item in batch.items:
             if item.status in {CASE_PENDING, CASE_RUNNING}:
                 item.status = CASE_CANCELLED
-                item.error = "批次已取消。"
+                item.error = message
 
     async def _run_item(
         self, batch: _Batch, index: int, item: CaseItem, *, concurrent: bool = False
     ) -> None:
         item.status = CASE_RUNNING
         started = time.monotonic()
+        messages = self._batch_messages(batch)
         try:
             if item.scratch is not None:
-                await self._run_scratch(batch, index, item)
+                await self._run_scratch(batch, index, item, messages)
             else:
-                await self._run_case_item(batch, index, item, concurrent=concurrent)
+                await self._run_case_item(batch, index, item, messages, concurrent=concurrent)
         except asyncio.CancelledError:
             item.status = CASE_CANCELLED
-            item.error = "批次已取消。"
+            item.error = messages.get("batch_cancelled")
             raise
         except Exception as exc:  # noqa: BLE001 - one bad item must not stop the batch
             _LOGGER.warning("tester item %s/%s failed", item.case_id, item.protocol, exc_info=True)
@@ -1301,20 +1256,26 @@ class EvalBatchManager:
                 # An item cancelled on its own must never be reported green or red: the flow may
                 # have judged part of its stages before the cancellation unwound. This also
                 # overrides ``_run_case_item``'s unconditional status mapping.
-                _mark_item_cancelled(item)
+                _mark_item_cancelled(item, messages)
             elif item.status == CASE_RUNNING and not batch.cancel_requested:
                 # A scratch item never calls ``_run_case_item``'s status mapping; derive the
                 # status from its stages so a failed or timed-out scratch is not counted as a pass.
-                item.status = self._item_status(item)
+                item.status = self._item_status(item, messages)
             self._persist(batch)
 
     async def _run_case_item(
-        self, batch: _Batch, index: int, item: CaseItem, *, concurrent: bool = False
+        self,
+        batch: _Batch,
+        index: int,
+        item: CaseItem,
+        messages: TesterMessages,
+        *,
+        concurrent: bool = False,
     ) -> None:
         case = self._catalog.get(item.case_id)
         if case is None:
             item.status = CASE_ERROR
-            item.error = f"未知用例 {item.case_id}"
+            item.error = messages.get("unknown_case_id", case_id=item.case_id)
             return
         stages = list(ALL_STAGES[: ALL_STAGES.index(batch.stop_after) + 1])
         effective_case = case
@@ -1349,6 +1310,7 @@ class EvalBatchManager:
                     case,
                     item,
                     batch.stop_after,
+                    messages,
                     outcome_case=effective_case if blocked_followup else None,
                     concurrent=concurrent,
                 )
@@ -1365,13 +1327,13 @@ class EvalBatchManager:
         if interception_missed:
             # Only an SDK-only batch can know the miss before a run exists; a full-flow run
             # discovers it at its own gate and records it there.
-            self._stamp_interception_miss(item, stages, dispatched=False)
+            self._stamp_interception_miss(item, stages, dispatched=False, messages=messages)
         if batch.stop_after in SDK_STAGE_ORDER:
             if blocked_followup and not interception_missed:
                 # The SDK stages are this item's whole evidence, so a follow-up that was blocked
                 # again must name itself here instead of looking like the expected interception.
                 item.refs["dispatchedRequest"] = correction or ""
-                self._stamp_followup_block(item)
+                self._stamp_followup_block(item, messages=messages)
             # No run will collect this evidence: freeze the request the SDK stages read so the
             # arbitration export still names it.
             if not item.intent_meta.get("rawRequest"):
@@ -1379,7 +1341,7 @@ class EvalBatchManager:
                 item.intent_meta["normalizedText"] = item.intent_meta["rawRequest"]
             if not item.intent_meta.get("source"):
                 item.intent_meta["source"] = "sdk" if item.intent is not None else ""
-            item.status = self._item_status(item)
+            item.status = self._item_status(item, messages)
             return
         await self._run_full_flow(
             batch,
@@ -1391,13 +1353,14 @@ class EvalBatchManager:
             correction=correction if blocked_followup else None,
             interception_case=case if blocked_followup else None,
         )
-        item.status = self._item_status(item)
+        item.status = self._item_status(item, messages)
 
     async def _run_sdk_stages(
         self,
         case: Mapping[str, Any],
         item: CaseItem,
         stop_after: str,
+        messages: TesterMessages,
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
@@ -1417,6 +1380,7 @@ class EvalBatchManager:
             results, interception, error = await self._sdk_stage_results(
                 case,
                 stop_after,
+                messages,
                 outcome_case=outcome_case,
                 concurrent=concurrent,
             )
@@ -1439,6 +1403,7 @@ class EvalBatchManager:
         self,
         case: Mapping[str, Any],
         stop_after: str,
+        messages: TesterMessages,
         *,
         outcome_case: Mapping[str, Any] | None = None,
         concurrent: bool = False,
@@ -1469,20 +1434,20 @@ class EvalBatchManager:
                 detail=dict(stage.detail) if stage.detail else None,
             )
             protocol = "" if stage.stage == "intent" else PROTOCOL_A2A_T
-            result = _apply_assertion(judge, protocol, stage.stage, result)
+            result = _apply_assertion(judge, protocol, stage.stage, result, messages)
             if stage.stage == "task_t":
                 if negotiation_expected:
                     # The case's Task-T is the post-negotiation one; the SDK runner only sees the
                     # initial request, so comparing them would be a false failure.
                     result.status = STAGE_RECORDED
-                    result.message = _NEGOTIATED_TASK_T_MESSAGE
+                    result.message = messages.get("negotiated_task_t")
                 elif result.status == STAGE_FAILED:
                     # A Task-T difference is a warning for the reviewer, not a failed case: the
                     # case verdict follows the downstream's own reading of the Task-T, not our
                     # rendering of it. ``eval/osp`` keeps its own failure semantics because
                     # Task-T accuracy is what that report measures.
                     result.status = STAGE_WARNING
-                    result.message = _TASK_T_MISMATCH_MESSAGE
+                    result.message = messages.get("task_t_mismatch")
             results[stage.stage] = result
         interception: dict[str, StageResult] | None = None
         if outcome.interception is not None:
@@ -1515,6 +1480,7 @@ class EvalBatchManager:
         if item.cancel_requested:
             # Cancelled between the SDK stages and here: never seed a baseline or send a request.
             return
+        messages = self._batch_messages(batch)
         runtime_protocol = _runtime_protocol(item.protocol)
         runner = _case_runner(case)
         scenario = str(runner.get("scenario") or "night")
@@ -1552,7 +1518,7 @@ class EvalBatchManager:
                 for stage in ("send", "negotiate", "accepted", "working", "final"):
                     if stage in stages:
                         item.stages[stage] = StageResult(
-                            stage, STAGE_ERROR, "Modify 基线任务创建失败。"
+                            stage, STAGE_ERROR, messages.get("modify_baseline_create_failed")
                         )
                 item.status = CASE_ERROR
                 return
@@ -1621,9 +1587,11 @@ class EvalBatchManager:
             # reached: the replacement's expectations on a hit, the original's on a miss.
             interception_held = True
             if interception_case is not None:
-                interception_held = self._record_run_interception(item, run, interception_case)
+                interception_held = self._record_run_interception(
+                    item, run, interception_case, messages
+                )
             await self._collect_metrics(
-                item, run, case if interception_held else interception_case
+                item, run, case if interception_held else interception_case, messages
             )
             # Warm the Langfuse column cache off the item's critical path: the export then reads
             # a local file instead of refetching every trace under a rate limit.
@@ -1632,12 +1600,12 @@ class EvalBatchManager:
                 # The gate let the original request through, so the replacement never ran. The
                 # downstream evidence is recorded against the original, never judged against the
                 # replacement's expectations.
-                self._demote_missed_interception(item, interception_case)
-                self._stamp_interception_miss(item, (), dispatched=True)
+                self._demote_missed_interception(item, interception_case, messages)
+                self._stamp_interception_miss(item, (), dispatched=True, messages=messages)
             elif interception_case is not None:
                 # The correction was applied; a block of the corrected Task-T is the follow-up
                 # being rejected, not the interception the case expects.
-                self._stamp_followup_block(item, run)
+                self._stamp_followup_block(item, run, messages=messages)
             if agent_negotiation:
                 # The decision-quality appendix reads the run evidence; it must never change the
                 # item's acceptance status, so it is recorded after every other verdict.
@@ -1739,7 +1707,9 @@ class EvalBatchManager:
             return
         item.client_quality = result.to_dict()
 
-    async def _run_scratch(self, batch: _Batch, index: int, item: CaseItem) -> None:
+    async def _run_scratch(
+        self, batch: _Batch, index: int, item: CaseItem, messages: TesterMessages
+    ) -> None:
         """Run an ad-hoc request through the full flow; no expectations are asserted."""
         if item.scratch is None or item.cancel_requested:
             return
@@ -1767,20 +1737,26 @@ class EvalBatchManager:
         timed_out = await self._wait_for_run(run, self._resolved_timeout(batch))
         actual = run.result.final_state if run.result is not None else None
         if run.status == STATUS_FAILED:
+            failure = run.error or messages.get("run_failed")
             item.stages["final"] = StageResult(
-                "final", STAGE_ERROR, run.error or "运行失败。", expected=None, actual=actual
+                "final", STAGE_ERROR, failure, expected=None, actual=actual
             )
-            item.error = run.error or "运行失败。"
+            item.error = failure
         elif timed_out:
+            failure = messages.get("scratch_timeout")
             item.stages["final"] = StageResult(
-                "final", STAGE_ERROR, "临时请求超时。", expected=None, actual=actual
+                "final", STAGE_ERROR, failure, expected=None, actual=actual
             )
-            item.error = "临时请求超时。"
+            item.error = failure
         else:
             item.stages["final"] = StageResult(
-                "final", STAGE_RECORDED, "临时请求只记录结果。", expected=None, actual=actual
+                "final",
+                STAGE_RECORDED,
+                messages.get("scratch_recorded"),
+                expected=None,
+                actual=actual,
             )
-        await self._collect_metrics(item, run)
+        await self._collect_metrics(item, run, messages=messages)
         if not batch.keep_tasks:
             await self._release_item_runs(
                 item,
@@ -1861,6 +1837,7 @@ class EvalBatchManager:
         and sites); the fallback fixture is used only when the case declares none. The Modify never
         targets a Task the tester did not just create.
         """
+        messages = self._batch_messages(batch)
         defaults = self._protocol_defaults.get(protocol, {})
         conversation_id, idempotency_key = self._run_identity(batch, index, item)
         request = _baseline_request(case)
@@ -1919,7 +1896,7 @@ class EvalBatchManager:
             message = (
                 run.error
                 or _last_failed_status_text(run)
-                or _baseline_failure_message(protocol, state, discovery)
+                or _baseline_failure_message(protocol, state, discovery, messages)
             )
             item.baseline = {
                 "runId": run.run_id,
@@ -2002,6 +1979,7 @@ class EvalBatchManager:
         working_timeout_seconds: float,
     ) -> None:
         """Wait for the last requested runtime stage and record its assertion."""
+        messages = self._batch_messages(batch)
         expected_send = True
         expected_rounds = 0
         expected_kinds: list[str] | None = None
@@ -2026,13 +2004,15 @@ class EvalBatchManager:
             send_result = StageResult(
                 "send",
                 status,
-                "" if status == STAGE_PASSED else "预期发送状态与观察结果不一致。",
+                "" if status == STAGE_PASSED else messages.get("send_mismatch"),
                 expected=expected_send,
                 actual=sent,
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
             if case is not None:
-                send_result = _apply_assertion(case, item.protocol, "send", send_result)
+                send_result = _apply_assertion(
+                    case, item.protocol, "send", send_result, messages
+                )
             item.stages["send"] = send_result
             if batch.stop_after == "send":
                 return
@@ -2089,9 +2069,9 @@ class EvalBatchManager:
             if status == STAGE_PASSED:
                 negotiate_message = ""
             elif status == STAGE_WARNING:
-                negotiate_message = _NEGOTIATE_ROUNDS_WARNING_MESSAGE
+                negotiate_message = messages.get("negotiate_rounds_warning")
             else:
-                negotiate_message = _NEGOTIATE_FAILED_MESSAGE
+                negotiate_message = messages.get("negotiate_failed")
             negotiate_result = StageResult(
                 "negotiate",
                 status,
@@ -2108,7 +2088,7 @@ class EvalBatchManager:
             )
             if case is not None:
                 negotiate_result = _apply_assertion(
-                    case, item.protocol, "negotiation", negotiate_result
+                    case, item.protocol, "negotiation", negotiate_result, messages
                 )
             item.stages["negotiate"] = negotiate_result
             if batch.stop_after == "negotiate":
@@ -2116,14 +2096,14 @@ class EvalBatchManager:
 
         if "accepted" in stages:
             item.stages["accepted"] = await self._judge_accepted(
-                run, item, case, send_expected, timeout_seconds
+                run, item, case, send_expected, timeout_seconds, messages
             )
             if batch.stop_after == "accepted":
                 return
 
         if "working" in stages:
             item.stages["working"] = await self._judge_working(
-                run, item, case, send_expected, working_timeout_seconds
+                run, item, case, send_expected, working_timeout_seconds, messages
             )
             if batch.stop_after == "working":
                 return
@@ -2134,7 +2114,7 @@ class EvalBatchManager:
             actual_final = run.result.final_state if run.result is not None else None
             if run.status == STATUS_FAILED:
                 status = STAGE_ERROR
-                message = run.error or "运行失败。"
+                message = run.error or messages.get("run_failed")
                 item.error = message
             elif expected_final is None:
                 status = STAGE_RECORDED
@@ -2149,10 +2129,10 @@ class EvalBatchManager:
                 # failure blames the client for a push the vendor never sends; the deviation is
                 # still shown so the row is not read as a complete Task.
                 status = STAGE_WARNING
-                message = _FINAL_STATE_UNPUSHED_WARNING_MESSAGE
+                message = messages.get("final_state_unpushed")
             else:
                 status = STAGE_FAILED
-                message = "最终状态与预期不一致。"
+                message = messages.get("final_mismatch")
             final_result = StageResult(
                 "final",
                 status,
@@ -2162,7 +2142,9 @@ class EvalBatchManager:
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
             )
             if case is not None:
-                final_result = _apply_assertion(case, item.protocol, "final_state", final_result)
+                final_result = _apply_assertion(
+                    case, item.protocol, "final_state", final_result, messages
+                )
             item.stages["final"] = final_result
 
     async def _judge_accepted(
@@ -2172,6 +2154,7 @@ class EvalBatchManager:
         case: Mapping[str, Any] | None,
         send_expected: bool,
         timeout_seconds: float,
+        messages: TesterMessages | None = None,
     ) -> StageResult:
         """Judge whether the remote side accepted the request (the success status arrived).
 
@@ -2186,13 +2169,15 @@ class EvalBatchManager:
         keeps observing until the success copy or the structured payload arrives (see
         :func:`_acceptance_evidence`). The defect is the NMS's; this is only our robustness.
         """
+        if messages is None:
+            messages = self._messages
         started = time.monotonic()
         actual = _task_observation(run)
         if not send_expected:
             return StageResult(
                 "accepted",
                 STAGE_SKIPPED,
-                "用例期望不发送",
+                messages.get("expected_no_send"),
                 expected=None,
                 actual=actual,
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
@@ -2207,14 +2192,14 @@ class EvalBatchManager:
         final_state = run.result.final_state if run.result is not None else None
         if final_state in _PRE_SEND_TERMINAL_STATES:
             status = STAGE_FAILED
-            message = f"run 在发送前结束：{final_state}"
+            message = messages.get("run_ended_before_send", final_state=final_state)
         elif state in _FAILED_TASK_STATES:
             status = STAGE_FAILED
-            message = f"Task 状态为 {state}。"
+            message = messages.get("task_state_is", state=state)
         elif state in _ACCEPTED_TASK_STATES:
             if requires_evidence and not _acceptance_evidence(run, state):
                 status = STAGE_WAITING
-                message = _ACCEPTANCE_UNPROVEN_MESSAGE
+                message = messages.get("acceptance_unproven")
             else:
                 status = STAGE_PASSED
                 message = ""
@@ -2223,21 +2208,27 @@ class EvalBatchManager:
             # HTTP 500 is the common case). Reading only the stale state turned a real failure into
             # "waiting", and the item then read as an inconclusive partial.
             status = STAGE_ERROR
-            message = run.error or "运行失败。"
+            message = run.error or messages.get("run_failed")
         elif run.remote_task_id is None or run.remote_context_id is None:
             status = STAGE_FAILED
-            message = "run 已结束但没有 Task。" if run.finished() else "等待 Task 超时。"
+            message = messages.get(
+                "run_finished_without_task" if run.finished() else "wait_task_timeout"
+            )
         elif state == "TASK_STATE_INPUT_REQUIRED":
             status = STAGE_WAITING
-            message = "Task 仍在协商（INPUT_REQUIRED），尚未确认受理。"
+            message = messages.get("task_negotiating_input_required")
         else:
             status = STAGE_WAITING
-            message = "未观察到受理状态。"
+            message = messages.get("no_acceptance_observed")
         return StageResult(
             "accepted",
             status,
             message,
-            expected={"taskId": "非空", "contextId": "非空", "state": "已受理"},
+            expected={
+                "taskId": messages.get("expected_task_id"),
+                "contextId": messages.get("expected_context_id"),
+                "state": messages.get("expected_accepted_state"),
+            },
             actual=actual,
             duration_ms=int(round((time.monotonic() - started) * 1000)),
         )
@@ -2249,8 +2240,11 @@ class EvalBatchManager:
         case: Mapping[str, Any] | None,
         send_expected: bool,
         working_timeout_seconds: float,
+        messages: TesterMessages | None = None,
     ) -> StageResult:
         """Judge whether the Task was observed moving past ``SUBMITTED``."""
+        if messages is None:
+            messages = self._messages
         started = time.monotonic()
         actual = _task_observation(run)
         # Pure A2A has no workbook final-state oracle, but "the outer Task was accepted and is
@@ -2260,7 +2254,7 @@ class EvalBatchManager:
             return StageResult(
                 "working",
                 STAGE_SKIPPED,
-                "用例期望不发送",
+                messages.get("expected_no_send"),
                 expected=None,
                 actual=actual,
                 duration_ms=int(round((time.monotonic() - started) * 1000)),
@@ -2280,41 +2274,41 @@ class EvalBatchManager:
             # The vendor reports a refusal as TASK_STATE_COMPLETED; the run layer already
             # downgraded it to task_failed. A green card here would be a false acceptance.
             status = STAGE_FAILED
-            message = f"Task 以 TASK_STATE_COMPLETED 结束，但 run 终态为 {final_state}。"
+            message = messages.get("refused_completion", final_state=final_state)
         elif state in _FAILED_TASK_STATES:
             status = STAGE_FAILED
-            message = f"Task 状态为 {state}。"
+            message = messages.get("task_state_is", state=state)
         elif run.status == STATUS_FAILED:
             # The flow failed after the last observed Task state; that state alone must not turn
             # the row into "still working".
             status = STAGE_ERROR
-            message = run.error or "运行失败。"
+            message = run.error or messages.get("run_failed")
         elif state == TASK_STATE_SUBMITTED:
             status = STAGE_WAITING
-            message = f"{working_timeout_seconds:g}s 内 Task 仍停留在 SUBMITTED。"
+            message = messages.get(
+                "task_stuck_submitted", seconds=f"{working_timeout_seconds:g}"
+            )
         elif state == "TASK_STATE_INPUT_REQUIRED":
             status = STAGE_WAITING
-            message = "Task 仍在协商（INPUT_REQUIRED）。"
+            message = messages.get("task_negotiating")
         else:
             final_state = run.result.final_state if run.result is not None else None
             if final_state == "task_completed":
                 status = STAGE_PASSED
-                message = "通过终态 task_completed 观察到完成。"
+                message = messages.get("completed_via_final_state")
             elif final_state in {"task_failed", "task_rejected"}:
                 status = STAGE_FAILED
-                message = f"run 终态为 {final_state}。"
+                message = messages.get("run_final_state_is", final_state=final_state)
             else:
                 status = STAGE_WAITING
-                message = (
-                    f"{working_timeout_seconds:g}s 内未观察到 WORKING。"
-                    if run.finished()
-                    else "未观察到 WORKING。"
-                )
+                message = messages.get(
+                    "no_working_observed", seconds=f"{working_timeout_seconds:g}"
+                ) if run.finished() else messages.get("no_working_observed_short")
         return StageResult(
             "working",
             status,
             message,
-            expected="WORKING 或 COMPLETED",
+            expected=messages.get("expected_working_or_completed"),
             actual=actual,
             duration_ms=int(round((time.monotonic() - started) * 1000)),
         )
@@ -2406,17 +2400,20 @@ class EvalBatchManager:
         item: CaseItem,
         run: RunState,
         case: Mapping[str, Any] | None = None,
+        messages: TesterMessages | None = None,
     ) -> None:
+        if messages is None:
+            messages = self._messages
         if self._metrics_grace_seconds:
             await asyncio.sleep(self._metrics_grace_seconds)
         # The export evidence does not depend on the metrics pipeline; collect it even when the
         # metrics builder fails, because a missing answer is worse than missing token counts.
-        self._collect_run_evidence(item, run, case)
+        self._collect_run_evidence(item, run, case, messages)
         # The intent judge is async and owns the only model call this stage may make, so it runs
         # after the synchronous evidence collection has frozen ``refs``/the raw request. A failure
         # in the evidence/judging code must stay best effort, never turn the item into an error.
         try:
-            await self._judge_server_intent(item, run, case)
+            await self._judge_server_intent(item, run, case, messages)
         except Exception:  # noqa: BLE001 - observation must not change the protocol result
             _LOGGER.warning("tester intent judge failed for run %s", run.run_id, exc_info=True)
             item.stages.setdefault(
@@ -2511,8 +2508,11 @@ class EvalBatchManager:
         item: CaseItem,
         run: RunState,
         case: Mapping[str, Any] | None = None,
+        messages: TesterMessages | None = None,
     ) -> None:
         """Collect the trace id, the operator request and the reference answer of one run."""
+        if messages is None:
+            messages = self._messages
         try:
             item.trace_id = run.trace_id or run.run_id
             if item.error is None:
@@ -2544,8 +2544,8 @@ class EvalBatchManager:
             # The arbitration intent is what the downstream understood, not our own extraction.
             # ``item.intent`` keeps the SDK document as auxiliary evidence. The server-intent
             # stage is judged asynchronously in ``_collect_metrics``.
-            self._judge_run_task_t(item, run, case)
-            self._judge_run_validation(item, run, case)
+            self._judge_run_task_t(item, run, case, messages)
+            self._judge_run_validation(item, run, case, messages)
             traceparent, traceparent_source = read_traceparent(
                 self._history_dir.parent if self._history_dir is not None else None,
                 run.run_id,
@@ -2561,6 +2561,7 @@ class EvalBatchManager:
         item: CaseItem,
         run: RunState,
         case: Mapping[str, Any] | None,
+        messages: TesterMessages | None = None,
     ) -> None:
         """Re-judge the ``intent`` stage against the downstream's own reading.
 
@@ -2574,6 +2575,8 @@ class EvalBatchManager:
         reaches the independent judge — one model call for every residual field. A missing reading
         or an unavailable judge stays record-only, never a fabricated pass or failure.
         """
+        if messages is None:
+            messages = self._messages
         payload = run.server_intent
         item.server_intent = dict(payload) if isinstance(payload, Mapping) else None
         item.intent_meta["source"] = (
@@ -2609,7 +2612,7 @@ class EvalBatchManager:
             stage.status = STAGE_RECORDED
             stage.actual = None
             stage.diffs = []
-            stage.message = _NO_SERVER_INTENT_MESSAGE
+            stage.message = messages.get("no_server_intent")
             return
         stage.actual = dict(item.server_intent)
         if has_expected and stage.expected is None:
@@ -2623,15 +2626,15 @@ class EvalBatchManager:
             # The local hop owns a different business-intent payload; judge only a direct vendor
             # payload so a local hop never turns a case red on a key set it cannot reproduce.
             stage.status = STAGE_RECORDED
-            stage.message = _A2A_PROXY_SERVER_INTENT_MESSAGE
+            stage.message = messages.get("a2a_proxy_server_intent")
             return
         if not has_expected:
             stage.status = STAGE_RECORDED
-            stage.message = _NO_EXPECTED_INTENT_MESSAGE
+            stage.message = messages.get("no_expected_intent")
             return
         if not _assertion_enabled(case, "", "intent"):
             stage.status = STAGE_RECORDED
-            stage.message = _ASSERTION_OFF_MESSAGE
+            stage.message = messages.get("assertion_off")
             return
         assert isinstance(expected, Mapping)
         verdict = await judge_intent(
@@ -2651,7 +2654,7 @@ class EvalBatchManager:
             stage.diffs = []
         elif verdict.status == STATUS_MISMATCH:
             stage.status = STAGE_FAILED
-            stage.message = _SERVER_INTENT_MISMATCH_MESSAGE
+            stage.message = messages.get("server_intent_mismatch")
             stage.diffs = [
                 {
                     "path": str(field.get("path") or ""),
@@ -2664,7 +2667,7 @@ class EvalBatchManager:
             ] or stage.diffs
         else:
             stage.status = STAGE_RECORDED
-            stage.message = verdict.reason or _INTENT_UNJUDGED_MESSAGE
+            stage.message = verdict.reason or messages.get("intent_unjudged")
             item.needs_review = bool(verdict.residual)
 
     def _judge_run_task_t(
@@ -2672,6 +2675,7 @@ class EvalBatchManager:
         item: CaseItem,
         run: RunState,
         case: Mapping[str, Any] | None,
+        messages: TesterMessages | None = None,
     ) -> None:
         """Judge a full-flow run's Task-T against the case's expectation.
 
@@ -2683,6 +2687,8 @@ class EvalBatchManager:
         expectation is the post-negotiation Task-T, or that turns the assertion off, stays
         record-only. Missing evidence creates no stage rather than a fabricated one.
         """
+        if messages is None:
+            messages = self._messages
         if item.protocol != PROTOCOL_A2A_T or "task_t" in item.stages or case is None:
             return
         expected = item.refs.get("taskT")
@@ -2701,17 +2707,22 @@ class EvalBatchManager:
             # The case's Task-T is the post-negotiation one; the initial run prompt would be a
             # false failure.
             result.status = STAGE_RECORDED
-            result.message = _NEGOTIATED_TASK_T_MESSAGE
+            result.message = messages.get("negotiated_task_t")
         elif not _assertion_enabled(case, PROTOCOL_A2A_T, "task_t"):
             result.status = STAGE_RECORDED
-            result.message = _ASSERTION_OFF_MESSAGE
+            result.message = messages.get("assertion_off")
         elif diffs:
             result.status = STAGE_WARNING
-            result.message = _TASK_T_MISMATCH_MESSAGE
+            result.message = messages.get("task_t_mismatch")
         item.stages["task_t"] = result
 
     def _stamp_interception_miss(
-        self, item: CaseItem, stages: Sequence[str], *, dispatched: bool
+        self,
+        item: CaseItem,
+        stages: Sequence[str],
+        *,
+        dispatched: bool,
+        messages: TesterMessages | None = None,
     ) -> None:
         """Record an interception that did not hold; the replacement request is not executed.
 
@@ -2722,10 +2733,10 @@ class EvalBatchManager:
         run was started at all (SDK-only); the given stages are marked ``skipped`` so the unjudged
         segment does not read as missing evidence.
         """
-        template = (
-            _INTERCEPTION_MISS_DISPATCHED_MESSAGE if dispatched else _INTERCEPTION_MISSED_MESSAGE
-        )
-        message = template.format(detail=_interception_miss_detail(item))
+        if messages is None:
+            messages = self._messages
+        key = "interception_miss_dispatched" if dispatched else "interception_missed"
+        message = messages.get(key, detail=_interception_miss_detail(item, messages))
         for stage in stages:
             if stage not in item.stages:
                 item.stages[stage] = StageResult(stage, STAGE_SKIPPED, message)
@@ -2748,7 +2759,13 @@ class EvalBatchManager:
         validate["status"] = STAGE_RECORDED
         validate["message"] = message
 
-    def _stamp_followup_block(self, item: CaseItem, run: RunState | None = None) -> None:
+    def _stamp_followup_block(
+        self,
+        item: CaseItem,
+        run: RunState | None = None,
+        *,
+        messages: TesterMessages | None = None,
+    ) -> None:
         """Report a follow-up that did not get through differently from the expected block.
 
         A ``blocked_followup.input`` case *expects* its original request to be intercepted; the
@@ -2762,26 +2779,33 @@ class EvalBatchManager:
         final_state = (
             run.result.final_state if run is not None and run.result is not None else None
         )
+        if messages is None:
+            messages = self._messages
         if verdict == "blocked":
-            message = _FOLLOWUP_STILL_BLOCKED_MESSAGE
+            message = messages.get("followup_still_blocked")
         elif final_state in _PRE_SEND_TERMINAL_STATES:
-            message = _FOLLOWUP_NOT_SENT_MESSAGE.format(final_state=final_state)
+            message = messages.get("followup_not_sent", final_state=final_state)
         else:
             return
         reason = _validation_reason(validate)
         if reason:
-            message = f"{message} 原因：{reason}"
+            message = messages.get("followup_detail", message=message, reason=reason)
         if validate is not None:
             validate.message = message
         if item.interception is not None:
             item.interception["followupBlocked"] = True
-        item.error = f"{message} 详情：{item.error}" if item.error else message
+        item.error = (
+            messages.get("followup_error_detail", message=message, error=item.error)
+            if item.error
+            else message
+        )
 
     def _record_run_interception(
         self,
         item: CaseItem,
         run: RunState,
         case: Mapping[str, Any],
+        messages: TesterMessages | None = None,
     ) -> bool:
         """Record the run's own gate as the interception segment of one blocked case.
 
@@ -2791,17 +2815,19 @@ class EvalBatchManager:
         original through: the caller records the miss and treats the downstream evidence as
         record-only.
         """
+        if messages is None:
+            messages = self._messages
         correction = _correction_detail(run)
         original = str(item.run_request or case.get("user_input") or "")
         if correction is None:
             detail = _first_validation_detail(run)
             result = (
-                self._validation_stage(case, detail)
+                self._validation_stage(case, detail, messages)
                 if detail is not None
                 else StageResult(
                     "validate",
                     STAGE_ERROR,
-                    "run 未产生校验证据。",
+                    messages.get("validate_no_evidence"),
                     expected="blocked",
                     actual=None,
                 )
@@ -2823,7 +2849,7 @@ class EvalBatchManager:
             "code": str(correction.get("reason") or ""),
             "slotErrors": slot_errors,
         }
-        result = self._validation_stage(case, detail)
+        result = self._validation_stage(case, detail, messages)
         item.interception = {
             "input": str(correction.get("originalRequest") or original),
             "followupInput": str(correction.get("correctedRequest") or ""),
@@ -2832,7 +2858,9 @@ class EvalBatchManager:
         return True
 
     @staticmethod
-    def _demote_missed_interception(item: CaseItem, case: Mapping[str, Any]) -> None:
+    def _demote_missed_interception(
+        item: CaseItem, case: Mapping[str, Any], messages: TesterMessages
+    ) -> None:
         """Record — never judge — the downstream stages of a run whose interception missed.
 
         The corpus expectations describe the replacement request, which a miss never dispatches,
@@ -2852,11 +2880,19 @@ class EvalBatchManager:
             if stage is None:
                 continue
             protocol = "" if key == "intent" else PROTOCOL_A2A_T
-            item.stages[stage_name] = _apply_assertion(derived, protocol, key, stage)
+            item.stages[stage_name] = _apply_assertion(
+                derived, protocol, key, stage, messages
+            )
 
     @staticmethod
-    def _validation_stage(case: Mapping[str, Any], detail: Mapping[str, object]) -> StageResult:
+    def _validation_stage(
+        case: Mapping[str, Any],
+        detail: Mapping[str, object],
+        messages: TesterMessages | None = None,
+    ) -> StageResult:
         """Judge one observed validation verdict against the case's expectation."""
+        if messages is None:
+            messages = TesterMessages()
         verdict = str(detail.get("verdict") or "")
         expected = _case_validation_expectation(case)
         observed = detail.get("slotErrors")
@@ -2879,15 +2915,15 @@ class EvalBatchManager:
         )
         if expected is None:
             result.status = STAGE_RECORDED
-            result.message = _NO_EXPECTED_VALIDATION_MESSAGE
+            result.message = messages.get("no_expected_validation")
         elif not _assertion_enabled(case, PROTOCOL_A2A_T, "validate"):
             result.status = STAGE_RECORDED
-            result.message = _ASSERTION_OFF_MESSAGE
+            result.message = messages.get("assertion_off")
         elif not _validation_matches(expected, verdict) or (
             evidence is not None and not evidence.matched()
         ):
             result.status = STAGE_FAILED
-            result.message = _VALIDATION_MISMATCH_MESSAGE
+            result.message = messages.get("validation_mismatch")
         return result
 
     def _judge_run_validation(
@@ -2895,6 +2931,7 @@ class EvalBatchManager:
         item: CaseItem,
         run: RunState,
         case: Mapping[str, Any] | None,
+        messages: TesterMessages | None = None,
     ) -> None:
         """Judge the run's pre-send Task-T validation, the "拦截" stage of a full-flow item.
 
@@ -2904,12 +2941,14 @@ class EvalBatchManager:
         No validation evidence creates no stage, and a case without an expectation stays
         record-only.
         """
+        if messages is None:
+            messages = self._messages
         if item.protocol != PROTOCOL_A2A_T or "validate" in item.stages or case is None:
             return
         detail = _run_validation_detail(run)
         if detail is None:
             return
-        item.stages["validate"] = self._validation_stage(case, detail)
+        item.stages["validate"] = self._validation_stage(case, detail, messages)
 
     async def _ensure_prompt_client(self, model_mode: str | None = None) -> Any:
         """Return the pooled SDK prompt client."""
@@ -3036,7 +3075,9 @@ class EvalBatchManager:
         self._prompt_env_dirs.clear()
         self._prompt_pool.clear()
 
-    def _item_status(self, item: CaseItem) -> str:
+    def _item_status(self, item: CaseItem, messages: TesterMessages | None = None) -> str:
+        if messages is None:
+            messages = self._messages
         statuses = [result.status for result in item.stages.values()]
         if item.interception is not None:
             statuses.extend(_interception_statuses(item.interception))
@@ -3057,7 +3098,7 @@ class EvalBatchManager:
         if item.needs_review:
             # A residual the judge could not decide is unproven, not green.
             return CASE_PARTIAL
-        if _terminal_state_unconfirmed(item):
+        if _terminal_state_unconfirmed(item, messages):
             # The corpus named a terminal state and the run never observed it. "Recorded" keeps the
             # evidence visible; it must not turn the row green.
             return CASE_PARTIAL
@@ -3126,7 +3167,7 @@ class EvalBatchManager:
             temporary.replace(target)
         except OSError as exc:
             _LOGGER.warning("tester batch %s could not be persisted: %s", batch.batch_id, exc)
-            batch.error = f"批次持久化失败：{exc}"
+            batch.error = self._batch_messages(batch).get("persist_failed", error=exc)
 
     def _load(self, batch_id: str) -> _Batch | None:
         if self._history_dir is None:
@@ -3184,6 +3225,7 @@ class EvalBatchManager:
             if isinstance(item, Mapping)
         ]
         defaults = self._protocol_defaults.get(PROTOCOL_A2A_T, {})
+        loaded_language = _language_or_default(document.get("language"))
         loaded_version = _optional_text(document.get("principlesVersion"))
         loaded_text = _optional_text(document.get("principlesText"))
         if not loaded_text:
@@ -3212,6 +3254,8 @@ class EvalBatchManager:
             current_round=_clamp_rounds(document.get("currentRound")),
             transport=str(document.get("transport") or defaults.get("transport", "sse")),
             discovery=str(document.get("discovery") or defaults.get("discovery", "direct")),
+            # All pre-feature batches were created in Chinese; an unknown value falls back too.
+            language=loaded_language,
             items=items,
             excluded_case_ids=[
                 int(value)
@@ -3226,23 +3270,26 @@ class EvalBatchManager:
             finished_at=document.get("finishedAt") if isinstance(document.get("finishedAt"), str) else None,
         )
         if batch.status == BATCH_RUNNING:
+            restart_message = TesterMessages(loaded_language).get("restart_incomplete")
             for item in batch.items:
                 if item.status in {CASE_PENDING, CASE_RUNNING}:
                     item.status = CASE_CANCELLED
-                    item.error = "UI 进程已重启，批次未执行完。"
+                    item.error = restart_message
             batch.status = BATCH_CANCELLED
             batch.finished_at = _now_iso()
         self._batches[batch_id] = batch
         return batch
 
-    def _item_snapshot(self, item: CaseItem) -> dict[str, object]:
+    def _item_snapshot(
+        self, item: CaseItem, messages: TesterMessages | None = None
+    ) -> dict[str, object]:
         """Return one item, recovering Langfuse state that resolved after the evidence pass.
 
         The exporter finishes (and resolves the URL, and probes ingestion) after the item's
         evidence is collected, so every snapshot re-reads the live run instead of freezing the
-        values seen at collection time.
+        values seen at collection time. ``messages`` is the batch's message set (D9).
         """
-        data = item.to_dict()
+        data = item.to_dict(messages)
         if not item.run_id:
             return data
         getter = getattr(self._runs, "get", None)
@@ -3264,11 +3311,13 @@ class EvalBatchManager:
         return data
 
     def _snapshot(self, batch: _Batch) -> dict[str, object]:
-        items = [self._item_snapshot(item) for item in batch.items]
+        messages = self._batch_messages(batch)
+        items = [self._item_snapshot(item, messages) for item in batch.items]
         return {
             "schema": SCHEMA,
             "batchId": batch.batch_id,
             "status": batch.status,
+            "language": batch.language,
             "caseIds": list(batch.case_ids),
             "excludedCaseIds": list(batch.excluded_case_ids),
             "protocols": list(batch.protocols),
@@ -3534,17 +3583,21 @@ def _pairs(items: Sequence[CaseItem]) -> list[dict[str, object]]:
     return rows
 
 
-def _terminal_state_unconfirmed(item: CaseItem) -> bool:
+def _terminal_state_unconfirmed(
+    item: CaseItem, messages: TesterMessages | None = None
+) -> bool:
     """Return whether the case expected a terminal state the run never observed.
 
     ``_wait_for_stage`` records ``final`` when the corpus names no terminal state (pure A2A) or
     when the case turns the assertion off. Both are deliberate record-only decisions; only a
     named expectation that was not observed leaves the row unproven.
     """
+    if messages is None:
+        messages = TesterMessages()
     final = item.stages.get("final")
     if final is None or final.status != STAGE_RECORDED:
         return False
-    if final.expected is None or final.message == _ASSERTION_OFF_MESSAGE:
+    if final.expected is None or final.message == messages.get("assertion_off"):
         return False
     return True
 
@@ -3893,31 +3946,23 @@ def _last_failed_status_text(run: RunState) -> str | None:
     return None
 
 
-def _baseline_failure_message(protocol: str, state: str | None, discovery: str = "") -> str:
+def _baseline_failure_message(
+    protocol: str,
+    state: str | None,
+    discovery: str = "",
+    messages: TesterMessages | None = None,
+) -> str:
     """Explain why the paired Create cannot be continued by a Modify."""
+    if messages is None:
+        messages = TesterMessages()
+    state_text = state or messages.get("baseline_state_unknown")
     if protocol == RUNTIME_A2A_T or discovery == DISCOVERY_NMS:
         if state == "TASK_STATE_INPUT_REQUIRED":
-            return (
-                "Modify 基线 Create 触发了协商（TASK_STATE_INPUT_REQUIRED），不是可续传状态；"
-                "请检查 baseline.request：必须显式使用 A2ATestRegion，并采用手工验收那类"
-                "不拦截、不协商的三段日计划。"
-            )
+            return messages.get("baseline_modify_input_required")
         if state == TASK_STATE_SUBMITTED and discovery == DISCOVERY_NMS:
-            return (
-                "Modify 基线 Create 未被确认受理：网管只上报 TASK_STATE_SUBMITTED、未按契约附带 "
-                "“Task creation succeeded” 报文或结构化意图（网管侧缺陷）；任务若随后被取消，"
-                "Modify 必然失败。"
-            )
-        return (
-            f"Modify 基线任务未到达可续传状态（当前 {state or '未观察到状态'}）；"
-            "任务已是终态时服务端会拒绝 Modify。"
-        )
-    return (
-        f"Modify 基线任务的纯 A2A 外层 Task 未停留在 WORKING 或下游绑定未建立"
-        f"（当前 {state or '未观察到状态'}）；外层 WORKING 只代表 OSS Agent 已受理，"
-        "下游 Create 仍可能失败（例如 Running task limit）。纯 A2A 只能续传真实存在且非终态的 "
-        "Task，请清空 NMS 任务池后重试。"
-    )
+            return messages.get("baseline_modify_unproven")
+        return messages.get("baseline_modify_not_continuable", state=state_text)
+    return messages.get("baseline_pure_not_working", state=state_text)
 
 
 def _negotiation_expected(case: Mapping[str, Any], protocol: str) -> bool:
@@ -4007,24 +4052,32 @@ def _validation_reason(stage: StageResult | None) -> str:
 
 
 def _apply_assertion(
-    case: Mapping[str, Any], protocol: str, key: str, result: StageResult
+    case: Mapping[str, Any],
+    protocol: str,
+    key: str,
+    result: StageResult,
+    messages: TesterMessages | None = None,
 ) -> StageResult:
     """Keep the observed values but record (never judge) a stage whose assertion is disabled."""
     if _assertion_enabled(case, protocol, key):
         return result
+    if messages is None:
+        messages = TesterMessages()
     result.status = STAGE_RECORDED
-    result.message = _ASSERTION_OFF_MESSAGE
+    result.message = messages.get("assertion_off")
     return result
 
 
-def _mark_item_cancelled(item: CaseItem) -> None:
+def _mark_item_cancelled(item: CaseItem, messages: TesterMessages | None = None) -> None:
     """Record an operator's per-item cancel on the item itself.
 
     Shared by the queued-item skip of both execution paths and by ``_run_item``'s finally, so the
     cancel contract has one implementation.
     """
+    if messages is None:
+        messages = TesterMessages()
     item.status = CASE_CANCELLED
-    item.error = "已取消。"
+    item.error = messages.get("item_cancelled")
 
 
 def _interception_held(item: CaseItem) -> bool:
@@ -4041,13 +4094,19 @@ def _interception_held(item: CaseItem) -> bool:
     return followup_allowed(actual if isinstance(actual, str) and actual else None)
 
 
-def _interception_miss_detail(item: CaseItem) -> str:
+def _interception_miss_detail(
+    item: CaseItem, messages: TesterMessages | None = None
+) -> str:
     """Return the one-line reason of an interception that did not hold, for the item's message."""
+    if messages is None:
+        messages = TesterMessages()
     record = item.interception if isinstance(item.interception, Mapping) else {}
     stages = record.get("stages")
     validate = stages.get("validate") if isinstance(stages, Mapping) else None
     actual = validate.get("actual") if isinstance(validate, Mapping) else None
-    return f"实际校验结论：{actual}" if isinstance(actual, str) and actual else "没有校验结论"
+    if isinstance(actual, str) and actual:
+        return messages.get("interception_detail", actual=actual)
+    return messages.get("no_validation_conclusion")
 
 
 def _interception_statuses(record: Mapping[str, object]) -> list[str]:
@@ -4248,12 +4307,18 @@ def _mapping_or_empty(raw: object) -> dict[str, object]:
     return {str(key): value for key, value in raw.items()} if isinstance(raw, Mapping) else {}
 
 
-def validate_concurrency(value: object) -> int:
+def validate_concurrency(
+    value: object, messages: TesterMessages | None = None
+) -> int:
     """Return the requested item concurrency, rejecting values outside ``1..MAX_CONCURRENCY``."""
+    if messages is None:
+        messages = TesterMessages()
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("并发必须是整数。")
+        raise ValueError(messages.get("concurrency_must_be_int"))
     if value < 1 or value > MAX_CONCURRENCY:
-        raise ValueError(f"并发必须在 1 到 {MAX_CONCURRENCY} 之间。")
+        raise ValueError(
+            messages.get("concurrency_out_of_range", min=1, max=MAX_CONCURRENCY)
+        )
     return value
 
 
@@ -4264,12 +4329,16 @@ def _clamp_concurrency(value: object) -> int:
     return min(MAX_CONCURRENCY, max(DEFAULT_CONCURRENCY, value))
 
 
-def validate_rounds(value: object) -> int:
+def validate_rounds(value: object, messages: TesterMessages | None = None) -> int:
     """Return the requested batch rounds, rejecting values outside ``1..MAX_ROUNDS``."""
+    if messages is None:
+        messages = TesterMessages()
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("轮次必须是整数。")
+        raise ValueError(messages.get("rounds_must_be_int"))
     if value < DEFAULT_ROUNDS or value > MAX_ROUNDS:
-        raise ValueError(f"轮次必须在 {DEFAULT_ROUNDS} 到 {MAX_ROUNDS} 之间。")
+        raise ValueError(
+            messages.get("rounds_out_of_range", min=DEFAULT_ROUNDS, max=MAX_ROUNDS)
+        )
     return value
 
 
@@ -4297,6 +4366,13 @@ def _optional_float(value: object) -> float | None:
 def _optional_text(value: object) -> str:
     """Return a text field persisted in a batch document, or an empty string."""
     return value if isinstance(value, str) else ""
+
+
+def _language_or_default(value: object) -> str:
+    """Return a supported batch language, defaulting to Chinese (history was Chinese-only)."""
+    if isinstance(value, str) and value in SUPPORTED_LANGUAGES:
+        return value
+    return LANGUAGE_ZH
 
 
 def _runtime_protocol(protocol: str) -> str:
