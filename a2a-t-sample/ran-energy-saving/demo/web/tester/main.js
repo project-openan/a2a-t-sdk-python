@@ -653,6 +653,7 @@ function renderResults() {
     $("empty-state").hidden = false;
     $("empty-state").textContent = t(copy, "empty.noBatch");
     $("result-summary").textContent = "";
+    $("language-note").hidden = true;
     $("round-head").hidden = true;
     $("round-filter-wrap").hidden = true;
     state.roundFilter = "";
@@ -667,6 +668,16 @@ function renderResults() {
   const items = Array.isArray(batch.items) ? batch.items : [];
   const rounds = Number(batch.rounds || 1);
   const multi = rounds > 1;
+  const batchLanguage = batch.language || "zh-CN";
+  const languageNote = $("language-note");
+  if (batchLanguage !== language) {
+    languageNote.hidden = false;
+    languageNote.textContent = t(copy, "batch.languageNote", {
+      language: t(copy, batchLanguage === "zh-CN" ? "language.zh" : "language.en"),
+    });
+  } else {
+    languageNote.hidden = true;
+  }
   $("round-head").hidden = !multi;
   $("round-filter-wrap").hidden = !multi;
   if (multi) populateRoundFilter(rounds);

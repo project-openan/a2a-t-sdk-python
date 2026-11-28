@@ -46,6 +46,11 @@ assert.equal(copyFor(""), zh);
 
 assert.equal(t(zh, "toast.selected", { count: 3 }), "已选择 3 条用例");
 assert.equal(t(en, "toast.selected", { count: 3 }), "3 cases selected");
+assert.ok(t(zh, "batch.languageNote", { language: zh["language.zh"] }).includes("中文"));
+assert.ok(
+  t(en, "batch.languageNote", { language: en["language.en"] }).includes("English"),
+  "the cross-language batch notice interpolates the batch language",
+);
 assert.equal(t(en, "missing.key"), "missing.key", "an unknown key stays visible");
 
 assert.equal(localizeValidateLabel(en, "拦截"), "blocked");
