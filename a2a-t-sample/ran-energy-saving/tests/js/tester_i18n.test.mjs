@@ -14,10 +14,13 @@ import {
   localizeValidateLabel,
   t,
 } from "../../demo/web/tester/copy.js";
+import { COPY as STATUS_COPY } from "../../demo/web/status/copy.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const testerDir = resolve(here, "../../demo/web/tester");
+const statusDir = resolve(here, "../../demo/web/status");
 const shell = readFileSync(resolve(testerDir, "index.html"), "utf8");
+const statusShell = readFileSync(resolve(statusDir, "index.html"), "utf8");
 
 const zh = COPY["zh-CN"];
 const en = COPY["en-US"];
@@ -55,6 +58,24 @@ assert.equal(localizeValidateLabel(en, "unknown label"), "unknown label");
 for (const [key, value] of Object.entries(en)) {
   assert.equal(typeof value, "string", `en-US ${key} is a string`);
   assert.ok(!/[一-鿿]/.test(value), `en-US ${key} contains no CJK text`);
+}
+
+const statusZh = STATUS_COPY["zh-CN"];
+const statusEn = STATUS_COPY["en-US"];
+assert.deepEqual(
+  Object.keys(statusEn).sort(),
+  Object.keys(statusZh).sort(),
+  "the status page defines the same keys in both languages",
+);
+const statusDataKeys = [...statusShell.matchAll(/data-i18n="([^"]+)"/g)].map((match) => match[1]);
+assert.ok(statusDataKeys.length > 0, "the status shell binds static copy through data-i18n");
+for (const key of statusDataKeys) {
+  assert.ok(key in statusZh, `zh-CN defines the status shell key ${key}`);
+  assert.ok(key in statusEn, `en-US defines the status shell key ${key}`);
+}
+for (const [key, value] of Object.entries(statusEn)) {
+  assert.equal(typeof value, "string", `status en-US ${key} is a string`);
+  assert.ok(!/[一-鿿]/.test(value), `status en-US ${key} contains no CJK text`);
 }
 
 console.log("tester i18n harness: ok");

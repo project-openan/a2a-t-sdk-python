@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Final
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from demo.web.tester.service import EvalBatchManager
@@ -26,11 +26,24 @@ ASSET_CACHE_SECONDS: Final[int] = 60
 
 def build_status_routes(*, batches: EvalBatchManager) -> list[Route]:
     """Build the status page, its assets and the JSON snapshot route."""
+    language = batches.language
+    page_html = (STATUS_DIR / "index.html").read_text(encoding="utf-8").replace(
+        "__A2AT_LANGUAGE__", language
+    )
 
     async def page(request: Request) -> Response:
         """Serve the status page shell."""
         del request
-        return FileResponse(STATUS_DIR / "index.html")
+        return HTMLResponse(page_html)
+
+    async def copy_module(request: Request) -> Response:
+        """Serve the status copy layer as an ES module."""
+        del request
+        return FileResponse(
+            STATUS_DIR / "copy.js",
+            media_type="text/javascript",
+            headers=_asset_headers(),
+        )
 
     async def stylesheet(request: Request) -> Response:
         """Serve the status stylesheet."""
@@ -62,6 +75,7 @@ def build_status_routes(*, batches: EvalBatchManager) -> list[Route]:
         Route("/status", page),
         Route("/status/app.css", stylesheet),
         Route("/status/main.js", script),
+        Route("/status/copy.js", copy_module),
         Route("/api/status", snapshot),
     ]
 

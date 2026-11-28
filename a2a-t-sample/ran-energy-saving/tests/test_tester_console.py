@@ -691,6 +691,26 @@ async def test_a_batch_records_the_language_it_was_created_in(
     assert created["language"] == LANGUAGE_EN
 
 
+async def test_the_status_page_carries_the_process_language(
+    client: httpx.AsyncClient,
+) -> None:
+    page = await client.get("/status")
+
+    assert page.status_code == 200
+    assert '<meta name="a2at-language" content="en-US">' in page.text
+    assert "data-locale-pending" in page.text
+
+
+async def test_the_status_page_serves_its_copy_module(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/status/copy.js")
+
+    assert response.status_code == 200
+    assert "text/javascript" in response.headers["content-type"]
+    assert "export const COPY" in response.text
+
+
 async def test_the_export_follows_the_batch_language(client: httpx.AsyncClient) -> None:
     created = await _create_tester_batch(client)
 
