@@ -1,0 +1,5 @@
+{
+  "conclusion": "Reject",
+  "confirmed_intent": null,
+  "failure_reason": "修订后的目标无法保持所需的速率余量，因此客户端不接受。"
+}

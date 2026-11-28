@@ -1,0 +1,18 @@
+{
+  "semantic_verdict": false,
+  "errors": [
+    {
+      "slot_name": "region",
+      "code": "content.param_missing",
+      "facts": {
+        "section_label": "Area"
+      }
+    }
+  ],
+  "params": {
+    "operationType": "Create",
+    "region": null,
+    "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
+    "guaranteedThroughputTarget": null
+  }
+}

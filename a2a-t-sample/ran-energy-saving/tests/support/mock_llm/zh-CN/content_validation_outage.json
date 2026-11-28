@@ -1,0 +1,12 @@
+{
+  "semantic_verdict": true,
+  "errors": [],
+  "params": {
+    "operationType": "Modify",
+    "region": "区域 A",
+    "energySavingGoal": "在满足任务上下文的前提下最大化节能。",
+    "guaranteedThroughputTarget": "{00:00-03:00,10Mbps}、{03:00-05:00,2Mbps}、{05:00-24:00,10Mbps}",
+    "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
+    "backgroundEvent": "03:00-05:00 停电"
+  }
+}

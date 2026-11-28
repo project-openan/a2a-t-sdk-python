@@ -1,0 +1,9 @@
+{
+  "items": [
+    {
+      "name": "guaranteedThroughputTarget",
+      "value": "Please provide guaranteedThroughputTarget: Time-segment-based guaranteed throughput target (task context), e.g. {00:00-07:00,2Mbps}, {07:00-17:30,10Mbps}."
+    }
+  ],
+  "relationship": null
+}

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="a2at-language" content="__A2AT_LANGUAGE__">
+  <title data-i18n="page.title">A2A / A2A-T · 评测控制台</title>
+  <style>
+    /* The template ships the Chinese copy; keep it off screen until the copy pass has run. */
+    html[data-locale-pending] body { visibility: hidden; }
+  </style>
+  <script>
+    // The server knows the process language, so set it before the first paint. A non-Chinese
+    // audience must not see the Chinese template while the client copy pass is still in flight.
+    (() => {
+      const meta = document.querySelector('meta[name="a2at-language"]');
+      const language = meta && meta.content ? meta.content : "zh-CN";
+      document.documentElement.lang = language;
+      if (language !== "zh-CN") {
+        document.documentElement.setAttribute("data-locale-pending", "");
+        document.title = "A2A / A2A-T · Test console";
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/tester/app.css">
+  <script type="module" src="/tester/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">A2A-T</span>
+      <div class="brand-text">
+        <small id="kicker" data-i18n="page.kicker">RAN 节能 · A2A / A2A-T</small>
+        <h1 id="title" data-i18n="page.heading">评测控制台</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/status" data-i18n="nav.status">运行状态</a>
+      <a class="ghost" href="/" data-i18n="nav.demo">演示页面</a>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="warning" id="nms-warning" role="alert" hidden>
+      <strong data-i18n="warning.nmsTitle">当前连接真实网管</strong>
+      <span data-i18n="warning.nmsBody">执行用例会向真实网络下发任务，请确认用例内容后再开始。</span>
+    </div>
+
+    <div class="tabbar" role="tablist">
+      <button class="tab active" id="tab-catalog" type="button" role="tab" data-i18n="tab.catalog">评测用例</button>
+      <button class="tab" id="tab-scratch" type="button" role="tab" data-i18n="tab.scratch">临时请求</button>
+      <span class="summary" id="catalog-count"></span>
+    </div>
+
+    <section id="catalog-panel">
+      <div class="layout">
+        <aside class="card sidebar">
+          <div class="card-head">
+            <h2 data-i18n="catalog.title">用例目录</h2>
+            <span class="summary" id="filter-count"></span>
+          </div>
+          <div class="filters">
+            <input id="filter-query" type="search" data-i18n-placeholder="catalog.searchPlaceholder" placeholder="搜索编号或名称">
+            <select id="filter-dimension"><option value="" data-i18n="filter.allDimensions">全部维度</option></select>
+            <select id="filter-operation">
+              <option value="" data-i18n="filter.allOperations">全部操作</option>
+              <option value="Create">Create</option>
+              <option value="Modify">Modify</option>
+            </select>
+            <select id="filter-validate">
+              <option value="" data-i18n="filter.allValidate">全部校验</option>
+              <option value="blocked" data-i18n="validate.blocked">拦截</option>
+              <option value="pass" data-i18n="validate.pass">不拦截</option>
+              <option value="pass_with_terminology" data-i18n="validate.passWithTerminology">不拦截 + 术语</option>
+              <option value="unfilled" data-i18n="validate.unfilled">未填写</option>
+            </select>
+            <select id="filter-tag"><option value="" data-i18n="filter.allTags">全部标签</option></select>
+          </div>
+          <div class="catalog-list" id="catalog-list"></div>
+          <div class="actions">
+            <button class="secondary" id="select-all" type="button" data-i18n="catalog.selectAll">全选当前</button>
+            <button class="secondary" id="select-none" type="button" data-i18n="catalog.selectNone">清空选择</button>
+          </div>
+        </aside>
+
+        <div class="content">
+          <section class="card">
+            <div class="card-head">
+              <h2 data-i18n="config.title">运行配置</h2>
+              <span class="summary" id="selection-summary" data-i18n="summary.notSelected">未选择用例</span>
+            </div>
+            <div class="config-grid">
+              <label><span data-i18n="field.protocol">协议</span>
+                <span class="check-row">
+                  <label class="check"><input id="protocol-a2at" type="checkbox" checked> A2A-T</label>
+                  <label class="check"><input id="protocol-a2a" type="checkbox"> A2A</label>
+                </span>
+              </label>
+              <label><span data-i18n="field.stopAfter">执行到</span>
+                <select id="config-stop-after"></select>
+              </label>
+              <label><span data-i18n="field.timeout">超时（秒）</span>
+                <input id="config-timeout" type="number" min="1" step="1" data-i18n-placeholder="placeholder.timeout" placeholder="按用例（300）">
+              </label>
+              <label><span data-i18n="field.workingTimeout">观察窗口（秒）</span>
+                <input id="config-working-timeout" type="number" min="1" step="1" data-i18n-placeholder="placeholder.workingTimeout" placeholder="按用例（60）">
+              </label>
+              <label><span data-i18n="field.concurrency">并发</span>
+                <input id="config-concurrency" type="number" min="1" max="32" step="1" value="1">
+              </label>
+              <label><span data-i18n="field.rounds">轮次</span>
+                <input id="config-rounds" type="number" min="1" max="8" step="1" value="1">
+              </label>
+              <label class="check"><input id="config-keep-tasks" type="checkbox"> <span data-i18n="config.keepTasks">保留任务（不自动 cancel）</span></label>
+            </div>
+            <p class="status-line" id="concurrency-hint" data-i18n="config.concurrencyHint">
+              并发 N 时最坏同时占用 2N 个网管任务（每个 Modify 用例另有一条基线任务）；
+              轮次 R 会把整批用例独立重复 R 遍，每轮结束释放任务（多轮不支持保留任务）；
+              真实网管报任务数上限或区域冲突时请调小。
+            </p>
+            <div class="actions">
+              <button class="primary" id="start-button" type="button" data-i18n="action.start">开始执行</button>
+              <button class="secondary" id="cancel-button" type="button" hidden data-i18n="action.cancel">取消执行</button>
+              <button class="secondary" id="retry-button" type="button" hidden data-i18n="action.retryFailed">重跑失败</button>
+              <button class="secondary" id="export-json" type="button" disabled data-i18n="action.exportJson">导出 JSON</button>
+              <button class="secondary" id="export-xlsx" type="button" disabled data-i18n="action.exportXlsx">导出 XLSX</button>
+              <span class="progress" id="progress" hidden>
+                <span class="progress-track"><span class="progress-bar" id="progress-bar"></span></span>
+                <span id="progress-text"></span>
+              </span>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2 data-i18n="results.title">执行结果</h2>
+              <div class="head-tools">
+                <label class="history" id="history-wrap" hidden>
+                  <span data-i18n="results.recentBatches">最近批次</span>
+                  <select id="history-select"></select>
+                </label>
+                <label class="history" id="round-filter-wrap" hidden>
+                  <span data-i18n="field.round">轮次</span>
+                  <select id="round-filter"></select>
+                </label>
+                <span class="summary" id="result-summary"></span>
+              </div>
+            </div>
+            <p class="status-line" id="language-note" hidden></p>
+            <div class="table-wrap">
+              <table class="grid" id="results-table">
+                <thead>
+                  <tr>
+                    <th class="num">#</th>
+                    <th data-i18n="table.id">编号</th>
+                    <th data-i18n="table.name">名称</th>
+                    <th data-i18n="table.protocol">协议</th>
+                    <th id="round-head" hidden data-i18n="table.round">轮次</th>
+                    <th data-i18n="table.stage">阶段</th>
+                    <th data-i18n="table.status">状态</th>
+                    <th data-i18n="table.intentStructure">意图结构</th>
+                    <th data-i18n="table.duration">耗时</th>
+                    <th>Token</th>
+                    <th>RunId</th>
+                    <th data-i18n="table.result">结果 / 错误</th>
+                    <th data-i18n="table.actions">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="results-body"></tbody>
+              </table>
+            </div>
+            <p class="status-line" id="empty-state" data-i18n="empty.noBatch">选择用例并开始执行。</p>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="scratch-panel" hidden>
+      <section class="card">
+        <div class="card-head">
+          <h2 data-i18n="scratch.title">临时请求</h2>
+          <span class="summary" data-i18n="scratch.hint">不保存用例，只跑一次；不参与预期断言，只记录结果。</span>
+        </div>
+        <textarea class="scratch-box" id="scratch-input" rows="7"
+          data-i18n-placeholder="scratch.placeholder"
+          placeholder="输入一段自然语言请求，例如：Implement energy-saving in A2ATestRegion region ..."></textarea>
+        <div class="config-grid">
+          <label><span data-i18n="field.protocol">协议</span>
+            <select id="scratch-protocol">
+              <option value="a2a-t">A2A-T</option>
+              <option value="a2a">A2A</option>
+            </select>
+          </label>
+          <label><span data-i18n="field.timeout">超时（秒）</span>
+            <input id="scratch-timeout" type="number" min="1" step="1" value="300">
+          </label>
+        </div>
+        <div class="actions">
+          <button class="primary" id="scratch-run" type="button" data-i18n="scratch.run">运行临时请求</button>
+          <span class="status-line" id="scratch-status"></span>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
+    <div class="drawer-head">
+      <h2 id="drawer-title" data-i18n="drawer.title">用例详情</h2>
+      <div class="drawer-tools">
+        <a
+          id="drawer-langfuse"
+          class="run-link drawer-langfuse"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          hidden
+          data-i18n="drawer.langfuse"
+        >View in Langfuse</a>
+        <button class="tab small active" id="drawer-tab-result" type="button" data-i18n="drawer.tabResult">结果</button>
+        <button class="tab small" id="drawer-tab-trace" type="button" data-i18n="drawer.tabTrace">轨迹</button>
+        <button class="tab small" id="drawer-tab-exchanges" type="button" data-i18n="drawer.tabExchanges">通信记录</button>
+        <button class="tab small" id="drawer-tab-case" type="button" data-i18n="drawer.tabCase">用例</button>
+        <button class="secondary" id="drawer-close" type="button" data-i18n="drawer.close">关闭</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div class="toast" id="toast" role="alert" hidden></div>
+</body>
+</html>

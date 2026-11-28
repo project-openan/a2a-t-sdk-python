@@ -1,0 +1,1350 @@
+"""Lightweight Web UI of the RAN energy-saving client (design §10).
+
+The Starlette app observes and steers the client flow, it never re-implements protocol logic:
+
+* ``GET /`` serves the presentation page and ``/static`` its assets;
+* ``POST /api/runs`` starts one background client run (one concurrent run, a second start is 409);
+* ``GET /api/runs/{id}/events`` streams the normalized events, ``decision_requested`` prompts and
+  the ``finished`` outcome as Server-Sent Events;
+* ``POST /api/runs/{id}/decisions`` submits a :class:`~shared.models.NegotiationDecision` to the
+  manual provider (404 for an unknown run, 409 when no decision is pending);
+* ``GET /api/runs/{id}`` returns the status, result and transcript;
+* ``POST /api/runs/{id}/cancel`` cancels the running Task (presentation UI), best effort on the
+  remote side and always on the local run;
+* ``POST /api/runs/{id}/trace`` ingests the cross-process server spans (local token, envelope
+  validation, broadcast; re-sent producer spans are deduplicated by original ``spanId``).
+
+The language is process-level and read-only: it comes from the sample configuration and is exposed
+through ``GET /api/meta`` (design D18).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import time
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Final
+
+from eval.osp.catalog import CaseCatalog
+from langfuse_export.config import Config as LangfuseConfig
+from langfuse_export.config import ConfigError as LangfuseConfigError
+from langfuse_export.config import load_config as load_langfuse_config
+from protocol.client_runtime import MODE_AUTO
+from protocol.client_service import (
+    STATUS_RUNNING,
+    UI_MODES,
+    ClientRuntimeLike,
+    RunConflictError,
+    RunManager,
+    RunState,
+    RuntimeFactory,
+)
+from protocol.client_store import ClientStore, read_client_run_detail
+from protocol.nms_client import NmsConfigError, NmsError
+from protocol.run_spec import RunCatalog
+from shared.config import (
+    DISCOVERY_DIRECT,
+    DISCOVERY_NMS,
+    PURE_HOP_NMS,
+    SUPPORTED_DISCOVERY_MODES,
+    SUPPORTED_INTENT_MODES,
+    SUPPORTED_TRANSPORTS,
+    TRANSPORT_SSE,
+    TRANSPORT_WEBHOOK,
+    SampleConfig,
+)
+from shared.http_security import (
+    UI_TOKEN_COOKIE,
+    BearerAuthMiddleware,
+    install_health_routes,
+    install_metrics_route,
+    sqlite_ready,
+    validate_bind_security,
+)
+from shared.judge_llm import build_judge_client
+from shared.models import NegotiationDecision
+from shared.run_constants import (
+    BRAND_ORANGE,
+    DEMO_PROTOCOLS,
+    PROTOCOL_A2A_T,
+    PROTOCOL_PLAIN,
+    PROTOCOL_PURE,
+    SUPPORTED_BRANDS,
+    SUPPORTED_PROTOCOLS,
+)
+from shared.trace import (
+    PHASE_TASK_MODIFY,
+    PHASES,
+    SCHEMA_VERSION,
+    set_global_sink,
+)
+from shared.trace_propagation import TracePropagationMiddleware
+from sse_starlette.sse import EventSourceResponse
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
+
+from demo.scenario import (
+    PLAIN_PROTOCOL_SCENARIOS,
+    PURE_PROTOCOL_SCENARIOS,
+    resolve_example_request,
+    resolve_modify_request,
+)
+from demo.web.nms_tasks import (
+    ACTIVE_STATES,
+    MODIFIABLE_STATES,
+    NMS_SUBMITTED_STATE,
+    NMS_WORKING_STATE,
+    cancel_nms_task,
+    list_active_tasks,
+    list_modifiable_tasks,
+    read_task,
+)
+from demo.web.request_source import request_source
+from demo.web.status_routes import build_status_routes
+from demo.web.tester import build_tester_routes
+from demo.web.wire_records import read_wire_records
+
+_LOGGER = logging.getLogger("ran_energy_saving.web")
+
+#: Trace ingest path; it is exempt from the user bearer and authenticated by the trace token.
+TRACE_INGEST_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"/api/runs/[^/]+/trace")
+
+#: Static directory of the presentation page served to an audience.
+PRESENTATION_DIR: Final[Path] = Path(__file__).resolve().parent / "presentation"
+
+#: Seconds an SSE stream stays open after ``finished`` so late cross-process server spans arrive.
+#:
+#: The server trace emitter batches spans with a 0.5 s flush interval, so its last batch is posted
+#: just after the client finishes. Closing the stream on ``finished`` would hide every server LLM
+#: and tool span of a fresh run, so the handler forwards those frames during a short grace window.
+FINISHED_GRACE_SECONDS: Final[float] = 2.0
+
+
+def _resolve_default(
+    value: str | None,
+    allowed: tuple[str, ...],
+    fallback: str,
+    label: str,
+) -> str:
+    """Resolve one Web-UI selection default, rejecting an invalid explicit value.
+
+    Raises:
+        ValueError: when an explicit default is not one of ``allowed``.
+    """
+    if value is None:
+        return fallback
+    if value not in allowed:
+        raise ValueError(f"Unsupported default {label}: {value}; expected one of {allowed}")
+    return value
+
+
+async def _pure_run_mapping(client_store: ClientStore | None) -> dict[str, tuple[str, str]]:
+    """Map each observed vendor Task id to the pure-A2A outer Task that owns it.
+
+    The newest run wins: a Task can be continued by more than one run, and the latest attempt holds
+    the outer Task the page should address.
+    """
+    if client_store is None:
+        return {}
+    try:
+        runs = await client_store.list_runs(limit=500)
+    except Exception:  # noqa: BLE001 - the picker must still show the NMS list
+        _LOGGER.warning("could not read pure runs for the task picker", exc_info=True)
+        return {}
+    mapping: dict[str, tuple[str, str]] = {}
+    for run in runs:
+        # A direct standard-A2A run addresses the vendor Task itself; it has no outer Task to map.
+        if (
+            run.protocol != PROTOCOL_PURE
+            or run.discovery == DISCOVERY_NMS
+            or not run.downstream_task_id
+            or not run.server_task_id
+        ):
+            continue
+        mapping.setdefault(
+            run.downstream_task_id,
+            (run.server_task_id, run.server_context_id or ""),
+        )
+    return mapping
+
+
+async def _annotate_server_tasks(
+    client_store: ClientStore | None,
+    rows: list[dict[str, object]],
+) -> None:
+    """Add the pure-A2A outer Task ids to the picker rows.
+
+    In pure mode a picker row names the client agent's downstream Task. The A2A peer the page may
+    continue is the outer Task, and every pure run that observed the downstream already
+    recorded both identities in the client store. Joining them here keeps the vendor task id (used
+    for the NMS state checks) next to the id the A2A message must carry.
+    """
+    if client_store is None or not rows:
+        return
+    mapping = await _pure_run_mapping(client_store)
+    for row in rows:
+        pair = mapping.get(str(row.get("taskId") or ""))
+        if pair is not None:
+            row["serverTaskId"], row["serverContextId"] = pair
+
+
+def create_app(
+    config: SampleConfig,
+    *,
+    runs_dir: Path | None = None,
+    runtime_factory: RuntimeFactory | None = None,
+    catalog: RunCatalog | None = None,
+    env_path: Path | None = None,
+    client_store: ClientStore | None = None,
+    memory_turns: int = 6,
+    default_scenario: str | None = None,
+    default_mode: str | None = None,
+    default_transport: str | None = None,
+    default_discovery: str | None = None,
+    finished_grace_seconds: float = FINISHED_GRACE_SECONDS,
+    metrics_grace_seconds: float = 0.0,
+    bind_host: str = "127.0.0.1",
+    default_brand: str = BRAND_ORANGE,
+    server_url: str | None = None,
+    allow_insecure_bind: bool = False,
+    intent_review: bool | None = None,
+    protocol: str = PROTOCOL_A2A_T,
+    protocols: tuple[str, ...] | None = None,
+    nms_enabled: bool | None = None,
+    tester_prompt_client: Any | None = None,
+) -> Starlette:
+    """Build the Starlette application of the Web UI.
+
+    Args:
+        config: process-level sample configuration (language and model mode are read-only).
+        runs_dir: transcript directory; defaults to the sample ``runs/`` directory.
+        runtime_factory: optional runtime builder (tests inject a deterministic double).
+        catalog: run catalog of the deployment; defaults to the demo scenarios.
+        env_path: source ``.env`` handed to the real client runtime.
+        client_store: optional client persistence store (conversations, runs, negotiations).
+        memory_turns: number of recent turns injected into the next run's prompts.
+        default_scenario: scenario preselected by the page and used when a start body omits it;
+            defaults to the first supported scenario.
+        default_mode: decision mode preselected/used by default; defaults to ``auto``.
+        default_transport: transport preselected/used by default; defaults to the process-level
+            ``A2AT_SAMPLE_TRANSPORT`` value.
+        default_discovery: discovery preselected/used by default; defaults to the process-level
+            ``A2AT_SAMPLE_DISCOVERY`` value.
+        finished_grace_seconds: seconds an event stream stays open after ``finished`` to forward
+            the server spans that a cross-process run posts just after completion; ``0`` closes
+            immediately (tests that do not exercise the race).
+        metrics_grace_seconds: seconds a finished run waits before its per-run metrics are
+            persisted, so the last batched server spans are included; ``0`` persists immediately
+            (tests and callers that query live metrics only).
+        bind_host: address the caller will bind; a non-loopback bind needs an auth token.
+        default_brand: presentation color theme (``orange`` or ``huawei``); the page can switch it
+            at runtime and remembers the choice in local storage.
+        server_url: base URL of the A2A server.
+        allow_insecure_bind: explicit opt-in for a trusted-LAN bind without ``A2AT_SAMPLE_AUTH_TOKEN``;
+            only the Web UI exposes this, never the A2A server.
+        intent_review: whether confirm mode waits for approval 1; defaults to true.
+        protocol: default interaction protocol of this UI process.
+        protocols: interaction protocols the page may switch between; defaults to ``(protocol,)``.
+            ``("a2a-t", "pure")`` exposes both request forms of the same agent.
+        nms_enabled: whether the deployment talks to the vendor NMS; when ``None``, the process
+            discovery mode decides. It selects each protocol's default hop (A2A-T and standard
+            A2A both direct to the NMS on a vendor deployment, otherwise to the local RAN Agent).
+        tester_prompt_client: optional SDK prompt client injected into the tester's SDK stages
+            (tests use a fake; production builds the real client lazily).
+
+    Returns:
+        The assembled Starlette application.
+
+    Raises:
+        ValueError: when an explicit default is not a supported value.
+    """
+    if default_brand not in SUPPORTED_BRANDS:
+        raise ValueError(f"Unsupported presentation brand: {default_brand}; expected one of {SUPPORTED_BRANDS}")
+    index_html = (PRESENTATION_DIR / "index.html").read_text(encoding="utf-8")
+    index_html = index_html.replace("__A2AT_DEFAULT_BRAND__", default_brand)
+    # The page ships the Chinese template; let it hide that copy before the first paint when
+    # the process language is different. The client applies the real copy after /api/meta.
+    index_html = index_html.replace("__A2AT_LANGUAGE__", config.language)
+    validate_bind_security(bind_host, config.auth_token, allow_insecure=allow_insecure_bind)
+    if catalog is None:
+        from demo.catalog import DemoRunCatalog
+
+        catalog = DemoRunCatalog.from_config(config)
+    resolved_catalog: RunCatalog = catalog
+    scenario_names = resolved_catalog.names
+    advertised_protocols = tuple(
+        candidate for candidate in (protocols or (protocol,)) if candidate in DEMO_PROTOCOLS
+    ) or (PROTOCOL_A2A_T,)
+    resolved_protocol = protocol if protocol in advertised_protocols else advertised_protocols[0]
+
+    def _scenarios_for(candidate: str) -> tuple[str, ...]:
+        """Return the scenarios the page may offer for one advertised protocol."""
+        if candidate == PROTOCOL_PURE:
+            names = PURE_PROTOCOL_SCENARIOS
+        elif candidate == PROTOCOL_PLAIN:
+            names = PLAIN_PROTOCOL_SCENARIOS
+        else:
+            names = scenario_names
+        return tuple(name for name in names if name in scenario_names)
+
+    scenarios_by_protocol = {candidate: _scenarios_for(candidate) for candidate in advertised_protocols}
+    active_scenarios = tuple(
+        name for name in scenario_names if any(name in names for names in scenarios_by_protocol.values())
+    )
+    if not active_scenarios:
+        active_scenarios = tuple(scenario_names)
+    resolved_default_scenario = _resolve_default(default_scenario, active_scenarios, active_scenarios[0], "scenario")
+    resolved_default_mode = _resolve_default(default_mode, UI_MODES, MODE_AUTO, "mode")
+    config_transport = config.transport if config.transport in SUPPORTED_TRANSPORTS else SUPPORTED_TRANSPORTS[0]
+    resolved_default_transport = _resolve_default(
+        default_transport, SUPPORTED_TRANSPORTS, config_transport, "transport"
+    )
+    config_discovery = (
+        config.discovery if config.discovery in SUPPORTED_DISCOVERY_MODES else SUPPORTED_DISCOVERY_MODES[0]
+    )
+    resolved_default_discovery = _resolve_default(
+        default_discovery, SUPPORTED_DISCOVERY_MODES, config_discovery, "discovery"
+    )
+    # One agent serves both request forms, but the deployment decides the hop: A2A-T calls the
+    # vendor NMS directly (or discovers the local RAN Agent), while standard A2A does the same.
+    # The hop is deployment-level and validated at startup.
+    resolved_nms = (config.discovery == DISCOVERY_NMS) if nms_enabled is None else nms_enabled
+    pure_hop_nms = config.pure_hop == PURE_HOP_NMS
+    if pure_hop_nms and not resolved_nms:
+        raise ValueError(
+            "A2AT_SAMPLE_PURE_HOP=nms requires the nms discovery; a direct standard-A2A client "
+            "has no vendor endpoint to discover"
+        )
+    protocol_defaults: dict[str, dict[str, str]] = {
+        PROTOCOL_A2A_T: {
+            "discovery": DISCOVERY_NMS if resolved_nms else DISCOVERY_DIRECT,
+            # The launcher pins the NMS transport: a real vendor run uses webhook.
+            "transport": resolved_default_transport,
+        },
+        PROTOCOL_PURE: {
+            "discovery": DISCOVERY_NMS if pure_hop_nms else DISCOVERY_DIRECT,
+            # The direct hop talks to the vendor with the deployment transport (webhook on the
+            # real NMS); the local hop keeps its historical SSE form.
+            "transport": resolved_default_transport if pure_hop_nms else TRANSPORT_SSE,
+        },
+    }
+    resolved_intent_mode = (
+        config.intent_mode if config.intent_mode in SUPPORTED_INTENT_MODES else SUPPORTED_INTENT_MODES[0]
+    )
+    resolved_intent_review = True if intent_review is None else intent_review
+
+    async def default_factory(
+        resolved_config: SampleConfig,
+        scenario: str,
+        mode: str,
+        transport: str,
+        discovery: str,
+        *,
+        protocol: str = PROTOCOL_A2A_T,
+        run_id: str = "",
+        prepared_task_t: str | None = None,
+        prepared_filled: Mapping[str, object] | None = None,
+        pure_reply_source: str = "",
+    ) -> ClientRuntimeLike:
+        """Build the real client runtime with the app's source ``.env``."""
+        from demo.composition import build_demo_runtime
+
+        return await build_demo_runtime(
+            resolved_config,
+            scenario,
+            mode,
+            transport,
+            discovery,
+            protocol=protocol,
+            run_id=run_id,
+            env_path=env_path,
+            prepared_task_t=prepared_task_t,
+            prepared_filled=prepared_filled,
+            pure_reply_source=pure_reply_source,
+        )
+
+    resolved_runs_dir = runs_dir or Path(config.runs_dir)
+    manager = RunManager(
+        config=config,
+        runtime_factory=runtime_factory or default_factory,
+        catalog=resolved_catalog,
+        runs_dir=resolved_runs_dir,
+        store=client_store,
+        memory_turns=memory_turns,
+        intent_review=resolved_intent_review,
+        metrics_grace_seconds=metrics_grace_seconds,
+    )
+    # Install the run-id router before any run is built. Uvicorn also runs the lifespan, but the
+    # ASGI test client may not, and an in-process server already emits on its own thread.
+    set_global_sink(manager.route_external_span)
+    # One catalog instance is shared by the tester console.
+    case_catalog = CaseCatalog()
+    # The independent decision-quality judge is a separate model; an unconfigured process passes
+    # None and the appendix records every semantic check as unjudged.
+    tester_judge = build_judge_client(config) if config.judge_configured else None
+    # The tester report fetches Langfuse traces with the same credentials the client uses. The
+    # sample's `.env` is above the runs directory, so passing the loaded config avoids making it
+    # rediscover them (``langfuse_export`` only reads the cwd).
+    trace_config: LangfuseConfig | None = None
+    if config.langfuse_public_key and config.langfuse_secret_key:
+        try:
+            trace_config = load_langfuse_config(
+                host=config.langfuse_base_url,
+                public_key=config.langfuse_public_key,
+                secret_key=config.langfuse_secret_key,
+            )
+        except LangfuseConfigError as exc:
+            _LOGGER.warning("Langfuse trace fetch disabled: %s", exc)
+            trace_config = None
+    tester_routes, tester_batches = build_tester_routes(
+        runs=manager,
+        protocols=advertised_protocols,
+        scenarios_by_protocol=scenarios_by_protocol,
+        protocol_defaults=protocol_defaults,
+        server_url=server_url,
+        server_auth_token=config.server_auth_token,
+        runs_dir=resolved_runs_dir,
+        nms_enabled=resolved_nms,
+        language=config.language,
+        model_mode=config.model_mode,
+        model_label=config.model_label,
+        metrics_grace_seconds=metrics_grace_seconds,
+        prompt_client=tester_prompt_client,
+        catalog=case_catalog,
+        # The SDK stages must read the same .env the run runtime reads; otherwise the preflight
+        # and the run can resolve different models and disagree on the same request.
+        env_path=env_path,
+        judge=tester_judge,
+        judge_model_label=config.judge_model if tester_judge is not None else "",
+        pure_hop=config.pure_hop,
+        trace_config=trace_config,
+    )
+    # The status page is process-wide: it must see every browser's batches, so it reads the same
+    # tester manager the owner-filtered console uses.
+    status_routes = build_status_routes(batches=tester_batches)
+
+    @asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
+        del app
+        _LOGGER.info(
+            "web ui starting: language=%s model_mode=%s client_db=%s",
+            config.language,
+            config.model_mode,
+            config.client_db_path or "memory",
+        )
+        # A run whose remote Task is still executing survives the restart; only runs without one
+        # are marked interrupted. This must be the first store operation of the process.
+        recovered = await manager.recover_runs()
+        if recovered:
+            _LOGGER.info("recovered %d long-running run(s)", recovered)
+        # Apply the decision-session retention window before the first run of this process.
+        await manager.sweep_sessions()
+        if config.discovery == DISCOVERY_NMS and config.transport == TRANSPORT_WEBHOOK:
+            # Bind the process-level callback receiver now. A public URL pins the port, so a
+            # collision can only fail; discovering it here reports it at startup instead of after
+            # the operator has already approved a run. Later runs reuse this same instance.
+            from protocol.shared_webhook import get_shared_webhook
+
+            shared_webhook = await get_shared_webhook(config)
+            _LOGGER.info("webhook receiver ready: push_url=%s", shared_webhook.url)
+        # Producers that emit from another thread/task (e.g. an in-process server) cannot see a
+        # run-local sink; route their spans by the run id they carry.
+        set_global_sink(manager.route_external_span)
+        try:
+            yield
+        finally:
+            set_global_sink(None)
+            await tester_batches.shutdown()
+            await manager.shutdown()
+            # The callback receiver is process-owned, not run-owned; release its port on shutdown.
+            from protocol.shared_webhook import close_shared_webhooks
+
+            await close_shared_webhooks()
+            _LOGGER.info("web ui stopped")
+
+    async def index(request: Request) -> Response:
+        del request
+        return HTMLResponse(index_html)
+
+    async def meta(request: Request) -> Response:
+        del request
+        return JSONResponse(
+            {
+                "language": config.language,
+                "modelMode": config.model_mode,
+                "modelLabel": config.model_label,
+                "scenarios": list(active_scenarios),
+                "scenarioRequests": {
+                    name: _scenario_request(resolved_catalog, name, config.language) for name in active_scenarios
+                },
+                # The presentation can list running Tasks only when the client talks to the real
+                # NMS; a direct local server has no vendor task list endpoint.
+                "nmsTasksEnabled": config.discovery == DISCOVERY_NMS,
+                "modifyRequest": _modify_request(config, config.language),
+                "modes": list(UI_MODES),
+                "protocol": resolved_protocol,
+                "protocols": list(advertised_protocols),
+                "scenariosByProtocol": {name: list(names) for name, names in scenarios_by_protocol.items()},
+                "protocolDefaults": protocol_defaults,
+                "pureScenarios": list(PURE_PROTOCOL_SCENARIOS),
+                "plainScenarios": list(PLAIN_PROTOCOL_SCENARIOS),
+                "defaultProtocol": resolved_protocol,
+                "transports": list(SUPPORTED_TRANSPORTS),
+                "discoveries": list(SUPPORTED_DISCOVERY_MODES),
+                "defaultScenario": resolved_default_scenario,
+                "defaultMode": resolved_default_mode,
+                "defaultTransport": resolved_default_transport,
+                "defaultDiscovery": resolved_default_discovery,
+                "defaultIntentMode": resolved_intent_mode,
+                "intentModes": list(SUPPORTED_INTENT_MODES),
+                "defaultBrand": default_brand,
+                "brands": list(SUPPORTED_BRANDS),
+                "decisionMode": resolved_default_mode,
+                "intentReview": resolved_intent_review and resolved_default_mode == "confirm",
+                "metricsEnabled": config.client_db_path is not None,
+                # The UI must keep its stream open at least as long as the backend grace window,
+                # otherwise the server's last trace batch is posted to a closed subscriber.
+                "finishedGraceMs": int(round(finished_grace_seconds * 1000)),
+            }
+        )
+
+    async def nms_tasks(request: Request) -> Response:
+        """Return the Tasks the Running-tasks picker may select.
+
+        The list comes from the vendor NMS itself, not the local A2A task store: a Task can be
+        modified while the NMS holds it in ``TASK_STATE_SUBMITTED`` or ``TASK_STATE_WORKING``,
+        and any non-terminal Task, including ``TASK_STATE_INPUT_REQUIRED``, can be cancelled.
+        ``state=active`` returns all three; ``state=working`` is kept for older callers and
+        ``state=submitted`` returns only the newly accepted Tasks.
+        """
+        if config.discovery != DISCOVERY_NMS:
+            return JSONResponse(
+                {
+                    "enabled": False,
+                    "tasks": [],
+                    "reason": "The task picker needs the real NMS discovery mode.",
+                }
+            )
+        state = request.query_params.get("state", "modifiable").strip().lower()
+        if state not in ("", "active", "modifiable", "working", "submitted"):
+            return JSONResponse(
+                {
+                    "error": "state must be 'active', 'modifiable', 'working' or 'submitted'.",
+                    "code": "unsupported_task_state",
+                },
+                status_code=400,
+            )
+        try:
+            rows = await (list_active_tasks(config) if state == "active" else list_modifiable_tasks(config))
+        except NmsConfigError as exc:
+            return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
+        except NmsError as exc:
+            return JSONResponse(
+                {"error": f"The NMS task list could not be read: {exc}", "code": "nms_unavailable"},
+                status_code=502,
+            )
+        if state == "working":
+            rows = [row for row in rows if row.get("state") == NMS_WORKING_STATE]
+        elif state == "submitted":
+            rows = [row for row in rows if row.get("state") == NMS_SUBMITTED_STATE]
+        await _annotate_server_tasks(client_store, rows)
+        return JSONResponse(
+            {
+                "enabled": True,
+                "states": sorted(ACTIVE_STATES if state == "active" else MODIFIABLE_STATES),
+                "tasks": rows,
+            }
+        )
+
+    async def cancel_nms_task_route(request: Request) -> Response:
+        """Cancel one NMS Task and stop the local runs that track it.
+
+        The NMS cancel comes first: when the vendor answers the known HTTP 503, the Task keeps
+        running and no local run is stopped (the operator still sees the warning). A successful
+        cancel then stops every in-process run whose remote or target Task is this one.
+        """
+        if config.discovery != DISCOVERY_NMS:
+            return JSONResponse(
+                {
+                    "error": "Cancelling an NMS Task needs the real NMS discovery mode.",
+                    "code": "nms_discovery_required",
+                },
+                status_code=400,
+            )
+        task_id = request.path_params["task_id"]
+        try:
+            cancelled = await cancel_nms_task(config, task_id)
+        except NmsConfigError as exc:
+            return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
+        except NmsError as exc:
+            if "HTTP 404" in str(exc):
+                return JSONResponse(
+                    {"error": "The Task does not exist on the NMS.", "code": "task_missing"},
+                    status_code=404,
+                )
+            return JSONResponse(
+                {"error": f"The Task could not be cancelled: {exc}", "code": "nms_unavailable"},
+                status_code=502,
+            )
+        if not cancelled:
+            return JSONResponse(
+                {
+                    "taskId": task_id,
+                    "cancelled": False,
+                    "supported": False,
+                    "reason": "nms_cancel_unsupported",
+                    "stoppedRuns": [],
+                }
+            )
+        stopped: list[str] = []
+        for run in manager.active_runs_for_task(task_id):
+            if await manager.cancel(run.run_id, remote=False):
+                stopped.append(run.run_id)
+        return JSONResponse(
+            {
+                "taskId": task_id,
+                "cancelled": True,
+                "supported": True,
+                "stoppedRuns": stopped,
+            }
+        )
+
+    async def run_wire(request: Request) -> Response:
+        """Return the redacted NMS exchanges of one run, as the wire inspector shows them."""
+        run_id = request.path_params["run_id"]
+        root = runs_dir or Path(config.runs_dir)
+        records = await asyncio.to_thread(read_wire_records, root, run_id)
+        return JSONResponse({"runId": run_id, "records": records, "enabled": bool(records)})
+
+    async def start_run(request: Request) -> Response:
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse(
+                {"error": "The request body must be a JSON object.", "code": "body_not_object"},
+                status_code=400,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "The request body must be a JSON object.", "code": "body_not_object"},
+                status_code=400,
+            )
+        scenario = body.get("scenario", resolved_default_scenario)
+        mode = body.get("mode", resolved_default_mode)
+        protocol = body.get("protocol", resolved_protocol)
+        protocol_key = str(protocol)
+        defaults = protocol_defaults.get(protocol_key, {})
+        # The page sends only the protocol; the backend owns each request form's hop so a stale
+        # browser value can never send standard A2A through the A2A-T discovery path.
+        transport = body.get("transport") or defaults.get("transport") or resolved_default_transport
+        discovery = body.get("discovery") or defaults.get("discovery") or resolved_default_discovery
+        intent_mode = body.get("intentMode", resolved_intent_mode)
+        raw_user_request = body.get("userRequest")
+        if raw_user_request is not None and not isinstance(raw_user_request, str):
+            return JSONResponse(
+                {"error": "The userRequest field must be a string."},
+                status_code=400,
+            )
+        user_request = raw_user_request.strip() if isinstance(raw_user_request, str) else None
+        optional_strings: dict[str, str | None] = {}
+        for field_name in (
+            "conversationId",
+            "externalConversationId",
+            "traceId",
+            "chainId",
+            "parentRunId",
+            "userId",
+            "idempotencyKey",
+        ):
+            raw_value = body.get(field_name)
+            if raw_value is not None and not isinstance(raw_value, str):
+                return JSONResponse(
+                    {"error": f"The {field_name} field must be a string."},
+                    status_code=400,
+                )
+            optional_strings[field_name] = (
+                raw_value.strip() if isinstance(raw_value, str) and raw_value.strip() else None
+            )
+        target_task_id = body.get("targetTaskId")
+        target_context_id = body.get("targetContextId")
+        target_server_task_id = body.get("targetServerTaskId")
+        target_server_context_id = body.get("targetServerContextId")
+        for field_name, value in (
+            ("targetTaskId", target_task_id),
+            ("targetContextId", target_context_id),
+            ("targetServerTaskId", target_server_task_id),
+            ("targetServerContextId", target_server_context_id),
+        ):
+            if value is not None and not isinstance(value, str):
+                return JSONResponse(
+                    {"error": f"The {field_name} field must be a string."},
+                    status_code=400,
+                )
+        resolved_target_task = target_task_id.strip() if isinstance(target_task_id, str) else ""
+        resolved_target_context = target_context_id.strip() if isinstance(target_context_id, str) else ""
+        resolved_server_task = target_server_task_id.strip() if isinstance(target_server_task_id, str) else ""
+        resolved_server_context = target_server_context_id.strip() if isinstance(target_server_context_id, str) else ""
+        if bool(resolved_target_task) != bool(resolved_target_context):
+            return JSONResponse(
+                {
+                    "error": "targetTaskId and targetContextId must be provided together.",
+                    "code": "target_pair_required",
+                },
+                status_code=400,
+            )
+        if bool(resolved_server_task) != bool(resolved_server_context):
+            return JSONResponse(
+                {
+                    "error": "targetServerTaskId and targetServerContextId must be provided together.",
+                    "code": "target_server_pair_required",
+                },
+                status_code=400,
+            )
+        if resolved_target_task:
+            if protocol not in (PROTOCOL_A2A_T, PROTOCOL_PURE):
+                return JSONResponse(
+                    {
+                        "error": "A Modify-only run requires A2A-T or pure A2A.",
+                        "code": "target_protocol_unsupported",
+                    },
+                    status_code=400,
+                )
+            # The picker always reads the vendor NMS from this process, while a pure run's own hop
+            # is the client agent (direct). What matters is that the page can validate the vendor
+            # Task; an A2A-T run additionally continues that same Task directly.
+            if config.discovery != DISCOVERY_NMS or (protocol == PROTOCOL_A2A_T and discovery != DISCOVERY_NMS):
+                return JSONResponse(
+                    {
+                        "error": "The task picker is available only with NMS discovery.",
+                        "code": "target_discovery_unsupported",
+                    },
+                    status_code=400,
+                )
+            try:
+                task = await read_task(config, resolved_target_task)
+            except NmsConfigError as exc:
+                return JSONResponse({"error": str(exc), "code": "nms_not_configured"}, status_code=503)
+            except NmsError as exc:
+                return JSONResponse(
+                    {
+                        "error": f"The target Task could not be read: {exc}",
+                        "code": "nms_unavailable",
+                    },
+                    status_code=502,
+                )
+            if task is None:
+                return JSONResponse(
+                    {"error": "The target Task does not exist on the NMS.", "code": "target_missing"},
+                    status_code=409,
+                )
+            if task.get("state") not in MODIFIABLE_STATES:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "The target Task is not in a modifiable state (SUBMITTED or WORKING); "
+                            "refresh the task list and choose another one."
+                        ),
+                        "code": "target_not_modifiable",
+                        "state": task.get("state"),
+                    },
+                    status_code=409,
+                )
+            task_context = task.get("contextId")
+            if isinstance(task_context, str) and task_context and task_context != resolved_target_context:
+                return JSONResponse(
+                    {
+                        "error": "The target Task context does not match the NMS Task.",
+                        "code": "target_context_mismatch",
+                    },
+                    status_code=409,
+                )
+            if protocol == PROTOCOL_PURE and discovery == DISCOVERY_NMS:
+                # A direct standard-A2A Modify addresses the vendor Task itself: targetTaskId is
+                # the wire taskId, and there is no outer Task to name.
+                if resolved_server_task:
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "A direct standard-A2A Modify addresses the vendor Task; drop "
+                                "targetServerTaskId/targetServerContextId."
+                            ),
+                            "code": "target_server_not_used",
+                        },
+                        status_code=400,
+                    )
+            elif protocol == PROTOCOL_PURE:
+                # The vendor Task is only the picker's identity. The message must continue the
+                # A2A peer's outer Task, and only a pure run that observed this vendor Task knows
+                # that id. Refuse rather than send a message the peer would treat as a new Task.
+                if not resolved_server_task:
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "A pure-A2A Modify needs the A2A peer's Task and context "
+                                "(targetServerTaskId/targetServerContextId)."
+                            ),
+                            "code": "target_server_pair_required",
+                        },
+                        status_code=400,
+                    )
+                mapping = await _pure_run_mapping(client_store)
+                mapped = mapping.get(resolved_target_task)
+                if mapped != (resolved_server_task, resolved_server_context):
+                    return JSONResponse(
+                        {
+                            "error": (
+                                "No pure-A2A run of this page owns the target Task; create the "
+                                "Task from this page first or use the A2A-T request form."
+                            ),
+                            "code": "target_server_mapping_missing",
+                        },
+                        status_code=409,
+                    )
+        elif resolved_server_task:
+            return JSONResponse(
+                {
+                    "error": "targetServerTaskId/targetServerContextId require targetTaskId.",
+                    "code": "target_pair_required",
+                },
+                status_code=400,
+            )
+        requested_scenarios = scenarios_by_protocol.get(
+            protocol_key,
+            (
+                PURE_PROTOCOL_SCENARIOS
+                if protocol == PROTOCOL_PURE
+                else PLAIN_PROTOCOL_SCENARIOS
+                if protocol == PROTOCOL_PLAIN
+                else scenario_names
+            ),
+        )
+        if resolved_target_task and protocol == PROTOCOL_PURE and scenario in scenario_names:
+            # A pure Modify carries the operator's text; the scenario only labels the run and
+            # supplies the Modify example. It is not a request form the pure list curates.
+            requested_scenarios = (scenario,)
+        if scenario not in requested_scenarios:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"Unsupported scenario for protocol {protocol}: {scenario}; "
+                        f"expected one of {requested_scenarios}"
+                    )
+                },
+                status_code=400,
+            )
+        if mode not in UI_MODES:
+            return JSONResponse(
+                {"error": f"Unsupported mode: {mode}; expected one of {UI_MODES}"},
+                status_code=400,
+            )
+        if protocol not in SUPPORTED_PROTOCOLS:
+            return JSONResponse(
+                {"error": f"Unsupported protocol: {protocol}; expected one of {SUPPORTED_PROTOCOLS}"},
+                status_code=400,
+            )
+        if transport not in SUPPORTED_TRANSPORTS:
+            return JSONResponse(
+                {"error": f"Unsupported transport: {transport}; expected one of {SUPPORTED_TRANSPORTS}"},
+                status_code=400,
+            )
+        if discovery not in SUPPORTED_DISCOVERY_MODES:
+            return JSONResponse(
+                {"error": f"Unsupported discovery: {discovery}; expected one of {SUPPORTED_DISCOVERY_MODES}"},
+                status_code=400,
+            )
+        if intent_mode not in SUPPORTED_INTENT_MODES:
+            return JSONResponse(
+                {"error": (f"Unsupported intent mode: {intent_mode}; expected one of {SUPPORTED_INTENT_MODES}")},
+                status_code=400,
+            )
+        try:
+            run = await manager.start(
+                str(scenario),
+                str(mode),
+                str(transport),
+                str(discovery),
+                user_request,
+                protocol=str(protocol),
+                conversation_id=optional_strings["conversationId"],
+                external_conversation_id=optional_strings["externalConversationId"],
+                trace_id=optional_strings["traceId"],
+                chain_id=optional_strings["chainId"],
+                parent_run_id=optional_strings["parentRunId"],
+                user_id=optional_strings["userId"] or "web-user",
+                idempotency_key=optional_strings["idempotencyKey"],
+                intent_mode=str(intent_mode),
+                source=request_source(request, body.get("source")),
+                target_task_id=resolved_target_task or None,
+                target_context_id=resolved_target_context or None,
+                target_server_task_id=resolved_server_task or None,
+                target_server_context_id=resolved_server_context or None,
+            )
+        except RunConflictError as exc:
+            return JSONResponse({"error": str(exc), "code": "run_conflict"}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc), "code": "invalid_run"}, status_code=400)
+        reused = run.task is None
+        return JSONResponse(
+            {
+                "runId": run.run_id,
+                "conversationId": run.conversation_id,
+                "traceId": run.trace_id,
+                "chainId": run.chain_id,
+                "parentRunId": run.parent_run_id or None,
+                "deduplicated": reused,
+                "protocol": run.protocol,
+                "language": config.language,
+                "modelMode": config.model_mode,
+                "modelLabel": config.model_label,
+                "discovery": discovery,
+                "intentMode": run.intent_mode or str(intent_mode),
+            },
+            status_code=200 if reused else 202,
+        )
+
+    async def run_status(request: Request) -> Response:
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        return JSONResponse(run.snapshot())
+
+    async def cancel_run(request: Request) -> Response:
+        """Stop one running task (presentation UI cancel button).
+
+        The manager asks the remote transport to cancel its Task first (best effort; the vendor
+        NMS is known to answer HTTP 503), then stops the local run. The run task still publishes
+        its terminal ``finished`` frame, so every subscriber sees the cancellation.
+        """
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        if not await manager.cancel(run.run_id):
+            return JSONResponse(
+                {"error": "The run is already finished.", "code": "run_not_active"},
+                status_code=409,
+            )
+        return JSONResponse({"runId": run.run_id, "status": "cancelled"}, status_code=202)
+
+    async def run_events(request: Request) -> Response:
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        snapshot, queue = run.subscribe()
+
+        async def stream() -> AsyncIterator[dict[str, str]]:
+            """Replay recorded messages, then forward live ones (including post-``finished`` spans).
+
+            The stream does not return the moment ``finished`` is seen: the server process posts its
+            last trace batch a flush interval later, and those spans belong to this run. A short
+            grace window keeps the subscriber attached so the browser sees the server LLM/tool
+            rows of a fresh run (design §8: reconnect must not lose events).
+            """
+            try:
+                for message in snapshot:
+                    yield _sse_data(message)
+                deadline: float | None = None
+                finished_at = run.finished_at
+                if run.finished() and finished_at is not None:
+                    deadline = finished_at + finished_grace_seconds
+                while True:
+                    # Frames broadcast between ``subscribe`` and the first iteration are already
+                    # queued; drain them before the deadline can end the stream.
+                    try:
+                        message = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        if deadline is not None:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                return
+                            try:
+                                message = await asyncio.wait_for(queue.get(), timeout=remaining)
+                            except TimeoutError:
+                                return
+                        else:
+                            message = await queue.get()
+                    yield _sse_data(message)
+                    if message.get("type") == "finished":
+                        finished_at = run.finished_at or time.monotonic()
+                        deadline = finished_at + finished_grace_seconds
+            finally:
+                run.unsubscribe(queue)
+
+        return EventSourceResponse(stream(), ping=15)
+
+    async def submit_decision(request: Request) -> Response:
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        try:
+            body = await request.json()
+            # ``answerSource``/``answerText`` are page provenance, not protocol fields: read them
+            # before validation because the decision model ignores unknown keys. The text is the
+            # operator's own wording; a pure A2A answer is sent verbatim downstream.
+            source = body.get("answerSource") if isinstance(body, dict) else None
+            answer_text = body.get("answerText") if isinstance(body, dict) else None
+            decision = NegotiationDecision.model_validate(body)
+        except (ValueError, TypeError):
+            return JSONResponse(
+                {
+                    "error": "The body must be a NegotiationDecision JSON object.",
+                    "code": "decision_body_invalid",
+                },
+                status_code=400,
+            )
+        provider = run.manual_provider
+        if run.status != STATUS_RUNNING or not run.pending_decision or provider is None:
+            return JSONResponse(
+                {"error": "No manual decision is pending for this run."},
+                status_code=409,
+            )
+        run.pending_decision = False
+        run.pending_answer_source = source.strip() if isinstance(source, str) and source.strip() else None
+        # OSP `AQ`: the answer moment is here, not when the grounded decision is recorded later.
+        run.mark_decision_answered()
+        set_answer_text = getattr(provider, "set_answer_text", None)
+        if callable(set_answer_text):
+            set_answer_text(answer_text if isinstance(answer_text, str) else None)
+        provider.submit(decision)
+        return JSONResponse({"accepted": True, "runId": run.run_id})
+
+    async def submit_intent(request: Request) -> Response:
+        """Resolve approval 1: the engineer confirms or rejects the structured intent."""
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse(
+                {"error": "The body must be a JSON object.", "code": "body_not_object"},
+                status_code=400,
+            )
+        if not isinstance(body, dict) or not isinstance(body.get("approved"), bool):
+            return JSONResponse(
+                {
+                    "error": "The approved field must be a boolean.",
+                    "code": "approved_invalid",
+                },
+                status_code=400,
+            )
+        if run.status != STATUS_RUNNING or not run.resolve_intent(body["approved"]):
+            return JSONResponse(
+                {"error": "No intent review is pending for this run."},
+                status_code=409,
+            )
+        return JSONResponse({"accepted": True, "runId": run.run_id})
+
+    async def run_trace_json(request: Request) -> Response:
+        run_id = request.path_params["run_id"]
+        run = manager.get(run_id)
+        if run is not None:
+            spans = sorted(run.spans.values(), key=_span_seq)
+            return JSONResponse(
+                {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "runId": run.run_id,
+                    "scenario": run.scenario,
+                    "status": run.status,
+                    "spans": spans,
+                    "transcript": run.transcript.to_dict() if run.transcript is not None else None,
+                }
+            )
+        persisted = await _persisted_trace(run_id)
+        if persisted is not None:
+            return JSONResponse(persisted)
+        return JSONResponse(
+            {"error": "trace 仅本次进程内可看", "code": "trace_not_available"},
+            status_code=404,
+        )
+
+    async def _persisted_trace(run_id: str) -> dict[str, object] | None:
+        """Rebuild a trace document from the persisted run/transcript of a previous process.
+
+        The client store keeps no separate trace file, but the transcript JSON persists every trace
+        span as a timeline entry. The reconstruction is best effort: a run record without a readable
+        transcript still returns an (empty) trace document rather than pretending it is unavailable.
+        """
+        path = config.client_db_path
+        if path is None:
+            return None
+        detail = await asyncio.to_thread(read_client_run_detail, path, run_id)
+        if detail is None:
+            return None
+        transcript: dict[str, object] | None = None
+        spans: list[dict[str, object]] = []
+        transcript_path = detail.get("transcriptJson")
+        if isinstance(transcript_path, str) and Path(transcript_path).is_file():
+            try:
+                text = await asyncio.to_thread(Path(transcript_path).read_text, encoding="utf-8")
+                document = json.loads(text)
+            except (OSError, ValueError):
+                document = None
+            if isinstance(document, dict):
+                transcript = document
+                events = document.get("events")
+                if isinstance(events, list):
+                    spans = [
+                        _span_from_transcript_event(event)
+                        for event in events
+                        if isinstance(event, dict) and event.get("entryType") == "trace"
+                    ]
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "runId": run_id,
+            "scenario": detail.get("scenario"),
+            "status": detail.get("status"),
+            "spans": sorted(spans, key=_span_seq),
+            "transcript": transcript,
+            "persisted": True,
+        }
+
+    async def ingest_trace(request: Request) -> Response:
+        run = manager.get(request.path_params["run_id"])
+        if run is None:
+            # A stale OSS Agent posts spans for a run that this UI instance does not own (for
+            # example after a UI restart). Keep the reason in ui.log so the operator can tell it
+            # apart from a token mismatch.
+            _LOGGER.warning("trace ingest rejected: unknown run %s", request.path_params["run_id"])
+            return JSONResponse({"error": "Unknown run.", "code": "unknown_run"}, status_code=404)
+        if not _trace_token_ok(request):
+            _LOGGER.warning("trace ingest rejected: invalid token")
+            return JSONResponse(
+                {"error": "Invalid trace token.", "code": "trace_token_invalid"},
+                status_code=403,
+            )
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse(
+                {"error": "The body must be a JSON span or span list.", "code": "trace_body_invalid"},
+                status_code=400,
+            )
+        spans = _coerce_trace_payload(body)
+        if spans is None:
+            return JSONResponse(
+                {"error": "The body must be a JSON span or span list.", "code": "trace_body_invalid"},
+                status_code=400,
+            )
+        for index, span in enumerate(spans):
+            problem = _validate_trace_span(span, run.run_id)
+            if problem is not None:
+                return JSONResponse(
+                    {"error": f"span[{index}]: {problem}", "code": "span_invalid"},
+                    status_code=400,
+                )
+        created = 0
+        for span in spans:
+            before = len(run.traces)
+            run.record_trace(span)
+            if len(run.traces) > before:
+                created += 1
+        response: dict[str, object] = {"accepted": created, "runId": run.run_id}
+        if created < len(spans):
+            response["deduplicated"] = len(spans) - created
+        return JSONResponse(response, status_code=202)
+
+    app = Starlette(
+        routes=[
+            Route("/", index),
+            Route("/api/meta", meta),
+            Route("/api/nms/tasks", nms_tasks),
+            Route("/api/nms/tasks/{task_id}/cancel", cancel_nms_task_route, methods=["POST"]),
+            Route("/api/runs/{run_id}/wire", run_wire),
+            Route("/api/runs", start_run, methods=["POST"]),
+            Route("/api/runs/{run_id}", run_status),
+            Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
+            Route("/api/runs/{run_id}/events", run_events),
+            Route("/api/runs/{run_id}/decisions", submit_decision, methods=["POST"]),
+            Route("/api/runs/{run_id}/intent", submit_intent, methods=["POST"]),
+            Route("/api/runs/{run_id}/trace", ingest_trace, methods=["POST"]),
+            Route("/api/runs/{run_id}/trace.json", run_trace_json),
+            *tester_routes,
+            *status_routes,
+            Mount("/static", app=StaticFiles(directory=PRESENTATION_DIR), name="static"),
+        ],
+        lifespan=lifespan,
+        middleware=(
+            [
+                Middleware(
+                    BearerAuthMiddleware,
+                    token=config.auth_token,
+                    protected_prefixes=("/api/", "/metrics"),
+                    # The trace ingest route carries the run-scoped local trace token instead of
+                    # the user bearer; the handler still rejects a wrong or absent trace token.
+                    public_path_patterns=(TRACE_INGEST_PATH_PATTERN,),
+                    # The page copies ``?token=…`` into this cookie, so fetch and EventSource
+                    # (which cannot set an Authorization header) carry the same token.
+                    cookie_name=UI_TOKEN_COOKIE,
+                )
+            ]
+            if config.auth_token
+            else []
+        )
+        + [
+            # An external caller that starts a run with a W3C ``traceparent`` makes that context
+            # current, so ``create_langfuse_exporter`` joins the caller's trace instead of opening
+            # an unrelated one. Browser requests carry no traceparent and are unaffected.
+            Middleware(TracePropagationMiddleware)
+        ],
+    )
+    install_health_routes(
+        app,
+        service="ran-energy-saving-web",
+        checks={"client_store": lambda: sqlite_ready(config.client_db_path)},
+    )
+    install_metrics_route(app)
+    app.state.run_manager = manager
+    app.state.client_store = client_store
+    app.state.config = config
+    app.state.tester_batches = tester_batches
+    return app
+
+
+def _now_iso() -> str:
+    """Return the current UTC time in ISO 8601 form (UI timestamps)."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _modify_request(config: SampleConfig, language: str) -> str:
+    """Return the Modify request shown for a selected running Task, vendor-profiled."""
+    from demo.catalog import profile_request_text
+
+    region = config.nms_region if config.discovery == DISCOVERY_NMS else ""
+    sites = config.nms_sites if config.discovery == DISCOVERY_NMS else ()
+    return profile_request_text(
+        resolve_modify_request(language),
+        language=language,
+        region=region,
+        sites=sites,
+    )
+
+
+def _scenario_request(catalog: RunCatalog, name: str, language: str) -> str:
+    """Return the request shown for one scenario.
+
+    The catalog carries the vendor profile, so the page pre-fills exactly the text the client will
+    send. The page never shows a neutral name that the wire later replaces.
+    """
+    try:
+        return catalog.spec(name, language=language).user_request
+    except KeyError:
+        return resolve_example_request(name, language)
+
+
+def _sse_data(message: dict[str, object]) -> dict[str, str]:
+    """Render one SSE message payload."""
+    return {"data": json.dumps(message, ensure_ascii=False)}
+
+
+def _span_seq(span: Mapping[str, object]) -> int:
+    """Return the ``seq`` of one span, ``0`` when absent."""
+    value = span.get("seq")
+    return value if isinstance(value, int) else 0
+
+
+def _span_from_transcript_event(event: Mapping[str, object]) -> dict[str, object]:
+    """Map one persisted transcript trace row back to the ``trace.json`` span shape."""
+    return {
+        "spanId": event.get("spanId"),
+        "parentSpanId": event.get("parentSpanId"),
+        "seq": event.get("seq"),
+        "phase": event.get("phase"),
+        "phaseStep": event.get("phaseStep"),
+        "kind": event.get("kind"),
+        "title": event.get("summary"),
+        "actor": event.get("actor") or "server",
+        "side": event.get("side") or "server",
+        "direction": event.get("direction"),
+        "status": event.get("status"),
+        "round": event.get("round"),
+        "contextId": event.get("contextId"),
+        "taskId": event.get("taskId"),
+        "detail": event.get("detail"),
+        "startedAt": event.get("ts"),
+        "durationMs": event.get("durationMs"),
+    }
+
+
+def _trace_token_ok(request: Request) -> bool:
+    """Check the local trace token (``A2AT_SAMPLE_TRACE_TOKEN``), failing closed.
+
+    The server process only posts server spans when ``run_demo.py --ui`` configured the same token
+    for both processes (design §4/§7). Without a configured token the ingestion route is disabled
+    instead of open, so a stray process cannot inject rows into a run timeline.
+    """
+    expected = os.environ.get("A2AT_SAMPLE_TRACE_TOKEN", "").strip()
+    if not expected:
+        return False
+    supplied = request.headers.get("x-a2at-trace-token", "").strip()
+    if supplied == expected:
+        return True
+    authorization = request.headers.get("authorization", "")
+    return authorization == f"Bearer {expected}"
+
+
+def _coerce_trace_payload(body: object) -> list[dict[str, object]] | None:
+    """Return the spans of one JSON list/dict body, ``None`` when malformed."""
+    if isinstance(body, list):
+        if not all(isinstance(item, Mapping) for item in body):
+            return None
+        return [dict(item) for item in body if isinstance(item, Mapping)]
+    if isinstance(body, Mapping):
+        nested = body.get("spans")
+        if isinstance(nested, list):
+            return _coerce_trace_payload(nested)
+        return [dict(body)]
+    return None
+
+
+def _validate_trace_span(span: Mapping[str, object], run_id: str) -> str | None:
+    """Validate one ingested server span; return a readable problem, ``None`` when valid.
+
+    The UI is the single owner of the ordering and of the phase vocabulary, so it rejects a
+    malformed envelope early: an unknown phase or schema version, a non-string kind/title, a
+    ``detail`` that is not an object, or a ``runId`` pointing at another run.
+    """
+    schema_version = span.get("schemaVersion")
+    if schema_version is not None and schema_version != SCHEMA_VERSION:
+        return f"unsupported schemaVersion {schema_version!r}"
+    span_run_id = span.get("runId")
+    if span_run_id not in (None, "") and span_run_id != run_id:
+        return f"runId {span_run_id!r} does not match the run"
+    phase = span.get("phase")
+    # ``task_modify`` is an optional two-phase phase; it is not part of every run's phase set but
+    # is a valid span phase once a Modify continuation starts.
+    allowed_phases = (*PHASES, PHASE_TASK_MODIFY)
+    if not isinstance(phase, str) or phase not in allowed_phases:
+        return f"unknown phase {phase!r}; expected one of {allowed_phases}"
+    kind = span.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return "kind must be a non-empty string"
+    for field_name in ("spanId", "title", "stage", "actor", "side", "status"):
+        value = span.get(field_name)
+        if value is not None and not isinstance(value, str):
+            return f"{field_name} must be a string"
+    detail = span.get("detail")
+    if detail is not None and not isinstance(detail, Mapping):
+        return "detail must be an object"
+    duration = span.get("durationMs")
+    if duration is not None and not isinstance(duration, (int, float)):
+        return "durationMs must be a number"
+    return None
+
+
+__all__ = [
+    "RunConflictError",
+    "RunManager",
+    "RunState",
+    "create_app",
+]

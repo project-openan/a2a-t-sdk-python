@@ -1,0 +1,390 @@
+"""Automatic pure-A2A answer: deterministic plan, grounded model answer, server-owned values."""
+
+from __future__ import annotations
+
+import pytest
+from a2a_t.core.metadata import NegotiationContext
+from demo.pure_auto import (
+    ASK_TEMPLATE,
+    MAX_SERVER_ASKS,
+    REJECT_TEMPLATE,
+    AutoPureAnswer,
+    build_auto_pure_answer,
+)
+from protocol.client_policy import ClientPolicy
+from shared.models import DecisionBasis, NegotiationDecision, NegotiationProposeView
+
+
+class _Provider:
+    """Decision provider double recording every call."""
+
+    def __init__(self, decision: NegotiationDecision) -> None:
+        self.decision = decision
+        self.calls: list[str] = []
+        self.contexts: list[str | None] = []
+        self.request_text = ""
+        self.decision_basis: DecisionBasis | None = None
+
+    async def respond(
+        self,
+        propose: NegotiationProposeView,
+        session: NegotiationContext,
+    ) -> NegotiationDecision:
+        del session
+        self.calls.append(propose.content)
+        return self.decision
+
+    def set_user_request(self, request_text: str | None) -> None:
+        self.request_text = request_text or ""
+
+    def set_decision_basis(self, basis: DecisionBasis | None) -> None:
+        self.decision_basis = basis
+
+    def set_conversation_context(self, context: str | None) -> None:
+        self.contexts.append(context)
+
+    def grounding_text(self) -> str:
+        return self.request_text
+
+
+def _event(text: str = "Not feasible, please confirm") -> dict[str, object]:
+    return {"kind": "message", "text": text, "context_id": "ctx-1"}
+
+
+@pytest.mark.asyncio
+async def test_a_bitrate_term_is_answered_by_the_deterministic_plan() -> None:
+    provider = _Provider(NegotiationDecision(action="accept", rationale="unused"))
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request(
+        "Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. "
+        "ensuring user experience for 720p video."
+    )
+
+    text = await answer(_event())
+
+    assert text == "Set the guaranteed throughput targets: 00:00-22:00→2Mbps."
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_model_answer_is_rendered_as_free_text() -> None:
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task for A2ATestRegion.")
+
+    text = await answer(_event("The region name is missing. Please provide the correct region name."))
+
+    assert text == "The region is A2ATestRegion."
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_server_owned_value_the_client_cannot_ground_is_requested_from_the_server() -> None:
+    """The NMS owns the inventory; automatic mode has no operator to hand the question to."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="reject",
+            rationale="The request names no concrete site list.",
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task with no usable value.")
+
+    text = await answer(_event())
+
+    assert text == ASK_TEMPLATE.format(item="The request names no concrete site list.")
+
+
+@pytest.mark.asyncio
+async def test_the_client_rejects_after_the_server_ask_budget() -> None:
+    provider = _Provider(
+        NegotiationDecision(action="reject", rationale="the region is missing")
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task with no usable value.")
+
+    texts = [await answer(_event()) for _ in range(MAX_SERVER_ASKS)]
+
+    assert all(text == ASK_TEMPLATE.format(item="the region is missing") for text in texts[:-1])
+    assert texts[-1] == REJECT_TEMPLATE.format(item="the region is missing")
+
+
+@pytest.mark.asyncio
+async def test_a_grounded_answer_resets_the_ask_budget() -> None:
+    provider = _Provider(NegotiationDecision(action="reject", rationale="missing value"))
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task with no usable value.")
+    for _ in range(MAX_SERVER_ASKS - 1):
+        await answer(_event())
+
+    provider.decision = NegotiationDecision(
+        action="accept",
+        rationale="answer",
+        filled_params={"region": "A2ATestRegion"},
+    )
+    answer.set_user_request("Create an energy saving task for A2ATestRegion.")
+    assert await answer(_event("Which region?")) == "The region is A2ATestRegion."
+
+    provider.decision = NegotiationDecision(action="reject", rationale="missing value")
+    provider.request_text = "Create an energy saving task with no usable value."
+    answer.set_user_request(provider.request_text)
+    assert await answer(_event()) == ASK_TEMPLATE.format(item="missing value")
+
+
+@pytest.mark.asyncio
+async def test_an_information_question_names_the_required_item() -> None:
+    provider = _Provider(NegotiationDecision(action="reject", rationale="cannot answer"))
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request("Create an energy saving task.")
+
+    text = await answer(_event("Please provide the correct region name."))
+
+    assert text == ASK_TEMPLATE.format(item="Region")
+
+
+@pytest.mark.asyncio
+async def test_a_question_that_states_a_plan_keeps_the_plain_affirmative() -> None:
+    provider = _Provider(NegotiationDecision(action="accept", rationale="Confirmed."))
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_user_request(
+        "A power outage from 08:00 to 18:00; the guaranteed rate is 10Mbps."
+    )
+
+    text = await answer(_event("Reduce the throughput target from 10Mbps to 2Mbps; confirm it."))
+
+    assert text == "Accepted. Please proceed."
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_skips_the_deterministic_plan() -> None:
+    """The agent source must author the answer; the concession plan would decide instead."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(
+        provider, ClientPolicy(), apply_client_policy=False
+    )
+    answer.set_user_request(
+        "Implement energy-saving in A2ATestRegion region, the time range is from 00:00 to 22:00. "
+        "ensuring user experience for 720p video."
+    )
+
+    text = await answer(_event())
+
+    assert text == "The region is A2ATestRegion."
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_case_condition_grounds_a_pure_answer() -> None:
+    """The case's own conditions are a legitimate source for the free-text reply."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy())
+    answer.set_decision_basis(
+        DecisionBasis(
+            principles_version="test",
+            client_conditions="The only valid test region is A2ATestRegion.",
+        )
+    )
+    answer.set_user_request("Create an energy saving task.")
+
+    text = await answer(
+        _event("The region name is missing. Please provide the correct region name.")
+    )
+
+    assert text == "The region is A2ATestRegion."
+    assert provider.decision_basis is not None
+    assert provider.decision_basis.client_conditions.startswith("The only valid")
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_does_not_apply_the_client_floor() -> None:
+    """A2A-T agent mode skips the process policy; the pure hop must match it."""
+    decision = NegotiationDecision(
+        action="accept",
+        rationale="answer",
+        filled_params={"guaranteedThroughputTarget": "{08:00~18:00,2Mbps}"},
+    )
+    question = "Reduce the target to {08:00~18:00,2Mbps}."
+    strict = build_auto_pure_answer(_Provider(decision), ClientPolicy(min_throughput_mbps=20))
+    strict.set_user_request("guarantee 10Mbps during the outage")
+    free = build_auto_pure_answer(
+        _Provider(decision),
+        ClientPolicy(min_throughput_mbps=20),
+        apply_client_policy=False,
+    )
+    free.set_user_request("guarantee 10Mbps during the outage")
+
+    assert await free(_event(question)) == (
+        "Set the guaranteed throughput targets: {08:00~18:00,2Mbps}."
+    )
+    assert await strict(_event(question)) != (
+        "Set the guaranteed throughput targets: {08:00~18:00,2Mbps}."
+    )
+
+
+def test_the_answer_object_exposes_the_runtime_hooks() -> None:
+    answer = build_auto_pure_answer(
+        _Provider(NegotiationDecision(action="accept", rationale="x")),
+        ClientPolicy(),
+    )
+
+    assert isinstance(answer, AutoPureAnswer)
+    assert callable(answer.set_user_request)
+    assert callable(answer.set_proposal_sink)
+    assert callable(answer.set_decision_sink)
+
+
+@pytest.mark.asyncio
+async def test_each_round_sees_the_previous_question_and_answer() -> None:
+    """The vendor repeats its objection; the model must be able to take a further step."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task for A2ATestRegion.")
+
+    first = await answer(_event("Which region? Please confirm the region name."))
+    await answer(_event("Still not feasible, please confirm."))
+
+    assert provider.contexts[0] == ""
+    assert provider.contexts[1] is not None
+    assert "Earlier in this negotiation:" in provider.contexts[1]
+    assert "Which region? Please confirm the region name." in provider.contexts[1]
+    assert first in provider.contexts[1]
+
+
+@pytest.mark.asyncio
+async def test_the_earlier_run_memory_is_not_mixed_into_the_negotiation_history() -> None:
+    """A previous run's values are not this negotiation's earlier rounds."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "A2ATestRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task for A2ATestRegion.")
+    answer.set_conversation_context("user: an old request\nassistant: an old answer")
+
+    await answer(_event("Which region?"))
+
+    assert provider.contexts == [""]
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_after_the_ask_budget_is_recorded_in_the_history() -> None:
+    """The history records what was actually sent, including the final refusal."""
+    provider = _Provider(NegotiationDecision(action="reject", rationale="missing value"))
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task with no usable value.")
+
+    for _ in range(MAX_SERVER_ASKS):
+        await answer(_event())
+    provider.decision = NegotiationDecision(action="reject", rationale="missing value")
+    await answer(_event())
+
+    history = provider.contexts[-1]
+    assert history is not None
+    assert REJECT_TEMPLATE.format(item="missing value") in history
+
+
+@pytest.mark.asyncio
+async def test_a_long_rationale_is_excerpted_at_a_sentence_boundary() -> None:
+    provider = _Provider(
+        NegotiationDecision(
+            action="reject",
+            rationale=(
+                "The request names no site list. It also omits the outage window and the "
+                "guaranteed throughput target for every site in the region, which the client "
+                "cannot infer from the proposal alone because the proposal only states a "
+                "feasibility verdict."
+            ),
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task with no usable value.")
+
+    text = await answer(_event())
+
+    assert text == ASK_TEMPLATE.format(item="The request names no site list.")
+
+
+@pytest.mark.asyncio
+async def test_an_unlisted_field_rationale_is_not_relayed_as_the_vendors_omission() -> None:
+    """Our own reading must not be dressed up as the field the vendor forgot to name."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="reject",
+            rationale=(
+                "The proposal does not list the specific required information items that are "
+                "missing."
+            ),
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task with no usable value.")
+
+    text = await answer(_event())
+
+    assert text == (
+        "Reject: The proposal does not list the specific required information items that are "
+        "missing."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reject_without_a_named_item_states_the_models_own_reason() -> None:
+    """A refusal with no missing field is a refusal; do not disguise it as a request for a value."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="reject",
+            rationale="The requested rate violates the client hard floor.",
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Guarantee 10Mbps from 08:00 to 18:00.")
+
+    text = await answer(_event("Reduce the target to {08:00~18:00,2Mbps}."))
+
+    assert text == "Reject: The requested rate violates the client hard floor."
+    assert "Please provide" not in text
+
+
+@pytest.mark.asyncio
+async def test_an_ungrounded_accept_without_a_named_item_sends_nothing() -> None:
+    """An answer that cannot be grounded and names no missing item must not become a question."""
+    provider = _Provider(
+        NegotiationDecision(
+            action="accept",
+            rationale="answer",
+            filled_params={"region": "InventedRegion"},
+        )
+    )
+    answer = build_auto_pure_answer(provider, ClientPolicy(), apply_client_policy=False)
+    answer.set_user_request("Create an energy saving task.")
+
+    text = await answer(_event("Please confirm."))
+
+    assert text == ""

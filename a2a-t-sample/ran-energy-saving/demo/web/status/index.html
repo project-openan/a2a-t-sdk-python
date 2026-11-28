@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-brand="orange">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="a2at-language" content="__A2AT_LANGUAGE__">
+  <title data-i18n="page.title">A2A / A2A-T · 运行状态</title>
+  <style>
+    /* The template ships the Chinese copy; keep it off screen until the copy pass has run. */
+    html[data-locale-pending] body { visibility: hidden; }
+  </style>
+  <script>
+    // The server knows the process language, so set it before the first paint.
+    (() => {
+      const meta = document.querySelector('meta[name="a2at-language"]');
+      const language = meta && meta.content ? meta.content : "zh-CN";
+      document.documentElement.lang = language;
+      if (language !== "zh-CN") {
+        document.documentElement.setAttribute("data-locale-pending", "");
+        document.title = "A2A / A2A-T · Process status";
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/status/app.css">
+  <script type="module" src="/status/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">A2A-T</span>
+      <div class="brand-text">
+        <small data-i18n="page.kicker">RAN 节能 · A2A / A2A-T</small>
+        <h1 data-i18n="page.heading">运行状态</h1>
+      </div>
+    </div>
+    <nav class="top-nav">
+      <a class="ghost" href="/tester" data-i18n="nav.tester">评测控制台</a>
+      <a class="ghost" href="/" data-i18n="nav.demo">演示页面</a>
+    </nav>
+  </header>
+
+  <main class="main">
+    <div class="status-line">
+      <span id="refreshed" data-i18n="status.loading">正在读取状态…</span>
+      <span id="paused" hidden data-i18n="status.paused">页面不可见，已暂停刷新</span>
+    </div>
+
+    <div class="warning" id="error" role="alert" hidden></div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 data-i18n="section.process">进程与环境</h2>
+        <span class="summary" id="process-mode"></span>
+      </div>
+      <div class="facts" id="process-facts"></div>
+      <div class="facts" id="limits"></div>
+      <p class="empty" data-i18n="section.processHint">
+        重启 UI 进程会终止正在执行的批次；开始新批次前，先确认这里没有其他人正在跑。
+      </p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 data-i18n="section.batches">正在执行的批次（所有浏览器）</h2>
+        <span class="summary" id="batch-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="batches">
+          <thead>
+            <tr>
+              <th data-i18n="table.batch">批次</th>
+              <th data-i18n="table.owner">触发人</th>
+              <th data-i18n="table.protocol">协议</th>
+              <th data-i18n="table.progress">进度</th>
+              <th data-i18n="table.currentItem">当前用例</th>
+              <th data-i18n="table.elapsed">已运行</th>
+              <th data-i18n="table.concurrency">并发</th>
+              <th data-i18n="table.mode">模式</th>
+              <th data-i18n="table.endpoint">端点</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="batches-empty" data-i18n="section.batchesEmpty">当前没有正在执行的批次。</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 data-i18n="section.runs">运行中的 run（所有来源）</h2>
+        <span class="summary" id="run-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="runs">
+          <thead>
+            <tr>
+              <th data-i18n="table.run">Run</th>
+              <th data-i18n="table.source">来源</th>
+              <th data-i18n="table.protocolTransport">协议 / 传输</th>
+              <th data-i18n="table.status">状态</th>
+              <th data-i18n="table.remoteTask">远端 Task</th>
+              <th data-i18n="table.started">开始</th>
+              <th data-i18n="table.latestState">最近状态</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="runs-empty" data-i18n="section.runsEmpty">当前没有运行中的 run。</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 data-i18n="section.recent">最近结束（本进程）</h2>
+        <span class="summary" id="recent-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="recent">
+          <thead>
+            <tr>
+              <th data-i18n="table.batch">批次</th>
+              <th data-i18n="table.owner">触发人</th>
+              <th data-i18n="table.protocol">协议</th>
+              <th data-i18n="table.result">结果</th>
+              <th data-i18n="table.progress">进度</th>
+              <th data-i18n="table.started">开始</th>
+              <th data-i18n="table.finished">结束</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="recent-empty" data-i18n="section.recentEmpty">本进程还没有结束的批次。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,617 @@
+"""Offline runner for the OSP energy-saving evaluation cases.
+
+The runner executes the SDK-owned stages of a case without starting the Web UI or contacting a
+network:
+
+``intent``
+    Record-only. The structured intent used to come from the client content validation, which the
+    client no longer calls; a full-flow tester judges the downstream's own reading instead.
+``task_t``
+    Compare the generated Task-T with the expected one section by section.
+``validate``
+    The local gate: the slot extraction either blocks before a Task-T exists (``blocked``) or the
+    Task-T is generated (``pass``). There is no second model call.
+
+``send``, ``negotiate`` and ``final`` need the full runtime and are deliberately outside this
+runner; use the presentation or the tester console for those stages.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Final, Protocol
+
+import yaml
+from a2a_t.core.errors.exceptions import PromptGenerationError, SlotValidationError
+from protocol.messages import TASK_TEMPLATE_URI
+from shared.trace import trace_stage
+
+from eval.osp.compare import Diff, compare_task_t
+from eval.osp.conditions import case_client_conditions
+from eval.osp.expectations import slot_error_evidence
+from eval.osp.followup import (
+    MISSED_INTERCEPTION_NOTE,
+    followup_allowed,
+    followup_case,
+    has_followup,
+    interception_case,
+    is_blocked_case,
+)
+
+#: Stages this runner can execute, in pipeline order.
+STAGE_ORDER: Final[tuple[str, ...]] = ("intent", "task_t", "validate")
+
+#: Status values of one stage.
+STAGE_PASSED: Final[str] = "passed"
+STAGE_FAILED: Final[str] = "failed"
+STAGE_RECORDED: Final[str] = "recorded"
+STAGE_ERROR: Final[str] = "error"
+
+#: Report bucket of each stage status, used by :func:`build_report` for the per-stage summary.
+_STAGE_BUCKET: Final[dict[str, str]] = {
+    STAGE_PASSED: "passed",
+    STAGE_FAILED: "failed",
+    STAGE_RECORDED: "recorded",
+    STAGE_ERROR: "error",
+}
+
+#: The case directory shipped next to this module.
+DEFAULT_CASES_DIR: Final[Path] = Path(__file__).resolve().parent / "cases"
+
+#: The sample root (``a2a-t-sample/ran-energy-saving``).
+SAMPLE_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
+
+#: Default report directory.
+DEFAULT_REPORT_DIR: Final[Path] = SAMPLE_ROOT / "runs" / "osp-eval"
+
+
+class EvalPromptClient(Protocol):
+    """The SDK surface the runner needs; the real implementation is ``A2ATClient``."""
+
+    def generate_task_prompt_from_text(self, text: str, template_uri: str) -> object: ...
+
+
+
+@dataclass(frozen=True)
+class StageOutcome:
+    """Result of one stage of one case."""
+
+    stage: str
+    status: str
+    message: str = ""
+    expected: object = None
+    actual: object = None
+    diffs: tuple[Diff, ...] = ()
+    #: Structured evidence the status does not carry (for a validation, the SDK slot errors).
+    detail: Mapping[str, object] | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON-friendly representation used by the report."""
+        data: dict[str, object] = {
+            "stage": self.stage,
+            "status": self.status,
+            "message": self.message,
+            "expected": self.expected,
+            "actual": self.actual,
+            "diffs": [diff.to_dict() for diff in self.diffs],
+        }
+        if self.detail:
+            data["detail"] = dict(self.detail)
+        return data
+
+
+@dataclass(frozen=True)
+class CaseOutcome:
+    """Result of one case.
+
+    A case whose A2A-T request is expected to be intercepted carries two segments: the
+    ``interception`` records the original request (intent and Task-T are evidence; only the
+    ``blocked`` validation is judged) and ``stages`` is the follow-up request that carries the
+    case's real expectations. A case without a follow-up has ``interception`` set to ``None`` and
+    ``stages`` is its only segment.
+
+    A follow-up only runs when the original request was actually intercepted. When its observed
+    verdict is not ``blocked``, the gate never fired: ``stages`` is empty, ``followup_skipped`` is
+    true and the interception's verdict is recorded instead of judged, so the case passes. A block
+    whose slot errors differ from the case still dispatches the replacement — that case fails on
+    its slot expectation, not on the gate.
+    """
+
+    case_id: int
+    name: str
+    stages: tuple[StageOutcome, ...]
+    passed: bool
+    error: str | None = None
+    interception: tuple[StageOutcome, ...] | None = None
+    #: True when the original request was not intercepted, so the follow-up never ran.
+    followup_skipped: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON-friendly representation used by the report."""
+        result: dict[str, object] = {
+            "id": self.case_id,
+            "name": self.name,
+            "passed": self.passed,
+            "error": self.error,
+            "stages": {stage.stage: stage.to_dict() for stage in self.stages},
+        }
+        if self.interception is not None:
+            result["interception"] = {
+                "passed": all(
+                    stage.status in {STAGE_PASSED, STAGE_RECORDED}
+                    for stage in self.interception
+                ),
+                "stages": {stage.stage: stage.to_dict() for stage in self.interception},
+            }
+        if self.followup_skipped:
+            result["followupSkipped"] = True
+        return result
+
+
+def load_cases(cases_dir: Path = DEFAULT_CASES_DIR) -> list[dict[str, Any]]:
+    """Load every case YAML in the directory, sorted by id."""
+    cases: list[dict[str, Any]] = []
+    for path in sorted(cases_dir.glob("*.yaml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            raise ValueError(f"{path}: not a YAML mapping")
+        case_id = document.get("id")
+        if not isinstance(case_id, int):
+            raise ValueError(f"{path}: missing integer id")
+        # Fail at load time on a malformed optional field instead of at decision time.
+        case_client_conditions(document)
+        document["_path"] = path
+        cases.append(document)
+    cases.sort(key=lambda item: item["id"])
+    return cases
+
+
+def select_cases(cases: Sequence[dict[str, Any]], ids: Sequence[int]) -> list[dict[str, Any]]:
+    """Return the selected cases; an empty id list means every case."""
+    if not ids:
+        return list(cases)
+    wanted = set(ids)
+    selected = [case for case in cases if case["id"] in wanted]
+    missing = sorted(wanted - {case["id"] for case in selected})
+    if missing:
+        raise ValueError(f"unknown case ids: {missing}")
+    return selected
+
+
+def run_case(
+    case: Mapping[str, Any],
+    client: EvalPromptClient,
+    *,
+    stop_after: str = "validate",
+) -> CaseOutcome:
+    """Execute the stages of one case up to and including ``stop_after``.
+
+    A blocked case with a ``blocked_followup`` request runs twice, matching the case contract:
+    the interception segment judges only that the original request is blocked, and the follow-up
+    segment replays the replacement request against the case's intent, Task-T and validation
+    expectations. Without the second segment the replacement expectations would be compared with
+    the incomplete original request, which reports a model error for a request the operator never
+    meant to send.
+
+    The follow-up is gated by the observed verdict: a case whose original request was not blocked
+    does not execute its replacement request at all (``followup_skipped``); its interception is
+    recorded and the case passes, because the corpus expectations describe that replacement.
+    """
+    if stop_after not in STAGE_ORDER:
+        raise ValueError(f"unsupported stop_after {stop_after!r}; expected one of {STAGE_ORDER}")
+    if not (is_blocked_case(case) and has_followup(case)):
+        return _run_segment(case, client, stop_after=stop_after)
+
+    interception = _run_segment(interception_case(case), client, stop_after=stop_after)
+    if not _interception_held(interception):
+        # The original request was not intercepted, so the gate never fired and the case has
+        # nothing to judge: the corpus expectations describe the replacement request, which is not
+        # run. The interception stays visible as recorded evidence and the case passes.
+        return CaseOutcome(
+            case_id=interception.case_id,
+            name=interception.name,
+            stages=(),
+            passed=True,
+            interception=_recorded_interception(interception.stages),
+            followup_skipped=True,
+        )
+    followup = _run_segment(followup_case(case), client, stop_after=stop_after)
+    return CaseOutcome(
+        case_id=followup.case_id,
+        name=followup.name,
+        stages=followup.stages,
+        passed=interception.passed and followup.passed,
+        error=followup.error or interception.error,
+        interception=interception.stages,
+    )
+
+
+def _interception_held(outcome: CaseOutcome) -> bool:
+    """Return whether one interception segment's verdict lets the follow-up request run."""
+    stage = next((stage for stage in outcome.stages if stage.stage == "validate"), None)
+    actual = stage.actual if stage is not None else None
+    return followup_allowed(actual if isinstance(actual, str) else None)
+
+
+def _recorded_interception(
+    stages: Sequence[StageOutcome],
+) -> tuple[StageOutcome, ...]:
+    """Return the interception stages with the verdict demoted to record-only.
+
+    A miss is not a case failure: the original request was let through, so the expectation it
+    failed to meet describes a request that was never dispatched. The evidence (the observed
+    verdict and its slot errors) stays visible; only its status changes.
+    """
+    return tuple(
+        replace(stage, status=STAGE_RECORDED, message=MISSED_INTERCEPTION_NOTE)
+        if stage.stage == "validate"
+        else stage
+        for stage in stages
+    )
+
+
+def _run_segment(
+    case: Mapping[str, Any],
+    client: EvalPromptClient,
+    *,
+    stop_after: str = "validate",
+    include_intent: bool = True,
+) -> CaseOutcome:
+    """Execute one request segment of a case up to and including ``stop_after``.
+
+    ``include_intent`` false skips the intent extraction call; the interception segment only needs
+    the Task-T and the validation verdict.
+    """
+    stages = STAGE_ORDER[: STAGE_ORDER.index(stop_after) + 1]
+    case_id = int(case["id"])
+    name = str(case["name"])
+
+    try:
+        task_t = _generate_task_t(case, client)
+    except PromptGenerationError as exc:
+        code = str(getattr(exc, "code_str", ""))
+        if code.startswith("slot."):
+            return _blocked_before_task_t(case, stages, exc)
+        message = f"{type(exc).__name__}: {exc}"
+        return _error_outcome(case_id, name, stages, message)
+    except Exception as exc:  # noqa: BLE001 - one bad case must not stop the batch
+        return _error_outcome(case_id, name, stages, f"{type(exc).__name__}: {exc}")
+
+    outcomes: list[StageOutcome] = []
+    if "intent" in stages and include_intent:
+        outcomes.append(_run_intent(case, task_t))
+    if "task_t" in stages:
+        outcomes.append(_run_task_t(case, task_t))
+    if "validate" in stages:
+        outcomes.append(_run_validate(case, task_t))
+
+    passed = all(outcome.status in {STAGE_PASSED, STAGE_RECORDED} for outcome in outcomes)
+    return CaseOutcome(case_id=case_id, name=name, stages=tuple(outcomes), passed=passed)
+
+
+def _error_outcome(
+    case_id: int,
+    name: str,
+    stages: Sequence[str],
+    message: str,
+) -> CaseOutcome:
+    return CaseOutcome(
+        case_id=case_id,
+        name=name,
+        stages=tuple(
+            StageOutcome(stage=stage, status=STAGE_ERROR, message=message) for stage in stages
+        ),
+        passed=False,
+        error=message,
+    )
+
+
+def _blocked_before_task_t(
+    case: Mapping[str, Any],
+    stages: Sequence[str],
+    error: PromptGenerationError,
+) -> CaseOutcome:
+    """Handle a ``slot.*`` generation failure: the request is blocked before any Task-T exists.
+
+    The OSP validation column is the expected outcome in this situation.  The intent and Task-T
+    stages cannot be observed, so they are recorded rather than turned into a false failure.
+    """
+    case_id = int(case["id"])
+    name = str(case["name"])
+    expected_validate = case["expect"]["protocols"]["a2a-t"]["validate"]
+    message = f"{getattr(error, 'code_str', 'slot.*')}: {error}"
+    outcomes: list[StageOutcome] = []
+    for stage in stages:
+        if stage == "validate":
+            detail: dict[str, object] = {
+                "verdict": "blocked",
+                "negotiationKind": None,
+                "code": str(getattr(error, "code_str", "")),
+                "slotErrors": _slot_error_documents(error.failed_parameters),
+            }
+            diffs = _slot_error_diffs(case, expected_validate, "blocked", detail)
+            if not _assert_flag(case, "a2a-t", "validate") or expected_validate is None:
+                status = STAGE_RECORDED
+            elif expected_validate == "blocked" and _slot_errors_matched(detail):
+                status = STAGE_PASSED
+            else:
+                status = STAGE_FAILED
+            outcomes.append(
+                StageOutcome(
+                    stage=stage,
+                    status=status,
+                    message=message,
+                    expected=expected_validate,
+                    actual="blocked",
+                    diffs=diffs,
+                    detail=detail,
+                )
+            )
+            continue
+        if stage == "intent":
+            expected = case["expect"]["intent"]
+        else:
+            expected = case["expect"]["protocols"]["a2a-t"]["task_t"]
+        # The stages after the block never ran, so there is nothing to judge: the validate row
+        # carries the failure. Marking them as errors would turn an unexpected block into an
+        # ``error`` item and hide that its real verdict is the failed interception.
+        status = STAGE_RECORDED
+        outcomes.append(
+            StageOutcome(
+                stage=stage,
+                status=status,
+                message=message,
+                expected=expected,
+                actual="<blocked before Task-T>",
+            )
+        )
+    passed = all(outcome.status in {STAGE_PASSED, STAGE_RECORDED} for outcome in outcomes)
+    return CaseOutcome(case_id=case_id, name=name, stages=tuple(outcomes), passed=passed)
+
+
+def _generate_task_t(case: Mapping[str, Any], client: EvalPromptClient) -> str:
+    # Name the call for the trace even though a full-flow batch no longer runs this preflight:
+    # the stage label is what tells a slot extraction apart from a validation.
+    with trace_stage("task_t_slot_extraction"):
+        content = client.generate_task_prompt_from_text(str(case["user_input"]), TASK_TEMPLATE_URI)
+    text = getattr(content, "prompt_text", None)
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("the SDK returned no Task-T prompt text")
+    return text
+
+
+def _run_intent(case: Mapping[str, Any], task_t: str) -> StageOutcome:
+    """Record the intent stage without extracting anything.
+
+    The structured intent used to come from the client content validation. The client no longer
+    calls it, and a full-flow tester judges the downstream's own reading (the Task payload of
+    ``TASK_STATE_SUBMITTED``) instead, so an SDK-only batch keeps the column as record-only.
+    """
+    del task_t
+    return StageOutcome(
+        stage="intent",
+        status=STAGE_RECORDED,
+        message="intent 抽取随客户端内容校验一并移除；本版本只记录",
+        expected=case["expect"]["intent"],
+    )
+
+
+
+def _run_task_t(case: Mapping[str, Any], task_t: str) -> StageOutcome:
+    protocol = case["expect"]["protocols"]["a2a-t"]
+    expected = protocol["task_t"]
+    diffs = compare_task_t(expected, task_t)
+    recorded = not _assert_flag(case, "a2a-t", "task_t")
+    if recorded:
+        status = STAGE_RECORDED
+        message = "record-only"
+    else:
+        status = STAGE_PASSED if not diffs else STAGE_FAILED
+        message = ""
+    return StageOutcome(
+        stage="task_t",
+        status=status,
+        message=message,
+        expected=expected,
+        actual=task_t,
+        diffs=tuple(diffs),
+    )
+
+
+def _run_validate(case: Mapping[str, Any], task_t: str) -> StageOutcome:
+    """Judge the local gate: the Task-T exists, so the slot extraction did not block it.
+
+    A ``slot.*`` failure never reaches this stage; :func:`_blocked_before_task_t` already reports
+    it as ``blocked``. What is left is the local passing evidence against the case expectation.
+    """
+    del task_t
+    expected = case["expect"]["protocols"]["a2a-t"]["validate"]
+    actual = "pass"
+    detail: dict[str, object] = {"verdict": "pass", "source": "local"}
+    if not _assert_flag(case, "a2a-t", "validate"):
+        return StageOutcome(
+            stage="validate",
+            status=STAGE_RECORDED,
+            message="record-only",
+            expected=expected,
+            actual=actual,
+            detail=detail,
+        )
+    message = (
+        "terminology context is a soft expectation"
+        if expected == "pass_with_terminology"
+        else ""
+    )
+    return StageOutcome(
+        stage="validate",
+        status=STAGE_PASSED if _validation_matches(expected, actual) else STAGE_FAILED,
+        message=message,
+        expected=expected,
+        actual=actual,
+        detail=detail,
+    )
+
+
+
+def _slot_error_documents(errors: Iterable[SlotValidationError] | None) -> list[dict[str, object]]:
+    """Render one SDK slot-error iterable as JSON-ready documents."""
+    return [
+        {
+            "slotName": item.slot_name,
+            "code": str(item.code),
+            "message": item.message,
+            "facts": dict(item.facts or {}),
+        }
+        for item in errors or ()
+    ]
+
+
+def _validation_matches(expected: object, actual: object) -> bool:
+    if expected == "pass_with_terminology":
+        return actual in {"pass", "pass_with_terminology"}
+    return expected == actual
+
+
+def _slot_error_diffs(
+    case: Mapping[str, Any],
+    expected_verdict: object,
+    actual_verdict: object,
+    detail: dict[str, object] | None,
+) -> tuple[Diff, ...]:
+    """Attach the expected slot errors to one validation detail and return their diffs."""
+    if detail is None:
+        return ()
+    evidence = slot_error_evidence(
+        case,
+        expected_verdict,
+        actual_verdict,
+        _observed_slot_errors(detail),
+    )
+    if evidence is None:
+        return ()
+    detail.update(evidence.to_detail())
+    return tuple(
+        Diff(
+            path=str(item["path"]),
+            expected=item["expected"],
+            actual=item["actual"],
+            reason=str(item["reason"]),
+        )
+        for item in evidence.diffs()
+    )
+
+
+def _observed_slot_errors(detail: Mapping[str, object]) -> list[dict[str, object]]:
+    """Return the observed per-slot errors of one validation detail."""
+    raw = detail.get("slotErrors")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+
+def _slot_errors_matched(detail: Mapping[str, object] | None) -> bool:
+    """Return whether the slot-error expectation of one detail is satisfied (or absent)."""
+    if not detail:
+        return True
+    match = detail.get("slotErrorMatch")
+    return not isinstance(match, Mapping) or bool(match.get("matched"))
+
+
+def _assert_flag(case: Mapping[str, Any], *path: str) -> bool:
+    value: object = case.get("assert")
+    for key in path:
+        if not isinstance(value, Mapping):
+            return True
+        value = value.get(key)
+    return True if value is None else bool(value)
+
+
+def _append_note(note: str, extra: str) -> str:
+    return f"{note}; {extra}" if note else extra
+
+
+def build_client_with_env(env_path: Path | None = None) -> tuple[EvalPromptClient, Path]:
+    """Build the client and return the temporary SDK env directory it was built from.
+
+    Callers that pool clients own those directories and must remove them.
+    """
+    from a2a_t.client.a2at_client import A2ATClient
+    from protocol.client_runtime import prepare_client_sdk_env
+    from shared.config import load_config
+
+    config = load_config(env_path=env_path)
+    sdk_env = prepare_client_sdk_env(config, env_path)
+    return A2ATClient(env_path=sdk_env.path, logger=None), sdk_env.directory
+
+
+def build_report(
+    outcomes: Sequence[CaseOutcome],
+    *,
+    stop_after: str,
+    started_at: str,
+) -> dict[str, object]:
+    """Build the JSON report of one run."""
+    counts = {
+        "total": len(outcomes),
+        "passed": sum(1 for outcome in outcomes if outcome.passed),
+        "failed": sum(1 for outcome in outcomes if not outcome.passed and outcome.error is None),
+        "error": sum(1 for outcome in outcomes if outcome.error is not None),
+    }
+    recorded = sum(
+        1
+        for outcome in outcomes
+        for stage in (*outcome.stages, *(outcome.interception or ()))
+        if stage.status == STAGE_RECORDED
+    )
+    counts["recordedStages"] = recorded
+    counts["stageErrors"] = sum(
+        1
+        for outcome in outcomes
+        for stage in (*outcome.stages, *(outcome.interception or ()))
+        if stage.status == STAGE_ERROR
+    )
+    stage_counts: dict[str, dict[str, int]] = {}
+    for outcome in outcomes:
+        for stage in (*outcome.stages, *(outcome.interception or ())):
+            bucket = stage_counts.setdefault(
+                stage.stage, {"passed": 0, "failed": 0, "recorded": 0, "error": 0}
+            )
+            bucket[_STAGE_BUCKET[stage.status]] += 1
+    counts["stages"] = stage_counts
+    return {
+        "schema": "osp-eval-run/v1",
+        "startedAt": started_at,
+        "finishedAt": _now_iso(),
+        "stopAfter": stop_after,
+        "cases": [outcome.to_dict() for outcome in outcomes],
+        "summary": counts,
+    }
+
+
+def _now_iso() -> str:
+    """Return the current UTC time in ISO 8601 form."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _print_outcome(outcome: CaseOutcome, *, verbose: bool) -> None:
+    label = "PASS" if outcome.passed else "FAIL"
+    stage_text = " ".join(f"{stage.stage}={stage.status}" for stage in outcome.stages)
+    if outcome.interception is not None:
+        intercepted = " ".join(
+            f"{stage.stage}={stage.status}" for stage in outcome.interception
+        )
+        stage_text = f"{stage_text}  [interception: {intercepted}]"
+    display_name = " ".join(outcome.name.split())
+    print(f"[{outcome.case_id:>3}] {label}  {stage_text}  {display_name}")
+    if outcome.error:
+        print(f"      error: {outcome.error}")
+    if not verbose:
+        return
+    for stage in (*outcome.stages, *(outcome.interception or ())):
+        if stage.message:
+            print(f"      {stage.stage}: {stage.message}")
+        for diff in stage.diffs:
+            print(f"      {diff.path}: expected={diff.expected!r} actual={diff.actual!r}")

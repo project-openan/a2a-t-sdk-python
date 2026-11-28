@@ -1,0 +1,20 @@
+{
+  "semantic_verdict": false,
+  "errors": [
+    {
+      "slot_name": "guaranteedThroughputTarget",
+      "code": "content.rule_violation",
+      "facts": {
+        "section_label": "task_context"
+      }
+    }
+  ],
+  "params": {
+    "operationType": "Create",
+    "region": "Region A",
+    "energySavingGoal": "Maximize energy saving under the condition that the task context is met.",
+    "guaranteedThroughputTarget": null,
+    "siteList": "NRES_XCS_6102937,LTE_26441_LNR_OCL",
+    "backgroundEvent": "power outage from 00:00 to 18:00"
+  }
+}

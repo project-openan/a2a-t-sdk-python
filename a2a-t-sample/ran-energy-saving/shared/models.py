@@ -1,0 +1,179 @@
+"""Structured models exchanged between the sample's ADK agents and protocol layers.
+
+``NegotiationDecision`` is the client agent's ``output_schema``: the LLM only states an intent and
+its rationale, while the deterministic client flow turns that intent into protocol content. The
+``NegotiationProposeView`` is the read-only projection of an inbound server ``Propose`` handed to a
+decision provider, so providers never parse raw A2A-T metadata themselves.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Final, Literal
+
+from pydantic import BaseModel, Field
+
+#: Decision intents the client agent may return.
+NegotiationAction = Literal["accept", "reject", "abort", "counter"]
+
+
+@dataclass(frozen=True)
+class DecisionBasis:
+    """The client's own ground for accepting or rejecting a negotiation proposal.
+
+    Two layers: the shared negotiation principles (frozen per tester batch, with the version they
+    came from) and the optional case-specific client conditions. The decision agent sees both; the
+    conditions take precedence over the shared principles. A run without either layer keeps the
+    historical decision prompt: this value stays ``None``.
+
+    Attributes:
+        principles: Body of the shared negotiation principles.
+        principles_version: Version identifier of those principles.
+        client_conditions: Optional case-level conditions of this request.
+    """
+
+    principles: str = ""
+    principles_version: str = ""
+    client_conditions: str = ""
+
+    def grounding_text(self) -> str:
+        """Return both layers as one text a deterministic grounding check can search."""
+        return "\n".join(
+            part
+            for part in (self.principles, self.client_conditions)
+            if part and part.strip()
+        )
+
+
+class NegotiationDecision(BaseModel):
+    """One client negotiation decision produced by an ADK agent or a manual provider.
+
+    Attributes:
+        action: Intent of the decision.
+        rationale: Human-readable reason shown in the CLI, the Web UI, and the transcript.
+        filled_params: Task-T parameters to fill on ``accept`` (missing-information negotiation).
+        counter_proposal: Natural-language revised answer on ``counter``. A2A-T has no counter
+            performative, so the flow converts this to an Accept (target/feasibility) or Reject
+            (information) before sending. Pure A2A renders it as free text.
+        counter_params: Sample-only ``{cellId, window, targetRate}`` plan accompanying a sample
+            ``counter`` decision. It is not an A2A-T wire field and is never sent to the vendor.
+        confirmed_intent: On ``accept``, the task intent the client confirms, when the negotiation
+            type requires one.
+        feasibility_summary: On ``accept``, the client's feasibility summary, when the negotiation
+            type requires one.
+    """
+
+    action: NegotiationAction
+    rationale: str
+    filled_params: dict[str, object] | None = None
+    counter_proposal: str | None = None
+    counter_params: dict[str, object] | None = None
+    confirmed_intent: str | None = None
+    feasibility_summary: str | None = None
+
+
+#: Decision fields that only an ``accept`` or ``counter`` may carry. A terminal refusal that still
+#: states an agreed plan is a self-contradictory decision, not a valid one.
+_ACTION_ONLY_FIELDS: Final[tuple[str, ...]] = (
+    "filled_params",
+    "counter_proposal",
+    "counter_params",
+    "confirmed_intent",
+    "feasibility_summary",
+)
+
+
+def decision_consistency_problem(decision: NegotiationDecision) -> str | None:
+    """Return why one decision contradicts itself, or ``None`` when it is consistent.
+
+    The model can finish a turn with ``action=reject`` while its other fields state the accepted
+    plan (the reported live run). Downstream code must not guess which field the model meant: the
+    caller retries once and then fails instead of silently accepting or rejecting.
+    """
+    if decision.action not in ("reject", "abort"):
+        return None
+    carried = [
+        name
+        for name in _ACTION_ONLY_FIELDS
+        if _decision_field_has_value(getattr(decision, name, None))
+    ]
+    if not carried:
+        return None
+    return f"{decision.action} also carries {', '.join(carried)}"
+
+
+def _decision_field_has_value(value: object) -> bool:
+    """Return whether one optional decision field carries anything meaningful."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (dict, list, tuple, set)):
+        return bool(value)
+    return True
+
+
+class NegotiationAreaOption(BaseModel):
+    """One selectable area on an information proposal.
+
+    Attributes:
+        value: Canonical English name of the area.
+        labels: Localized canonical names.
+        aliases: Other accepted spellings.
+        score: Fuzzy-match score in ``[0, 1]``.
+        recommended: Whether the server ranks this area as the closest match.
+    """
+
+    value: str
+    labels: dict[str, str] = Field(default_factory=dict)
+    aliases: list[str] = Field(default_factory=list)
+    score: float = 0.0
+    recommended: bool = False
+
+    def label(self, language: str) -> str:
+        """Return the option label in ``language``, falling back to the canonical value."""
+        return self.labels.get(language, self.value)
+
+
+class NegotiationOptions(BaseModel):
+    """Sample-only choices attached to one inbound proposal.
+
+    Attributes:
+        field: Task-T parameter the choices fill.
+        requested: Value the client originally requested.
+        keep: Task-T parameters the choice leaves unchanged.
+        options: Selectable values, best match first.
+    """
+
+    field: str = "region"
+    requested: str | None = None
+    keep: list[str] = Field(default_factory=list)
+    options: list[NegotiationAreaOption] = Field(default_factory=list)
+
+
+class NegotiationProposeView(BaseModel):
+    """Provider-facing view of one inbound ``Propose`` message.
+
+    Attributes:
+        negotiation_id: Negotiation session identifier (``negotiationContext.id``).
+        kind: Negotiation type (``information``, ``target``, or ``feasibility``).
+        round: Current 1-based negotiation round.
+        max_rounds: Round budget of the session.
+        content: Rendered Negotiation-T text of the proposal.
+        performative: Performative of the inbound message, always ``PROPOSE`` in this view.
+        template_uri: Negotiation-T template URI carried by the message.
+        context_id: A2A context id the negotiation belongs to, when known.
+        parameters: Proposal parameters, when the server sent structured content.
+        options: Sample-only choices the client may select (for example served areas).
+    """
+
+    negotiation_id: str
+    kind: str
+    round: int = Field(ge=1)
+    max_rounds: int = Field(ge=1)
+    content: str
+    performative: str = "PROPOSE"
+    template_uri: str | None = None
+    context_id: str | None = None
+    parameters: dict[str, object] | None = None
+    options: NegotiationOptions | None = None
