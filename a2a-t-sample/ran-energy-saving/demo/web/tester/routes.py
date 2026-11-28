@@ -18,8 +18,9 @@ from typing import Any, Final
 from eval.osp.catalog import PROTOCOL_A2A, PROTOCOL_A2A_T, CaseCatalog, CatalogReloadError
 from langfuse_export.config import Config as LangfuseConfig
 from protocol.client_service import RunManager
+from shared.run_constants import LANGUAGE_ZH
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from demo.web.request_source import request_source
@@ -75,14 +76,17 @@ def build_tester_routes(
     prompt_client: Any | None = None,
     env_path: Path | None = None,
     scenarios_by_protocol: Mapping[str, Sequence[str]] | None = None,
-    default_language: str = "",
     judge: Any | None = None,
     judge_model_label: str = "",
     pure_hop: str = "",
     trace_config: LangfuseConfig | None = None,
 ) -> tuple[list[Route], EvalBatchManager]:
     """Build the tester routes and the process-level batch manager."""
-    del scenarios_by_protocol, default_language
+    del scenarios_by_protocol
+    resolved_language = language or LANGUAGE_ZH
+    page_html = (TESTER_DIR / "index.html").read_text(encoding="utf-8").replace(
+        "__A2AT_LANGUAGE__", resolved_language
+    )
     resolved_catalog = catalog or CaseCatalog()
     batches = EvalBatchManager(
         runs=runs,
@@ -106,7 +110,7 @@ def build_tester_routes(
 
     async def page(request: Request) -> Response:
         """Serve the tester console shell and remember this browser's anonymous identity."""
-        response = FileResponse(TESTER_DIR / "index.html")
+        response = HTMLResponse(page_html)
         if not _client_id(request):
             response.set_cookie(
                 CLIENT_COOKIE,
@@ -127,6 +131,11 @@ def build_tester_routes(
         """Serve the tester module."""
         del request
         return FileResponse(TESTER_DIR / "main.js", media_type="text/javascript")
+
+    async def copy_module(request: Request) -> Response:
+        """Serve the tester copy layer as an ES module."""
+        del request
+        return FileResponse(TESTER_DIR / "copy.js", media_type="text/javascript")
 
     async def meta(request: Request) -> Response:
         """Describe what the page may offer."""
@@ -153,6 +162,7 @@ def build_tester_routes(
                 "modelMode": model_mode,
                 "nmsEnabled": nms_enabled,
                 "advertisedProtocols": list(protocols),
+                "language": resolved_language,
             }
         )
 
@@ -379,6 +389,7 @@ def build_tester_routes(
         Route("/tester", page),
         Route("/tester/app.css", stylesheet),
         Route("/tester/main.js", script),
+        Route("/tester/copy.js", copy_module),
         Route("/api/tester/meta", meta),
         Route("/api/tester/catalog", catalog_rows),
         # Must precede the ``{case_id}`` route: Starlette matches in declaration order and would

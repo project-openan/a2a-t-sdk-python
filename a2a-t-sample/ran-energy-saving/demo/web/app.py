@@ -412,7 +412,6 @@ def create_app(
         protocols=advertised_protocols,
         scenarios_by_protocol=scenarios_by_protocol,
         protocol_defaults=protocol_defaults,
-        default_language=config.language,
         server_url=server_url,
         server_auth_token=config.server_auth_token,
         runs_dir=resolved_runs_dir,

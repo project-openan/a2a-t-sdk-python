@@ -1,39 +1,23 @@
 /* Tester console: catalog-driven case selection, staged execution and diffs. */
 
+import {
+  applyDataI18n,
+  compareLabels,
+  copyFor,
+  localizeValidateLabel,
+  stageLabels,
+  statusLabels,
+  t,
+} from "./copy.js";
+
 const STAGE_ORDER = ["intent", "task_t", "validate", "send", "negotiate", "accepted", "working", "final"];
-const STAGE_LABELS = {
-  intent: "意图",
-  task_t: "Task-T",
-  // The validate stage asks whether the Task-T is intercepted before sending, not whether the
-  // task succeeded: the OSP column it judges is "拦截".
-  validate: "拦截",
-  send: "发送",
-  negotiate: "协商",
-  accepted: "受理",
-  working: "运行",
-  final: "终态",
-};
+const language = document.querySelector('meta[name="a2at-language"]')?.content || "zh-CN";
+const copy = copyFor(language);
+// The validate stage asks whether the Task-T is intercepted before sending, not whether the
+// task succeeded: the OSP column it judges is "拦截".
+const STAGE_LABELS = stageLabels(copy);
 const SDK_STAGES = new Set(["intent", "task_t", "validate"]);
-const STATUS_LABELS = {
-  pending: "待执行",
-  running: "执行中",
-  passed: "通过",
-  failed: "失败",
-  error: "错误",
-  partial: "部分确认",
-  warning: "告警",
-  waiting: "待 WORKING",
-  recorded: "仅记录",
-  skipped: "跳过",
-  cancelled: "已取消",
-  draft: "已创建",
-  finished: "已完成",
-  blocked: "拦截",
-  accepted: "已受理",
-  pass: "不拦截",
-  pass_with_terminology: "不拦截+术语",
-  unfilled: "未填写",
-};
+const STATUS_LABELS = statusLabels(copy);
 
 const state = {
   meta: null,
@@ -121,11 +105,11 @@ async function loadMeta() {
   }
   const meta = state.meta;
   $("nms-warning").hidden = meta?.nmsEnabled !== true;
-  $("catalog-count").textContent = meta ? `${meta.catalogCount} 条用例` : "";
+  $("catalog-count").textContent = meta ? t(copy, "meta.catalogCount", { count: meta.catalogCount }) : "";
   const stopAfter = $("config-stop-after");
   clear(stopAfter);
   for (const stage of meta?.stopAfter || STAGE_ORDER) {
-    const option = el("option", "", `${STAGE_LABELS[stage] || stage}（${stage}）`);
+    const option = el("option", "", t(copy, "meta.stageOption", { label: STAGE_LABELS[stage] || stage, key: stage }));
     option.value = stage;
     stopAfter.append(option);
   }
@@ -146,7 +130,7 @@ function syncRoundsKeepTasks() {
   const keep = $("config-keep-tasks");
   keep.disabled = multi;
   if (multi) keep.checked = false;
-  keep.title = multi ? "多轮批次不支持保留任务" : "";
+  keep.title = multi ? t(copy, "config.multiRoundKeepTitle") : "";
 }
 
 async function loadCatalog() {
@@ -155,7 +139,7 @@ async function loadCatalog() {
     state.catalog = Array.isArray(payload.cases) ? payload.cases : [];
   } catch (error) {
     state.catalog = [];
-    showToast(`加载用例目录失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.catalogLoadFailed", { error: error.message || error }), "error");
   }
   populateFilters();
   renderCatalog();
@@ -204,7 +188,7 @@ function renderCatalog() {
   const list = $("catalog-list");
   clear(list);
   if (!rows.length) {
-    list.append(el("p", "status-line", "没有匹配的用例。"));
+    list.append(el("p", "status-line", t(copy, "catalog.empty")));
     updateSelectionSummary();
     return;
   }
@@ -221,14 +205,18 @@ function renderCatalog() {
     const body = el("span", "catalog-body");
     body.append(
       el("span", "catalog-title", `${String(item.id).padStart(2, "0")} ${item.name}`),
-      el("span", "catalog-meta", `${item.operation} · ${item.validateLabel || "未填写"}`),
+      el(
+        "span",
+        "catalog-meta",
+        `${item.operation} · ${localizeValidateLabel(copy, item.validateLabel || "") || t(copy, "validate.unfilled")}`,
+      ),
     );
     const tags = el("span", "catalog-tags");
     for (const tag of item.tags || []) tags.append(el("span", "pill", tag));
     body.append(tags);
-    const detail = el("button", "catalog-detail", "详情");
+    const detail = el("button", "catalog-detail", t(copy, "action.detail"));
     detail.type = "button";
-    detail.title = "查看用例详情（不运行）";
+    detail.title = t(copy, "catalog.detailTitle");
     detail.addEventListener("click", (event) => {
       // The row is a <label>; prevent the click from toggling the selection checkbox.
       event.preventDefault();
@@ -243,7 +231,9 @@ function renderCatalog() {
 
 function updateSelectionSummary() {
   const count = state.selected.size;
-  $("selection-summary").textContent = count ? `已选择 ${count} 条用例` : "未选择用例";
+  $("selection-summary").textContent = count
+    ? t(copy, "toast.selected", { count })
+    : t(copy, "summary.notSelected");
 }
 
 /* ------------------------------------------------------------------- batch */
@@ -251,20 +241,23 @@ function updateSelectionSummary() {
 async function startBatch() {
   const caseIds = [...state.selected];
   if (!caseIds.length) {
-    showToast("请先在左侧选择用例。", "error");
+    showToast(t(copy, "toast.selectFirst"), "error");
     return;
   }
   const protocols = [];
   if ($("protocol-a2at").checked) protocols.push("a2a-t");
   if ($("protocol-a2a").checked) protocols.push("a2a");
   if (!protocols.length) {
-    showToast("至少选择一个协议。", "error");
+    showToast(t(copy, "toast.selectProtocol"), "error");
     return;
   }
   const rounds = Number($("config-rounds").value || 1);
   const runs = caseIds.length * protocols.length * rounds;
-  const runLabel = rounds > 1 ? `${runs} 个运行项（${rounds} 轮）` : `${runs} 个运行项`;
-  if (state.meta?.nmsEnabled && !window.confirm(`当前连接真实网管，将执行 ${runLabel}。确认继续？`)) {
+  const runLabel =
+    rounds > 1
+      ? t(copy, "confirm.runItemsRounds", { runs, rounds })
+      : t(copy, "confirm.runItems", { runs });
+  if (state.meta?.nmsEnabled && !window.confirm(t(copy, "confirm.nmsBatch", { runLabel }))) {
     return;
   }
   $("start-button").disabled = true;
@@ -284,7 +277,7 @@ async function startBatch() {
     renderResults();
     startPolling();
   } catch (error) {
-    showToast(`启动失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.startFailed", { error: error.message || error }), "error");
   } finally {
     $("start-button").disabled = false;
   }
@@ -293,13 +286,13 @@ async function startBatch() {
 async function startScratch() {
   const userInput = $("scratch-input").value.trim();
   if (!userInput) {
-    $("scratch-status").textContent = "请输入请求文本。";
+    $("scratch-status").textContent = t(copy, "scratch.needInput");
     return;
   }
-  if (state.meta?.nmsEnabled && !window.confirm("当前连接真实网管，可能下发真实任务。确认继续？")) {
+  if (state.meta?.nmsEnabled && !window.confirm(t(copy, "confirm.nmsScratch"))) {
     return;
   }
-  $("scratch-status").textContent = "正在启动…";
+  $("scratch-status").textContent = t(copy, "scratch.starting");
   try {
     const created = await postJson("/api/tester/scratch", {
       userInput,
@@ -308,12 +301,12 @@ async function startScratch() {
       keepTasks: $("config-keep-tasks").checked,
     });
     state.batch = await postJson(`/api/tester/batches/${encodeURIComponent(created.batchId)}/start`, {});
-    $("scratch-status").textContent = "已启动；结果见“评测用例”页。";
+    $("scratch-status").textContent = t(copy, "scratch.started");
     switchTab("catalog");
     renderResults();
     startPolling();
   } catch (error) {
-    $("scratch-status").textContent = `启动失败：${error.message || error}`;
+    $("scratch-status").textContent = t(copy, "toast.startFailed", { error: error.message || error });
   }
 }
 
@@ -341,7 +334,7 @@ async function refreshBatch() {
     }
   } catch (error) {
     stopPolling();
-    showToast(`批次状态刷新失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.refreshFailed", { error: error.message || error }), "error");
   }
 }
 
@@ -353,7 +346,7 @@ async function openBatch(batchId) {
     renderResults();
     if (state.batch.status === "running") startPolling();
   } catch (error) {
-    showToast(`加载批次失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.loadBatchFailed", { error: error.message || error }), "error");
   }
 }
 
@@ -363,7 +356,7 @@ async function cancelBatch() {
     await postJson(`/api/tester/batches/${encodeURIComponent(state.batch.batchId)}/cancel`, {});
     await refreshBatch();
   } catch (error) {
-    showToast(`取消失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.cancelFailed", { error: error.message || error }), "error");
   }
 }
 
@@ -375,7 +368,7 @@ async function retryBatch() {
     renderResults();
     startPolling();
   } catch (error) {
-    showToast(`重跑失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.retryFailed", { error: error.message || error }), "error");
   }
 }
 
@@ -388,7 +381,7 @@ async function cancelItem(index) {
     );
     await refreshBatch();
   } catch (error) {
-    showToast(`取消失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.cancelFailed", { error: error.message || error }), "error");
   }
 }
 
@@ -402,7 +395,7 @@ async function rerunItem(index) {
     renderResults();
     startPolling();
   } catch (error) {
-    showToast(`重跑失败：${error.message || error}`, "error");
+    showToast(t(copy, "toast.retryFailed", { error: error.message || error }), "error");
   }
 }
 
@@ -421,10 +414,13 @@ async function exportBatch(format) {
   state.exporting = true;
   $("export-json").disabled = true;
   $("export-xlsx").disabled = true;
-  button.textContent = "正在导出…";
+  button.textContent = t(copy, "export.running");
   button.setAttribute("aria-busy", "true");
   const describe = () =>
-    `正在生成 ${format.toUpperCase()} 报表（含 Langfuse 指标），已用 ${elapsedSeconds(startedAt)} 秒…`;
+    t(copy, "export.generating", {
+      format: format.toUpperCase(),
+      seconds: elapsedSeconds(startedAt),
+    });
   showToast(describe(), "waiting", 0);
   const ticker = window.setInterval(() => showToast(describe(), "waiting", 0), 1000);
   try {
@@ -435,9 +431,9 @@ async function exportBatch(format) {
     }
     const blob = await response.blob();
     downloadBlob(blob, response.headers.get("content-disposition"), `osp-tester-${batchId}.${format}`);
-    showToast(`导出完成（用时 ${elapsedSeconds(startedAt)} 秒）`, "success", 2000);
+    showToast(t(copy, "export.done", { seconds: elapsedSeconds(startedAt) }), "success", 2000);
   } catch (error) {
-    showToast(`导出失败：${error.message || error}`, "error", 8000);
+    showToast(t(copy, "export.failed", { error: error.message || error }), "error", 8000);
   } finally {
     window.clearInterval(ticker);
     state.exporting = false;
@@ -474,9 +470,9 @@ async function loadHistory() {
   wrap.hidden = state.history.length === 0;
   for (const batch of state.history) {
     const transport = batch.transport ? ` · ${batch.transport}` : "";
-    const keep = batch.keepTasks ? " · 保留任务" : "";
-    const concurrency = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
-    const rounds = batch.rounds > 1 ? ` · ${batch.rounds} 轮` : "";
+    const keep = batch.keepTasks ? t(copy, "history.keepTasks") : "";
+    const concurrency = batch.concurrency > 1 ? t(copy, "history.concurrency", { count: batch.concurrency }) : "";
+    const rounds = batch.rounds > 1 ? t(copy, "history.rounds", { count: batch.rounds }) : "";
     const option = el("option", "", `${batch.stopAfter || "final"}${transport}${keep}${concurrency}${rounds} · ${statusLabel(batch.status)} · ${batch.createdAt || ""}`);
     option.value = batch.batchId;
     select.append(option);
@@ -502,10 +498,12 @@ function stageChips(item, stopAfter) {
             : baseline.status === "cancelled"
               ? "skipped"
               : "pending";
-    const chip = el("span", `stage-chip ${status}`, "基线");
-    chip.title = `基线 Create：${baseline.status || ""}${baseline.state ? ` · ${baseline.state}` : ""}${
-      baseline.error ? ` · ${baseline.error}` : ""
-    }`;
+    const chip = el("span", `stage-chip ${status}`, t(copy, "stageChip.baseline"));
+    chip.title = t(copy, "stageChip.baselineTitle", {
+      status: baseline.status || "",
+      state: baseline.state ? ` · ${baseline.state}` : "",
+      error: baseline.error ? ` · ${baseline.error}` : "",
+    });
     wrap.append(chip);
   }
   const interception = item.interception;
@@ -514,11 +512,13 @@ function stageChips(item, stopAfter) {
     const status = validate?.status || "recorded";
     // "拦截预检" is the blocked original request, which is separate from the "拦截" stage of the
     // request the run dispatches.
-    const chip = el("span", `stage-chip ${status}`, "拦截预检");
+    const chip = el("span", `stage-chip ${status}`, t(copy, "stageChip.interception"));
     const slotText = slotErrorText(slotErrorsOf(validate));
-    chip.title = `A2A-T 拦截：${statusLabel(status)}${validate?.message ? ` · ${validate.message}` : ""}${
-      slotText ? ` · ${slotText}` : ""
-    }`;
+    chip.title = t(copy, "stageChip.interceptionTitle", {
+      status: statusLabel(status),
+      message: validate?.message ? ` · ${validate.message}` : "",
+      slots: slotText ? ` · ${slotText}` : "",
+    });
     wrap.append(chip);
   }
   const settled = !["pending", "running", "draft"].includes(String(item.status || ""));
@@ -531,7 +531,11 @@ function stageChips(item, stopAfter) {
     // exists. A finished item without a stage really skipped it.
     const status = result?.status || (settled ? "skipped" : "pending");
     const chip = el("span", `stage-chip ${status}`, `${STAGE_LABELS[stage] || stage}`);
-    chip.title = `${stage}: ${statusLabel(status)}${result?.message ? ` · ${result.message}` : ""}`;
+    chip.title = t(copy, "stageChip.stageTitle", {
+      stage,
+      status: statusLabel(status),
+      message: result?.message ? ` · ${result.message}` : "",
+    });
     wrap.append(chip);
   }
   return wrap;
@@ -554,32 +558,50 @@ function acceptedNote(item) {
   if (!accepted || accepted.status !== "passed") return "";
   const actual = accepted.actual && typeof accepted.actual === "object" ? accepted.actual : {};
   const state = typeof actual.state === "string" && actual.state ? actual.state : "TASK_STATE_SUBMITTED";
-  const recorded = item.serverIntent && typeof item.serverIntent === "object" ? "（服务端意图已记录）" : "";
-  return `已收到 ${state}${recorded}`;
+  const recorded =
+    item.serverIntent && typeof item.serverIntent === "object"
+      ? t(copy, "result.serverIntentRecorded")
+      : "";
+  return t(copy, "result.received", { state, recorded });
 }
 
 function resultText(item) {
   if (item.error) return item.error;
   const blocked = Object.entries(item.interception?.stages || {}).map(([stage, value]) => [
-    `拦截/${STAGE_LABELS[stage] || stage}`,
+    t(copy, "result.interceptionPrefix", { stage: STAGE_LABELS[stage] || stage }),
     value,
   ]);
   const all = [...Object.entries(item.stages || {}), ...blocked];
   const failed = all.filter(([, stage]) => stage.status === "failed");
+  const separator = t(copy, "listSeparator");
   if (failed.length) {
-    const text = failed.map(([stage, value]) => `${stage}: ${value.message || "不匹配"}`).join("；");
+    const text = failed
+      .map(([stage, value]) =>
+        t(copy, "result.stageMessage", {
+          stage,
+          message: value.message || t(copy, "result.mismatch"),
+        }),
+      )
+      .join(separator);
     // A red row often still received the submission payload; show that next to the failure so the
     // row is not read as "nothing came back".
     const note = acceptedNote(item);
-    return note ? `${text}；${note}` : text;
+    return note ? `${text}${separator}${note}` : text;
   }
   const waiting = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "waiting");
   if (waiting.length) {
-    return waiting.map(([stage, value]) => `${stage}: ${value.message || "待 WORKING"}`).join("；");
+    return waiting
+      .map(([stage, value]) =>
+        t(copy, "result.stageMessage", {
+          stage,
+          message: value.message || t(copy, "status.waiting"),
+        }),
+      )
+      .join(separator);
   }
   const recorded = Object.entries(item.stages || {}).filter(([, stage]) => stage.status === "recorded");
-  if (recorded.length) return `${recorded.length} 个阶段仅记录`;
-  return item.status === "passed" ? "全部阶段通过" : "";
+  if (recorded.length) return t(copy, "result.stagesRecorded", { count: recorded.length });
+  return item.status === "passed" ? t(copy, "result.allPassed") : "";
 }
 
 function populateRoundFilter(rounds) {
@@ -593,11 +615,11 @@ function populateRoundFilter(rounds) {
   // A different batch starts on "all rounds"; the previous selection would hide rows.
   state.roundFilter = "";
   clear(select);
-  const all = el("option", "", "全部轮次");
+  const all = el("option", "", t(copy, "round.all"));
   all.value = "";
   select.append(all);
   for (let index = 1; index <= rounds; index += 1) {
-    const option = el("option", "", `第 ${index} 轮`);
+    const option = el("option", "", t(copy, "round.label", { round: index }));
     option.value = String(index);
     select.append(option);
   }
@@ -608,10 +630,18 @@ function roundSummaryNote(batch) {
   const parts = [];
   for (const entry of batch.roundSummaries || []) {
     const summary = entry.summary || {};
-    parts.push(`第 ${entry.round} 轮 ${summary.passed || 0}/${summary.total || 0}`);
+    parts.push(
+      t(copy, "round.summary", {
+        round: entry.round,
+        passed: summary.passed || 0,
+        total: summary.total || 0,
+      }),
+    );
   }
   const cross = batch.crossRound || {};
-  if (cross.total) parts.push(`稳定通过 ${cross.stable || 0}/${cross.total}`);
+  if (cross.total) {
+    parts.push(t(copy, "round.stable", { stable: cross.stable || 0, total: cross.total }));
+  }
   return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
 
@@ -621,7 +651,7 @@ function renderResults() {
   clear(body);
   if (!batch) {
     $("empty-state").hidden = false;
-    $("empty-state").textContent = "选择用例并开始执行。";
+    $("empty-state").textContent = t(copy, "empty.noBatch");
     $("result-summary").textContent = "";
     $("round-head").hidden = true;
     $("round-filter-wrap").hidden = true;
@@ -649,8 +679,8 @@ function renderResults() {
   // Reruns queued while the batch still runs; each row stays clickable unless it is in this list.
   const rerunQueue = Array.isArray(batch.rerunQueue) ? batch.rerunQueue : [];
   $("empty-state").hidden = visible.length > 0;
-  if (!items.length) $("empty-state").textContent = "该批次没有运行项。";
-  else if (!visible.length) $("empty-state").textContent = "该轮次没有运行项。";
+  if (!items.length) $("empty-state").textContent = t(copy, "empty.noItems");
+  else if (!visible.length) $("empty-state").textContent = t(copy, "empty.noRoundItems");
 
   visible.forEach(([item, index]) => {
     const row = document.createElement("tr");
@@ -665,18 +695,20 @@ function renderResults() {
     stages.append(stageChips(item, batch.stopAfter));
     const status = document.createElement("td");
     status.append(badge(item.status));
-    if (queued) status.append(document.createTextNode(" "), badge("waiting", "排队中"));
+    if (queued) status.append(document.createTextNode(" "), badge("waiting", t(copy, "status.queued")));
     const duration = el("td", "metric", durationText(item.durationMs));
     const tokens = el("td", "metric", tokenText(item.tokens));
     const runs = document.createElement("td");
     runs.className = "run-cell";
     const baseline = item.baseline && typeof item.baseline === "object" ? item.baseline : null;
-    if (baseline?.runId) runs.append(runLine("基线", baseline.runId));
-    if (item.runId) runs.append(runLine(baseline?.runId ? "修改" : "", item.runId));
+    if (baseline?.runId) runs.append(runLine(t(copy, "runTag.baseline"), baseline.runId));
+    if (item.runId) {
+      runs.append(runLine(baseline?.runId ? t(copy, "runTag.modify") : "", item.runId));
+    }
     if (!runs.childNodes.length) runs.append(document.createTextNode("—"));
     const result = el("td", "result", resultText(item));
     if (item.langfuseWarning) {
-      const warning = el("div", "context-line error", "Langfuse 导出失败");
+      const warning = el("div", "context-line error", t(copy, "langfuse.exportFailed"));
       warning.title = String(item.langfuseWarning);
       result.append(warning);
     }
@@ -704,14 +736,14 @@ function renderResults() {
       trace.target = "_blank";
       actions.append(wire, document.createTextNode(" · "), trace);
     }
-    const detail = el("button", "link-button", "详情");
+    const detail = el("button", "link-button", t(copy, "action.detail"));
     detail.type = "button";
     detail.addEventListener("click", () => openDrawer(item, index));
     actions.append(document.createTextNode(" · "), detail);
     if (queued) {
-      const drop = el("button", "link-button", "取消排队");
+      const drop = el("button", "link-button", t(copy, "action.dequeue"));
       drop.type = "button";
-      drop.title = "从重跑队列移除，保留上一次结果";
+      drop.title = t(copy, "action.dequeueTitle");
       drop.addEventListener("click", () => cancelItem(index));
       actions.append(document.createTextNode(" · "), drop);
     } else if (
@@ -719,15 +751,15 @@ function renderResults() {
       && (item.status === "running" || item.status === "pending")
     ) {
       // One item at a time: the rest of the batch keeps running.
-      const cancel = el("button", "link-button", "取消");
+      const cancel = el("button", "link-button", t(copy, "action.cancelItem"));
       cancel.type = "button";
-      cancel.title = "只取消这一条用例，其余继续";
+      cancel.title = t(copy, "action.cancelItemTitle");
       cancel.addEventListener("click", () => cancelItem(index));
       actions.append(document.createTextNode(" · "), cancel);
     }
     // A finished row may be rerun while the rest of the batch still runs; a pending or running
     // row would be executed twice, and a queued row is already waiting.
-    const rerun = el("button", "link-button", "重跑");
+    const rerun = el("button", "link-button", t(copy, "action.rerun"));
     rerun.type = "button";
     rerun.disabled = queued
       || item.status === "running"
@@ -742,10 +774,23 @@ function renderResults() {
   });
 
   const summary = batch.summary || {};
-  const concurrencyNote = batch.concurrency > 1 ? ` · 并发 ${batch.concurrency}` : "";
-  const queuedNote = rerunQueue.length ? ` · 排队重跑 ${rerunQueue.length}` : "";
+  const concurrencyNote =
+    batch.concurrency > 1 ? t(copy, "history.concurrency", { count: batch.concurrency }) : "";
+  const queuedNote = rerunQueue.length
+    ? t(copy, "summary.queuedRerun", { count: rerunQueue.length })
+    : "";
   const roundNote = multi ? roundSummaryNote(batch) : "";
-  $("result-summary").textContent = `${summary.total || 0} 项 · 通过 ${summary.passed || 0} · 待确认 ${summary.partial || 0} · 失败 ${summary.failed || 0} · 错误 ${summary.error || 0} · 仅记录 ${summary.stageRecorded || 0}${concurrencyNote}${queuedNote}${roundNote}`;
+  $("result-summary").textContent = t(copy, "summary.results", {
+    total: summary.total || 0,
+    passed: summary.passed || 0,
+    partial: summary.partial || 0,
+    failed: summary.failed || 0,
+    error: summary.error || 0,
+    stageRecorded: summary.stageRecorded || 0,
+    concurrency: concurrencyNote,
+    queued: queuedNote,
+    round: roundNote,
+  });
   const running = batch.status === "running";
   const retryable = (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0) > 0;
   $("start-button").hidden = running;
@@ -759,10 +804,17 @@ function renderResults() {
   const done =
     (summary.passed || 0) + (summary.partial || 0) + (summary.failed || 0) + (summary.error || 0) + (summary.cancelled || 0);
   $("progress-bar").style.width = `${total ? Math.min(100, Math.round((done / total) * 100)) : 0}%`;
-  const roundPrefix = multi ? `第 ${batch.currentRound || 1}/${rounds} 轮 · ` : "";
+  const roundPrefix = multi
+    ? t(copy, "progress.roundPrefix", { round: batch.currentRound || 1, rounds })
+    : "";
   $("progress-text").textContent = running
-    ? `${roundPrefix}${done}/${total} · 运行中 ${summary.running || 0}`
-    : `${roundPrefix}${done}/${total}`;
+    ? t(copy, "progress.running", {
+        prefix: roundPrefix,
+        done,
+        total,
+        running: summary.running || 0,
+      })
+    : t(copy, "progress.done", { prefix: roundPrefix, done, total });
   if (running) startPolling();
 }
 
@@ -834,7 +886,7 @@ function contextTable(rows) {
 function appendContextBlock(body, item) {
   const context = itemContext(item);
   const block = el("section", "diff-block");
-  block.append(el("strong", "", "运行上下文"));
+  block.append(el("strong", "", t(copy, "drawer.runContext")));
   block.append(
     contextTable([
       { label: "runId", value: context.runId, runId: context.runId },
@@ -842,7 +894,10 @@ function appendContextBlock(body, item) {
       // What this run actually dispatched: for an intercepted case that is the follow-up text,
       // not the original request the interception recorded.
       { label: "userRequest", value: item.refs?.userInput || "" },
-      { label: item.protocol === "a2a" ? "taskId（外层 Task）" : "taskId", value: context.taskId },
+      {
+        label: item.protocol === "a2a" ? t(copy, "drawer.taskIdOuter") : "taskId",
+        value: context.taskId,
+      },
       { label: "contextId", value: context.contextId },
     ]),
   );
@@ -867,9 +922,9 @@ function appendServerReplyBlock(body, item) {
   if (!rows.length) return;
   const block = el("section", "diff-block");
   const head = el("div", "diff-head");
-  head.append(el("strong", "", "任务受理回包"));
+  head.append(el("strong", "", t(copy, "drawer.serverReply")));
   if (Array.isArray(item.answer?.exchanges) && item.answer.exchanges.length) {
-    head.append(el("span", "summary", "完整记录见「通信记录」"));
+    head.append(el("span", "summary", t(copy, "drawer.fullRecordInExchanges")));
   }
   block.append(head, contextTable(rows));
   body.append(block);
@@ -880,13 +935,19 @@ function appendBaselineBlock(body, item) {
   if (!baseline || typeof baseline !== "object") return;
   const status = String(baseline.status || "");
   const label =
-    status === "running" ? "创建中" : status === "accepted" ? "已受理" : status === "failed" ? "失败" : "已记录";
+    status === "running"
+      ? t(copy, "baseline.creating")
+      : status === "accepted"
+        ? t(copy, "baseline.accepted")
+        : status === "failed"
+          ? t(copy, "baseline.failed")
+          : t(copy, "baseline.recorded");
   const block = el("section", "diff-block");
   const head = el("div", "diff-head");
   head.append(
-    el("strong", "", "基线 Create（Modify 前置）"),
+    el("strong", "", t(copy, "baseline.title")),
     badge(status, label),
-    el("span", "summary", baseline.state || (status === "running" ? "等待受理…" : "")),
+    el("span", "summary", baseline.state || (status === "running" ? t(copy, "baseline.waitingAccepted") : "")),
   );
   block.append(head);
   if (baseline.error) block.append(el("p", "summary error", String(baseline.error)));
@@ -916,12 +977,21 @@ function slotErrorText(errors) {
 
 function appendSlotErrorTable(block, errors) {
   const head = el("div", "diff-head");
-  head.append(el("strong", "", "slot_error"), el("span", "summary", `${errors.length} 处`));
+  head.append(
+    el("strong", "", "slot_error"),
+    el("span", "summary", t(copy, "slotError.count", { count: errors.length })),
+  );
   block.append(head);
   const table = el("table", "grid diff-table intent-diff-table");
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  for (const title of ["槽位", "错误码", "说明"]) headRow.append(el("th", "", title));
+  for (const title of [
+    t(copy, "slotError.slot"),
+    t(copy, "slotError.code"),
+    t(copy, "slotError.description"),
+  ]) {
+    headRow.append(el("th", "", title));
+  }
   thead.append(headRow);
   const tbody = document.createElement("tbody");
   for (const error of errors) {
@@ -945,8 +1015,8 @@ function appendStageBlock(body, label, result, skipDetails = false) {
   if (!skipDetails && (result.expected !== undefined || result.actual !== undefined)) {
     const summary = el("div", "diff-summary");
     summary.append(
-      el("div", "", `预期：${textBlock(result.expected)}`),
-      el("div", "", `实际：${textBlock(result.actual)}`),
+      el("div", "", t(copy, "stage.expected", { value: textBlock(result.expected) })),
+      el("div", "", t(copy, "stage.actual", { value: textBlock(result.actual) })),
     );
     block.append(summary);
   }
@@ -955,7 +1025,14 @@ function appendStageBlock(body, label, result, skipDetails = false) {
     const table = el("table", "grid diff-table");
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    for (const title of ["字段", "预期", "实际", "说明"]) headRow.append(el("th", "", title));
+    for (const title of [
+      t(copy, "table.field"),
+      t(copy, "table.expected"),
+      t(copy, "table.actual"),
+      t(copy, "table.description"),
+    ]) {
+      headRow.append(el("th", "", title));
+    }
     thead.append(headRow);
     const tbody = document.createElement("tbody");
     for (const diff of diffs) {
@@ -976,19 +1053,14 @@ function appendStageBlock(body, label, result, skipDetails = false) {
     appendSlotErrorTable(block, slotErrors);
   } else if (result.detail?.verdict === "blocked") {
     // No per-slot detail came back; the verdict still has to read as an intentional block.
-    const code = result.detail.code ? `（${result.detail.code}）` : "";
-    block.append(el("p", "summary", `已拦截${code}：SDK 未返回逐槽位错误明细。`));
+    const rawCode = result.detail.code;
+    const code = rawCode ? `${copy.lang === "en-US" ? " (" : "（"}${rawCode}${copy.lang === "en-US" ? ")" : "）"}` : "";
+    block.append(el("p", "summary", t(copy, "stage.blockedNoDetail", { code })));
   }
   body.append(block);
 }
 
-const INTENT_ROW_LABELS = {
-  same: "一致",
-  changed: "不同",
-  missing: "缺失",
-  added: "新增",
-  recorded: "只记录",
-};
+const INTENT_ROW_LABELS = compareLabels(copy);
 
 //: Statuses that count as a difference in a comparison summary. ``recorded`` rows are fixed
 //: template prose (or evidence only), so they are shown but never counted.
@@ -1003,10 +1075,10 @@ function appendCompareTable(body, title, unit, rows) {
   const literalDiff = rows.filter((row) => differs(row.status)).length;
   const semanticDiff = rows.filter((row) => differs(hasVerdict ? row.verdict : row.status)).length;
   const summary = hasVerdict
-    ? `原文 ${literalDiff} 处不同 · 语义 ${semanticDiff} 处不同`
+    ? t(copy, "compare.verdictSummary", { literal: literalDiff, semantic: semanticDiff })
     : literalDiff
-      ? `${literalDiff} 个${unit}有差异`
-      : `全部${unit}一致`;
+      ? t(copy, "compare.diffCount", { count: literalDiff, unit })
+      : t(copy, "compare.allSame", { unit });
   const block = el("section", "diff-block");
   const head = el("div", "diff-head");
   head.append(el("strong", "", title), el("span", "summary", summary));
@@ -1014,9 +1086,14 @@ function appendCompareTable(body, title, unit, rows) {
   const table = el("table", "grid diff-table intent-diff-table");
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  const columns = [unit, "期望", "实际", hasVerdict ? "原文" : "状态"];
-  if (hasVerdict) columns.push("语义");
-  columns.push("说明");
+  const columns = [
+    unit,
+    t(copy, "table.expected"),
+    t(copy, "table.actual"),
+    hasVerdict ? t(copy, "compare.literal") : t(copy, "table.status"),
+  ];
+  if (hasVerdict) columns.push(t(copy, "compare.semantic"));
+  columns.push(t(copy, "table.description"));
   for (const column of columns) headRow.append(el("th", "", column));
   thead.append(headRow);
   const tbody = document.createElement("tbody");
@@ -1053,15 +1130,19 @@ function appendStageWithComparison(body, label, stage, result, intentRows) {
   const hasIntentTable = stage === "intent" && Array.isArray(intentRows) && intentRows.length > 0;
   const sections = stageSections(stage, result);
   appendStageBlock(body, label, result, hasIntentTable || sections.length > 0);
-  if (hasIntentTable) appendCompareTable(body, "意图逐字段对比", "字段", intentRows);
-  if (sections.length) appendCompareTable(body, "Task-T 逐段落对比", "段落", sections);
+  if (hasIntentTable) {
+    appendCompareTable(body, t(copy, "compare.intentTitle"), t(copy, "unit.field"), intentRows);
+  }
+  if (sections.length) {
+    appendCompareTable(body, t(copy, "compare.taskTTitle"), t(copy, "unit.section"), sections);
+  }
   return hasIntentTable;
 }
 
 function renderResultTab(item, body) {
   if (item.langfuseWarning) {
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "Langfuse 导出失败"));
+    block.append(el("strong", "", t(copy, "langfuse.exportFailed")));
     block.append(el("p", "status-line error", String(item.langfuseWarning)));
     body.append(block);
   }
@@ -1070,13 +1151,15 @@ function renderResultTab(item, body) {
   appendServerReplyBlock(body, item);
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {
-    body.append(el("p", "status-line", "该运行项还没有阶段结果。"));
+    body.append(el("p", "status-line", t(copy, "result.noStages")));
   }
   const interception = item.interception;
   if (interception?.stages) {
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "A2A-T 拦截（原请求）"));
-    block.append(el("p", "summary", `补充请求：${interception.followupInput || "—"}`));
+    block.append(el("strong", "", t(copy, "result.interceptionTitle")));
+    block.append(
+      el("p", "summary", t(copy, "result.followup", { value: interception.followupInput || "—" })),
+    );
     block.append(el("pre", "mono pre", interception.input || "—"));
     body.append(block);
     for (const stage of STAGE_ORDER) {
@@ -1085,8 +1168,9 @@ function renderResultTab(item, body) {
       if (stage === "intent") continue;
       const result = interception.stages[stage];
       if (!result) continue;
-      const label =
-        stage === "validate" ? "拦截判定" : `拦截/${STAGE_LABELS[stage] || stage}`;
+      const label = stage === "validate"
+        ? t(copy, "result.interceptionVerdict")
+        : t(copy, "result.interceptionPrefix", { stage: STAGE_LABELS[stage] || stage });
       appendStageWithComparison(body, label, stage, result, []);
     }
   }
@@ -1100,26 +1184,26 @@ function renderResultTab(item, body) {
     }
   }
   if (!intentTableRendered && intentRows.length) {
-    appendCompareTable(body, "意图逐字段对比", "字段", intentRows);
+    appendCompareTable(body, t(copy, "compare.intentTitle"), t(copy, "unit.field"), intentRows);
   }
   if (!intentRows.length) {
     // No comparable server payload (proxy hop, simulator, or a run that stopped early): keep the
     // raw evidence instead of inventing a comparison.
     if (item.serverIntent && typeof item.serverIntent === "object") {
-      body.append(caseSection("意图理解结果（服务端）", item.serverIntent));
+      body.append(caseSection(t(copy, "result.serverIntent"), item.serverIntent));
     }
     const expectedIntent = item.refs?.expectedIntent;
     if (expectedIntent && typeof expectedIntent === "object") {
-      body.append(caseSection("期望意图", expectedIntent));
+      body.append(caseSection(t(copy, "result.expectedIntent"), expectedIntent));
     }
   }
   if (item.intent && typeof item.intent === "object") {
-    body.append(caseSection("SDK 抽取意图（辅助证据）", item.intent));
+    body.append(caseSection(t(copy, "result.sdkIntent"), item.intent));
   }
   const attempts = Array.isArray(item.attempts) ? item.attempts : [];
   if (attempts.length) {
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "历史尝试"));
+    block.append(el("strong", "", t(copy, "result.attempts")));
     for (const attempt of attempts) {
       const line = el("div", "attempt-line");
       line.append(el("span", "summary", `${statusLabel(attempt.status)} · ${attempt.finishedAt || ""}`));
@@ -1144,7 +1228,7 @@ function caseSection(title, value) {
 
 function renderCaseTab(item, body) {
   if (item.caseId === 0) {
-    body.append(caseSection("临时请求", item.scratch || ""));
+    body.append(caseSection(t(copy, "scratch.title"), item.scratch || ""));
     return;
   }
   const drawer = state.drawer;
@@ -1165,16 +1249,16 @@ function renderCaseTab(item, body) {
   }
   body.append(protocolSwitch);
   if (drawer.loading) {
-    body.append(el("p", "status-line", "正在加载用例详情…"));
+    body.append(el("p", "status-line", t(copy, "case.loading")));
     return;
   }
   if (drawer.error) {
-    body.append(el("p", "status-line error", `加载用例详情失败：${drawer.error}`));
+    body.append(el("p", "status-line error", t(copy, "case.loadFailed", { error: drawer.error })));
     return;
   }
   const doc = drawer.caseDoc;
   if (!doc) {
-    body.append(el("p", "status-line", "没有用例详情。"));
+    body.append(el("p", "status-line", t(copy, "case.empty")));
     return;
   }
   const summary = doc.summary || {};
@@ -1182,24 +1266,35 @@ function renderCaseTab(item, body) {
   const followup = doc.case?.blocked_followup;
   const meta = el("div", "case-meta");
   meta.append(
-    el("span", "pill", summary.dimension || "未分组"),
+    el("span", "pill", summary.dimension || t(copy, "case.ungrouped")),
     el("span", "pill", summary.operation || ""),
-    el("span", "pill", summary.validateLabel || ""),
+    el("span", "pill", localizeValidateLabel(copy, summary.validateLabel || "")),
     ...(summary.tags || []).map((tag) => el("span", "pill", tag)),
   );
-  if (baselineRequest) meta.append(el("span", "pill", "基线 Create"));
-  if (followup?.input) meta.append(el("span", "pill", "拦截+补充"));
+  if (baselineRequest) meta.append(el("span", "pill", t(copy, "case.baselineCreate")));
+  if (followup?.input) meta.append(el("span", "pill", t(copy, "case.interceptionFollowup")));
   body.append(meta);
-  if (doc.case?.known_issue) body.append(caseSection("已知问题", doc.case.known_issue));
+  if (doc.case?.known_issue) {
+    body.append(caseSection(t(copy, "case.knownIssue"), doc.case.known_issue));
+  }
   if (baselineRequest) {
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "前置基线 Create（Modify 续传用）"));
-    block.append(el("p", "summary", "运行期 fixture：先建出被修改的 Task；不参与 OSP 期望判定。"));
+    block.append(el("strong", "", t(copy, "case.baselineTitle")));
+    block.append(el("p", "summary", t(copy, "case.baselineHint")));
     block.append(el("pre", "mono case-pre", textBlock(baselineRequest)));
     const actual = drawer.item?.baseline;
     if (actual?.runId) {
       const line = el("div", "attempt-line");
-      line.append(el("span", "summary", `本次实际基线：${actual.state || "—"}${actual.error ? ` · ${actual.error}` : ""}`));
+      line.append(
+        el(
+          "span",
+          "summary",
+          t(copy, "case.actualBaseline", {
+            state: actual.state || "—",
+            error: actual.error ? ` · ${actual.error}` : "",
+          }),
+        ),
+      );
       const wire = el("a", "run-link", `wire ${actual.runId}`);
       wire.href = `/api/runs/${encodeURIComponent(actual.runId)}/wire`;
       wire.target = "_blank";
@@ -1208,18 +1303,27 @@ function renderCaseTab(item, body) {
     }
     body.append(block);
   }
-  body.append(caseSection(followup?.input ? "请求原文（拦截段）" : "请求原文", doc.case?.user_input || ""));
+  body.append(
+    caseSection(
+      followup?.input ? t(copy, "case.requestWithInterception") : t(copy, "case.request"),
+      doc.case?.user_input || "",
+    ),
+  );
   if (followup?.input) {
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "拦截后补充请求（A2A-T）"));
-    block.append(el("p", "summary", "拦截段只记录；补充段用该请求重跑完整期望。"));
+    block.append(el("strong", "", t(copy, "case.followupTitle")));
+    block.append(el("p", "summary", t(copy, "case.followupHint")));
     block.append(el("pre", "mono case-pre", textBlock(followup.input)));
     body.append(block);
-    if (followup.expect) body.append(caseSection("补充段 expect 覆盖", followup.expect));
-    if (followup.assert) body.append(caseSection("补充段 assert 覆盖", followup.assert));
+    if (followup.expect) {
+      body.append(caseSection(t(copy, "case.followupExpect"), followup.expect));
+    }
+    if (followup.assert) {
+      body.append(caseSection(t(copy, "case.followupAssert"), followup.assert));
+    }
   }
   const intent = doc.case?.expect?.intent;
-  const expectationScope = followup?.input ? "（补充请求）" : "";
+  const expectationScope = followup?.input ? t(copy, "case.followupScope") : "";
   if (intent && typeof intent === "object") {
     const table = el("table", "grid kv-table");
     const tbody = document.createElement("tbody");
@@ -1230,15 +1334,23 @@ function renderCaseTab(item, body) {
     }
     table.append(tbody);
     const block = el("section", "diff-block");
-    block.append(el("strong", "", `期望意图${expectationScope}`), table);
+    block.append(el("strong", "", t(copy, "case.expectedIntentTitle", { scope: expectationScope })), table);
     body.append(block);
   }
   const protocolBlock = doc.case?.expect?.protocols?.[protocol] || {};
-  body.append(caseSection(`期望 Task-T（${protocol === "a2a-t" ? "A2A-T" : "A2A"}）${expectationScope}`, protocolBlock.task_t || "该协议没有 Task-T 期望"));
+  body.append(
+    caseSection(
+      t(copy, "case.expectedTaskT", {
+        protocol: protocol === "a2a-t" ? "A2A-T" : "A2A",
+        scope: expectationScope,
+      }),
+      protocolBlock.task_t || t(copy, "case.noTaskT"),
+    ),
+  );
   const negotiation = protocolBlock.negotiation;
   if (negotiation) {
     const block = el("section", "diff-block");
-    block.append(el("strong", "", "协商预期"));
+    block.append(el("strong", "", t(copy, "case.negotiationExpected")));
     block.append(
       el(
         "p",
@@ -1247,14 +1359,14 @@ function renderCaseTab(item, body) {
       ),
     );
     (negotiation.rounds || []).forEach((round, index) => {
-      block.append(el("div", "summary", `第 ${index + 1} 轮`));
+      block.append(el("div", "summary", t(copy, "round.label", { round: index + 1 })));
       block.append(el("pre", "mono case-pre", textBlock(round)));
     });
     body.append(block);
   }
-  body.append(caseSection("断言开关", doc.case?.assert || {}));
-  body.append(caseSection("runner", doc.case?.runner || {}));
-  body.append(caseSection("来源", doc.case?.source || {}));
+  body.append(caseSection(t(copy, "case.assertions"), doc.case?.assert || {}));
+  body.append(caseSection(t(copy, "case.runner"), doc.case?.runner || {}));
+  body.append(caseSection(t(copy, "case.source"), doc.case?.source || {}));
 }
 
 async function ensureCaseDoc(item) {
@@ -1274,8 +1386,16 @@ async function ensureCaseDoc(item) {
 function drawerRuns(item) {
   const runs = [];
   const baseline = item.baseline && typeof item.baseline === "object" ? item.baseline : null;
-  if (baseline?.runId) runs.push({ key: "baseline", label: "基线", runId: String(baseline.runId) });
-  if (item.runId) runs.push({ key: "modify", label: runs.length ? "修改" : "运行", runId: String(item.runId) });
+  if (baseline?.runId) {
+    runs.push({ key: "baseline", label: t(copy, "runTag.baseline"), runId: String(baseline.runId) });
+  }
+  if (item.runId) {
+    runs.push({
+      key: "modify",
+      label: runs.length ? t(copy, "runTag.modify") : t(copy, "runTag.run"),
+      runId: String(item.runId),
+    });
+  }
   return runs;
 }
 
@@ -1396,9 +1516,7 @@ function renderTraceTab(item, body) {
   const drawer = state.drawer;
   const runs = drawerRuns(item);
   if (!runs.length) {
-    body.append(
-      el("p", "status-line", "尚无运行：基线 Create 或请求发送后，轨迹会实时显示在这里。"),
-    );
+    body.append(el("p", "status-line", t(copy, "trace.noRuns")));
     return;
   }
   const active = activeDrawerRun(item);
@@ -1420,15 +1538,19 @@ function renderTraceTab(item, body) {
     body.append(switcher);
   }
   if (drawer.traceLoading && drawer.traceRunId === active.runId) {
-    body.append(el("p", "status-line", `正在加载轨迹 ${shortId(active.runId)}…`));
+    body.append(
+      el("p", "status-line", t(copy, "trace.loadingRun", { run: shortId(active.runId) })),
+    );
     return;
   }
   if (drawer.traceError) {
-    body.append(el("p", "status-line error", `加载轨迹失败：${drawer.traceError}`));
+    body.append(
+      el("p", "status-line error", t(copy, "trace.loadFailed", { error: drawer.traceError })),
+    );
     return;
   }
   if (!drawer.traceDoc || drawer.traceRunId !== active.runId) {
-    body.append(el("p", "status-line", "正在加载轨迹…"));
+    body.append(el("p", "status-line", t(copy, "trace.loading")));
     return;
   }
   const doc = drawer.traceDoc;
@@ -1437,14 +1559,14 @@ function renderTraceTab(item, body) {
   const meta = el("div", "case-meta");
   meta.append(
     el("span", "pill", `${active.label} ${shortId(active.runId)}`),
-    el("span", "pill", String(doc.status || transcript.finalState || "运行中")),
+    el("span", "pill", String(doc.status || transcript.finalState || t(copy, "trace.running"))),
   );
   if (transcript.traceId) meta.append(el("span", "pill", `trace ${shortId(transcript.traceId)}`));
   if (transcript.taskId) meta.append(el("span", "pill", `task ${shortId(transcript.taskId)}`));
   body.append(meta);
   const events = traceEvents(doc);
   if (!events.length) {
-    body.append(el("p", "status-line", "暂无轨迹事件；运行开始后会逐步出现。"));
+    body.append(el("p", "status-line", t(copy, "trace.empty")));
     return;
   }
   const list = el("div", "trace-list");
@@ -1480,18 +1602,10 @@ function exchangeMeta(exchange) {
 function renderExchangesTab(item, body) {
   const exchanges = Array.isArray(item.answer?.exchanges) ? item.answer.exchanges : [];
   if (!exchanges.length) {
-    body.append(
-      el("p", "status-line", "该运行项没有通信记录：未生成 answer、运行项提前失败，或来自旧版本批次。"),
-    );
+    body.append(el("p", "status-line", t(copy, "exchange.empty")));
     return;
   }
-  body.append(
-    el(
-      "p",
-      "status-line",
-      "规范化记录（来自 session transcript 与 trace span）；逐字原始帧请用表格行的 wire 链接。",
-    ),
-  );
+  body.append(el("p", "status-line", t(copy, "exchange.note")));
   for (const exchange of exchanges) {
     const block = el("section", "diff-block");
     const head = el("div", "diff-head");
@@ -1504,7 +1618,7 @@ function renderExchangesTab(item, body) {
     block.append(el("pre", "mono case-pre", exchangeText(exchange.payload)));
     const details = document.createElement("details");
     details.className = "trace-event";
-    details.append(el("summary", "", "完整 payload"));
+    details.append(el("summary", "", t(copy, "exchange.fullPayload")));
     details.append(el("pre", "mono case-pre", textBlock(exchange.payload)));
     block.append(details);
     body.append(block);
@@ -1516,7 +1630,8 @@ function renderDrawer() {
   const item = drawer.item;
   if (!item) return;
   const protocol = item.protocol === "a2a-t" ? "A2A-T" : "A2A";
-  const roundNote = item.round && state.batch?.rounds > 1 ? ` · 第 ${item.round} 轮` : "";
+  const roundNote =
+    item.round && state.batch?.rounds > 1 ? t(copy, "drawer.roundNote", { round: item.round }) : "";
   $("drawer-title").textContent = `#${String(item.caseId).padStart(2, "0")} ${item.name} · ${protocol}${roundNote}`;
   const langfuseLink = $("drawer-langfuse");
   const langfuseUrl = typeof item.langfuseUrl === "string" ? item.langfuseUrl : "";
@@ -1673,6 +1788,8 @@ function wireEvents() {
 }
 
 async function init() {
+  applyDataI18n(document, copy);
+  document.documentElement.removeAttribute("data-locale-pending");
   wireEvents();
   await loadMeta();
   await loadCatalog();

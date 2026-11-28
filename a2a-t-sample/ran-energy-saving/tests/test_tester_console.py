@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
+import subprocess
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
@@ -29,6 +31,7 @@ from protocol.client_flow import ClientFlowResult
 from shared.config import SampleConfig
 from shared.run_constants import (
     FINAL_STATE_TASK_COMPLETED,
+    LANGUAGE_EN,
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
 )
@@ -642,6 +645,50 @@ async def test_the_tester_page_issues_a_browser_identity_cookie(
     assert client.cookies.get(CLIENT_COOKIE)
 
 
+async def test_the_tester_meta_reports_the_process_language(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/api/tester/meta")
+    assert response.status_code == 200
+    assert response.json()["language"] == LANGUAGE_EN
+
+
+async def test_the_tester_page_carries_the_process_language_for_the_first_paint(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/tester")
+    assert response.status_code == 200
+    assert '<meta name="a2at-language" content="en-US">' in response.text
+    assert "data-locale-pending" in response.text
+    assert "__A2AT_LANGUAGE__" not in response.text
+
+
+async def test_the_tester_serves_its_copy_module(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/tester/copy.js")
+    assert response.status_code == 200
+    assert "text/javascript" in response.headers["content-type"]
+    assert "export const COPY" in response.text
+
+
+def test_tester_copy_harness_runs_in_node() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    harness = Path(__file__).resolve().parent / "js" / "tester_i18n.test.mjs"
+
+    result = subprocess.run(
+        [node, str(harness)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "tester i18n harness: ok" in result.stdout
+
+
 async def test_the_status_page_reports_the_process_and_is_linked_from_the_tester(
     client: httpx.AsyncClient,
 ) -> None:
@@ -856,35 +903,39 @@ def test_the_catalog_offers_a_case_detail_without_running_it() -> None:
     """A detail click inside the selection <label> must not toggle the checkbox."""
     tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
     js = (tester / "main.js").read_text(encoding="utf-8")
+    copy = (tester / "copy.js").read_text(encoding="utf-8")
 
     assert "openCasePreview" in js
-    assert 'el("button", "catalog-detail", "详情")' in js
+    assert 'el("button", "catalog-detail", t(copy, "action.detail"))' in js
     assert "event.preventDefault()" in js
     assert "event.stopPropagation()" in js
     # The drawer shows the other protocol's expectations too.
     assert "protocol-switch" in js
     # The case detail surfaces the paired Modify baseline and the blocked follow-up request.
-    assert "前置基线 Create" in js
-    assert "拦截后补充请求" in js
-    assert "补充段 expect 覆盖" in js
+    for key in ("case.baselineTitle", "case.followupTitle", "case.followupExpect"):
+        assert f'"{key}":' in copy, key
+        assert key in js, key
 
 
 def test_the_result_row_and_drawer_expose_run_context_ids() -> None:
     """runId / traceId / taskId / contextId must be visible without exporting the report."""
     tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
     js = (tester / "main.js").read_text(encoding="utf-8")
+    copy = (tester / "copy.js").read_text(encoding="utf-8")
     css = (tester / "app.css").read_text(encoding="utf-8")
     page = (tester / "index.html").read_text(encoding="utf-8")
 
     assert "function itemContext" in js
     assert "function appendContextBlock" in js
-    assert "运行上下文" in js
+    assert 't(copy, "drawer.runContext")' in js
     assert "context-line" in js
-    assert "taskId（外层 Task）" in js
+    assert 't(copy, "drawer.taskIdOuter")' in js
     assert ".context-line" in css
     # A Modify item shows both runs: its baseline Create and the Modify itself.
     assert "function runLine" in js and "function appendBaselineBlock" in js
-    assert "基线 Create（Modify 前置）" in js
+    assert 't(copy, "baseline.title")' in js
+    for key in ("drawer.runContext", "drawer.taskIdOuter", "baseline.title"):
+        assert f'"{key}":' in copy, key
     assert "run-cell" in js and "run-line" in css
     assert '<th>RunId</th>' in page
     # The RunId cell must actually be appended: the header and the row have 11 columns.
@@ -968,7 +1019,7 @@ def test_the_console_has_a_concurrency_control() -> None:
     assert "maxConcurrency" in js
     assert "concurrency: Number($(\"config-concurrency\")" in js
     assert "/items/${index}/cancel" in js
-    assert "运行中 ${summary.running || 0}" in js
+    assert 't(copy, "progress.running"' in js
 
 
 async def test_the_meta_advertises_the_round_cap(client: httpx.AsyncClient) -> None:
@@ -1029,9 +1080,11 @@ async def test_a_multi_round_batch_rejects_keep_tasks(client: httpx.AsyncClient)
 def test_the_console_shows_a_langfuse_export_warning() -> None:
     tester = Path(__file__).resolve().parent.parent / "demo" / "web" / "tester"
     js = (tester / "main.js").read_text(encoding="utf-8")
+    copy = (tester / "copy.js").read_text(encoding="utf-8")
 
     assert "item.langfuseWarning" in js
-    assert "Langfuse 导出失败" in js
+    assert 't(copy, "langfuse.exportFailed")' in js
+    assert '"langfuse.exportFailed":' in copy
 
 
 def test_the_console_has_a_round_control() -> None:
