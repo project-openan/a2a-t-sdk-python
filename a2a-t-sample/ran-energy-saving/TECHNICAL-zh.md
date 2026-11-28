@@ -7,7 +7,7 @@ OSS 代理、MIE 审批以及内部观测/审核控制台的说明已不再适�
 
 | 进程 | 模块 | 默认端口 | 职责 |
 |---|---|---:|---|
-| Web UI | `demo.web.serve` | 8080 | presentation + `/tester` + `/runs` |
+| Web UI | `demo.web.serve` | 8080 | presentation + `/tester` + `/status` |
 | 入站 gateway | `protocol.client_gateway` | 8001 | A2A 调用方（Gemini Enterprise）→ 客户端 run |
 | 本地 RAN 服务端 | `protocol.server_app` | 8000 | 进场前自测的参考服务端 |
 | 回调接收 | UI/gateway 内部 | 9000 / 9001 | 网管推送 |
@@ -63,7 +63,9 @@ double；验收使用 live 端点。
 
 ## 7. 可观测性
 
-- `/runs` 是只读运行控制台（SQLite + wire + trace）。
+- `/status` 是只读运行状态页（批次、run、共享 SDK 池）。
+- `/tester` 与 `/status` 跟随进程语言（`--language`，默认 `en-US`，修改需重启）。tester 批次
+  记录创建语言，消息与导出保持该语言；不提供运行时切换。证据与协议错误保持原文。
 - Langfuse OTLP 导出可选且 best-effort；未配置时为空操作。
 - trace / Langfuse / metrics 失败不影响协议结果。
 

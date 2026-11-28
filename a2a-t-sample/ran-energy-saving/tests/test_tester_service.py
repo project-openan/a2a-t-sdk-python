@@ -57,6 +57,7 @@ from shared.run_constants import (
     FINAL_STATE_INPUT_INVALID,
     FINAL_STATE_TASK_COMPLETED,
     FINAL_STATE_TASK_FAILED,
+    LANGUAGE_EN,
     LANGUAGE_ZH,
     PROTOCOL_PURE,
     TASK_STATE_SUBMITTED,
@@ -306,6 +307,7 @@ def _manager(
     model_label: str = "",
     judge_model_label: str = "",
     pure_hop: str = "",
+    language: str = LANGUAGE_ZH,
 ) -> EvalBatchManager:
     # Only pass ``judge`` when a test supplies one: every historical test keeps constructing the
     # manager without the P2 keyword so an unimplemented judge cannot make them fail too.
@@ -317,9 +319,9 @@ def _manager(
         server_url=None,
         server_auth_token=None,
         runs_dir=tmp_path,
-        # The historical assertions in this module are Chinese; keep the fixture on the language
-        # whose messages they describe. English messages have their own catalog tests.
-        language=LANGUAGE_ZH,
+        # The historical assertions in this module are Chinese; keep the default fixture on the
+        # language whose messages they describe. English messages have their own catalog tests.
+        language=language,
         model_mode=model_mode,
         model_label=model_label,
         judge_model_label=judge_model_label,
@@ -2665,6 +2667,22 @@ def test_an_old_v2_batch_loads_with_empty_export_fields(tmp_path: Path) -> None:
     assert item["intent"] is None
     assert item["answer"] is None
     assert item["refs"] == {}
+
+
+def test_batch_messages_follow_the_batch_not_the_process_language(tmp_path: Path) -> None:
+    """D9: reopening a batch under another process language keeps its own messages."""
+    manager = _manager(tmp_path, _FakeRuns(_finish), language=LANGUAGE_EN)
+    created = manager.create(
+        case_ids=[1],
+        protocols=[PROTOCOL_A2A_T],
+        stop_after="validate",
+        timeout_seconds=2,
+    )
+    batch = manager._batches[str(created["batchId"])]
+    batch.language = LANGUAGE_ZH
+
+    assert manager.language == LANGUAGE_EN
+    assert manager._batch_messages(batch).language == LANGUAGE_ZH
 
 
 def test_an_old_batch_without_a_language_loads_as_chinese(tmp_path: Path) -> None:

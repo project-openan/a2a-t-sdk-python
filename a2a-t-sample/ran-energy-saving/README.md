@@ -94,6 +94,15 @@ A2AT_SAMPLE_MODEL_MODE=live python run_demo.py --nms --ui
 The acceptance run must target the real NMS; the local reference server is for pre-lab rehearsal
 only.
 
+### Language
+
+The sample has one process-level language: `--language en-US|zh-CN` (also `A2AT_LANGUAGE`). The
+launcher default is `en-US`. It selects the SDK prompt resources, scenario data, presentation,
+`/tester` and `/status`; changing it requires a restart. The tester records the language each batch
+was created in, so opening an older batch after a language change keeps that batch's messages and
+export in their original language, with a notice in the console. OSP case text, wire/trace evidence
+and protocol error text are never translated.
+
 ## 4. Observability
 
 - `/tester` is the acceptance console: catalog-driven batches, per-case evidence and export.

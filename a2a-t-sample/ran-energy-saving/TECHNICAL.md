@@ -71,6 +71,9 @@ and report presence are compared.
 ## 7. Observability
 
 - `/status` is the read-only tester status page (batches, runs, shared SDK pool).
+- `/tester` and `/status` follow the process language (`--language`, default `en-US`, restart
+  required). Tester batches record their creation language and keep their messages and export in
+  it; there is no runtime language switch. Evidence and protocol errors stay verbatim.
 - Langfuse OTLP export is optional and best-effort; without keys it is a no-op.
 - Trace, Langfuse and metrics failures never change a protocol result.
 

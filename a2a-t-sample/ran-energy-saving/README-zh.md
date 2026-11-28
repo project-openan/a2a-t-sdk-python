@@ -34,8 +34,8 @@ python run_demo.py --nms --ui --protocol both
 真机 `--nms` 固定使用 webhook transport，交付 `.env` 模板中应显式设置
 `A2AT_SAMPLE_LONG_TASK_TRACKING=1`。
 
-3. 打开 `http://127.0.0.1:8080/`，选择协议（A2A-T 或标准 A2A），输入运维请求，并在 `/runs`
-   查看证据。
+3. 打开 `http://127.0.0.1:8080/`，选择协议（A2A-T 或标准 A2A），输入运维请求，并在页面时间线
+   或 `/tester` 查看证据。
 
 ### Gemini Enterprise 网关
 
@@ -84,6 +84,13 @@ python run_demo.py --nms --ui
 ```
 
 正式验收必须对准真机网管；本地参考服务端只用于进场前演练。
+
+### 语言
+
+样例只有一种进程级语言：`--language en-US|zh-CN`（也可用 `A2AT_LANGUAGE`），启动器默认
+`en-US`。它决定 SDK 提示词资源、场景数据、presentation、`/tester` 与 `/status` 的语言，修改后
+需要重启。tester 会记录每个批次的创建语言；切换语言后打开旧批次，消息与导出仍使用该批次的
+原语言，界面会给出提示。OSP 用例原文、wire/trace 证据与协议错误文本不做翻译。
 
 ## 4. 可观测性
 
