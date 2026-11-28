@@ -2552,7 +2552,9 @@ class EvalBatchManager:
                 trace_id=item.trace_id,
             )
             item.intent_meta["traceparentSource"] = traceparent_source
-            item.answer = build_answer(run, refs=item.refs, traceparent=traceparent)
+            item.answer = build_answer(
+                run, refs=item.refs, traceparent=traceparent, messages=messages
+            )
         except Exception:  # noqa: BLE001 - the export evidence must never fail the item
             _LOGGER.warning("tester export evidence failed for run %s", run.run_id, exc_info=True)
 

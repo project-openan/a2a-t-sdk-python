@@ -26,6 +26,8 @@ from typing import Any, Final
 from langfuse_export.cli import export_full
 from langfuse_export.config import Config
 
+from demo.web.tester.messages import TesterMessages
+
 #: File name of the per-run metrics cache inside ``runs/<runId>/langfuse-export``.
 METRICS_CACHE_FILENAME: Final[str] = "metrics.json"
 
@@ -69,6 +71,48 @@ _TRACE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{32}$")
 
 _EMPTY_ROW: Final[tuple[str, ...]] = ("",) * len(TRACE_COLUMN_HEADERS)
 
+#: Message-catalog keys of the nine headers, in column order.
+_TRACE_HEADER_KEYS: Final[tuple[str, ...]] = (
+    "langfuse_header_input_tokens",
+    "langfuse_header_cached_input_tokens",
+    "langfuse_header_output_tokens",
+    "langfuse_header_total_tokens",
+    "langfuse_header_negotiation_triggered",
+    "langfuse_header_negotiation_latency",
+    "langfuse_header_negotiation_rounds",
+    "langfuse_header_end_to_end_latency",
+    "langfuse_header_client_interceptions",
+)
+
+#: Message-catalog keys of the header notes; ``None`` leaves the header without a comment.
+_TRACE_NOTE_KEYS: Final[tuple[str | None, ...]] = (
+    "langfuse_note_input_tokens",
+    "langfuse_note_cached_input_tokens",
+    "langfuse_note_output_tokens",
+    "langfuse_note_total_tokens",
+    "langfuse_note_negotiation_triggered",
+    "langfuse_note_negotiation_latency",
+    "langfuse_note_negotiation_rounds",
+    "langfuse_note_end_to_end_latency",
+    "langfuse_note_client_interceptions",
+)
+
+
+def trace_column_headers(messages: TesterMessages | None = None) -> tuple[str, ...]:
+    """Return the nine headers in ``messages``' language (Chinese by default)."""
+    if messages is None:
+        return TRACE_COLUMN_HEADERS
+    return tuple(messages.get(key) for key in _TRACE_HEADER_KEYS)
+
+
+def trace_column_notes(messages: TesterMessages | None = None) -> tuple[str | None, ...]:
+    """Return the header comments in ``messages``' language (Chinese by default)."""
+    if messages is None:
+        return TRACE_COLUMN_NOTES
+    return tuple(
+        None if key is None else messages.get(key) for key in _TRACE_NOTE_KEYS
+    )
+
 
 def build_trace_columns(
     config: Config | None,
@@ -77,6 +121,7 @@ def build_trace_columns(
     trace_id: str,
     out_root: Path,
     settled: bool = True,
+    messages: TesterMessages | None = None,
 ) -> tuple[list[object], str]:
     """Return the nine Langfuse cells of one run plus an explanatory note.
 
@@ -88,20 +133,23 @@ def build_trace_columns(
     the fetch happened long enough after the run finished for Langfuse to hold every span; an
     unsettled result is cached but never served, so the next export refreshes it.
     """
+    if messages is None:
+        messages = TesterMessages()
     if config is None:
-        return list(_EMPTY_ROW), _failure("未配置 Langfuse 凭据")
+        return list(_EMPTY_ROW), _failure(messages.get("langfuse_no_credentials"), messages)
     if not trace_id:
-        return list(_EMPTY_ROW), _failure("缺少 Langfuse trace id")
+        return list(_EMPTY_ROW), _failure(messages.get("langfuse_missing_trace_id"), messages)
     if not _TRACE_ID_PATTERN.match(trace_id):
-        return list(_EMPTY_ROW), _failure("Langfuse trace id 格式无效")
+        return list(_EMPTY_ROW), _failure(messages.get("langfuse_invalid_trace_id"), messages)
     if not run_id:
-        return list(_EMPTY_ROW), _failure("缺少 run id，无法定位 Langfuse 导出目录")
-    cached = _read_cache(out_root, trace_id)
+        return list(_EMPTY_ROW), _failure(messages.get("langfuse_missing_run_id"), messages)
+    cached = _read_cache(out_root, trace_id, messages)
     if cached is not None:
         return cached
     remaining = _cooldown_remaining()
     if remaining > 0:
-        return list(_EMPTY_ROW), _failure(f"Langfuse 限流冷却中（剩余 {remaining} 秒）")
+        note = messages.get("langfuse_cooldown", seconds=remaining)
+        return list(_EMPTY_ROW), _failure(note, messages)
     try:
         result = export_full(
             config,
@@ -112,18 +160,23 @@ def build_trace_columns(
             expand_metadata=["detail"],
         )
     except Exception as exc:  # noqa: BLE001 - a report export must never fail on observability
-        note = _failure(f"{type(exc).__name__}: {exc}")
+        note = _failure(f"{type(exc).__name__}: {exc}", messages)
         _note_rate_limit(note)
         return list(_EMPTY_ROW), note
     metrics = result.get("metrics") if isinstance(result, Mapping) else None
     if not isinstance(metrics, Mapping):
         warnings = result.get("warnings") if isinstance(result, Mapping) else None
-        detail = "；".join(str(item) for item in warnings) if isinstance(warnings, list) else ""
-        note = _failure(detail or "导出结果缺少 metrics")
+        separator = messages.get("export_note_separator")
+        detail = (
+            separator.join(str(item) for item in warnings)
+            if isinstance(warnings, list)
+            else ""
+        )
+        note = _failure(detail or messages.get("langfuse_no_metrics"), messages)
         _note_rate_limit(note)
         return list(_EMPTY_ROW), note
     _write_cache(out_root, trace_id, run_id, metrics, settled=settled)
-    return _values(metrics), ""
+    return _values(metrics, messages), ""
 
 
 def _cache_path(out_root: Path) -> Path:
@@ -131,7 +184,9 @@ def _cache_path(out_root: Path) -> Path:
     return Path(out_root) / METRICS_CACHE_FILENAME
 
 
-def _read_cache(out_root: Path, trace_id: str) -> tuple[list[object], str] | None:
+def _read_cache(
+    out_root: Path, trace_id: str, messages: TesterMessages
+) -> tuple[list[object], str] | None:
     """Return the cached cells when a settled cache belongs to this trace, else ``None``."""
     path = _cache_path(out_root)
     try:
@@ -145,7 +200,7 @@ def _read_cache(out_root: Path, trace_id: str) -> tuple[list[object], str] | Non
     metrics = document.get("metrics")
     if not isinstance(metrics, Mapping):
         return None
-    return _values(metrics), ""
+    return _values(metrics, messages), ""
 
 
 def _write_cache(
@@ -194,19 +249,24 @@ def _note_rate_limit(note: str) -> None:
         _cooldown_until = time.monotonic() + RATE_LIMIT_COOLDOWN_SECONDS
 
 
-def _values(metrics: Mapping[str, Any]) -> list[object]:
+def _values(metrics: Mapping[str, Any], messages: TesterMessages | None = None) -> list[object]:
     """Map one metrics document onto the nine cells; a missing number is blank, not zero."""
     tokens = _map(metrics.get("tokens"))
     negotiation = _map(metrics.get("negotiation"))
     latency = _map(metrics.get("latency"))
     interception = _map(metrics.get("clientInterception"))
     rounds = _int(negotiation.get("rounds"))
+    if messages is None:
+        messages = TesterMessages()
+    yes_no = "" if rounds is None else (
+        messages.get("export_yes") if rounds > 0 else messages.get("export_no")
+    )
     return [
         _int(tokens.get("input"), 0),
         _int(tokens.get("cachedInput"), 0),
         _int(tokens.get("output"), 0),
         _int(tokens.get("total"), 0),
-        "" if rounds is None else ("是" if rounds > 0 else "否"),
+        yes_no,
         _or_blank(_int(negotiation.get("latencyMs"))),
         _or_blank(rounds),
         _or_blank(_int(latency.get("endToEndMs"))),
@@ -228,8 +288,10 @@ def _or_blank(value: int | None) -> object:
     return "" if value is None else value
 
 
-def _failure(reason: str) -> str:
+def _failure(reason: str, messages: TesterMessages | None = None) -> str:
+    if messages is None:
+        messages = TesterMessages()
     text = " ".join(str(reason).split())
     if len(text) > 200:
         text = text[:200] + "…"
-    return f"Langfuse 指标未取到：{text}"
+    return messages.get("langfuse_unavailable", text=text)

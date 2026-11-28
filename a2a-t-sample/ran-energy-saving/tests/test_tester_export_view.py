@@ -19,9 +19,11 @@ from demo.web.tester.export_view import (
     result_label,
     score_for,
 )
+from demo.web.tester.messages import TesterMessages
 from protocol.client_flow import ClientFlowResult
 from protocol.client_service import RunState
 from protocol.transcript import NegotiationTranscript
+from shared.run_constants import LANGUAGE_EN
 
 
 def test_an_identical_intent_is_reported_as_fully_matching() -> None:
@@ -371,6 +373,22 @@ def test_a_missing_wire_log_reconstructs_a_labelled_traceparent(tmp_path: Path) 
     assert source == "reconstructed"
     assert value.startswith(f"00-{trace_id}-")
     assert value.endswith("-01")
+
+
+def test_an_english_answer_uses_english_step_labels() -> None:
+    run = _answer_run()
+
+    answer = build_answer(
+        run,
+        refs={"taskT": "## Operation Type\nCreate"},
+        traceparent="00-" + "b" * 32 + "-" + "0" * 15 + "1-01",
+        messages=TesterMessages(LANGUAGE_EN),
+    )
+
+    steps = [exchange["step"] for exchange in answer["exchanges"]]
+    assert steps
+    assert all(not any("一" <= char <= "鿿" for char in step) for step in steps)
+    assert steps[0] == "Sent Task-T request"
 
 
 def test_the_answer_carries_the_reference_workbook_keys() -> None:

@@ -34,10 +34,11 @@ from demo.web.tester.export_view import (
     verdict_reason,
 )
 from demo.web.tester.langfuse_columns import (
-    TRACE_COLUMN_HEADERS,
-    TRACE_COLUMN_NOTES,
     TRACE_COLUMN_WIDTHS,
+    trace_column_headers,
+    trace_column_notes,
 )
+from demo.web.tester.messages import TesterMessages
 from demo.web.wire_records import read_wire_records
 
 _STAGE_ORDER: Final[tuple[str, ...]] = (
@@ -51,71 +52,63 @@ _STAGE_ORDER: Final[tuple[str, ...]] = (
     "final",
 )
 
-#: Column order of the arbitration worksheet (the reference workbook's naming).
-_REFERENCE_HEADERS: Final[tuple[str, ...]] = (
-    "traceId",
-    "协议",
-    "用例编号",
-    "用例名称",
-    "任务类型",
-    "QA_ID",
-    "UID",
-    "设计人",
-    "问题",
-    "原始请求",
-    "标准化请求",
-    "意图理解结果(结构化JSON)",
-    "SDK抽取意图",
-    "意图来源",
-    "期望意图",
-    "answer与reference差异点",
-    "被测模型生成答案",
-    "交互报文",
-    "仲裁人-EVAL-额外结果-执行轨迹",
-    "仲裁人-EVAL-额外结果-任务状态",
-    "仲裁人-EVAL-额外结果-端到端时延(ms)",
-    "协商轮次",
-    "协商触发",
-    "协商成功",
-    "仲裁人-EVAL-额外结果-输出token",
-    "仲裁人-EVAL-额外结果-总token",
-    "执行状态",
-    "自动评分",
-    "最终得分",
-    "汇总结果",
-    "判定原因",
-    "仲裁得分",
-    "人工标记结果",
-    "备注",
-    *TRACE_COLUMN_HEADERS,
+#: Message-catalog keys of the arbitration worksheet's fixed columns.
+_REFERENCE_HEADER_KEYS: Final[tuple[str, ...]] = (
+    "export_header_trace_id",
+    "export_header_protocol",
+    "export_header_case_id",
+    "export_header_case_name",
+    "export_header_task_type",
+    "export_header_qa_id",
+    "export_header_uid",
+    "export_header_designer",
+    "export_header_issue",
+    "export_header_raw_request",
+    "export_header_normalized_request",
+    "export_header_server_intent",
+    "export_header_sdk_intent",
+    "export_header_intent_source",
+    "export_header_expected_intent",
+    "export_header_intent_diff",
+    "export_header_model_answer",
+    "export_header_interaction",
+    "export_header_trajectory",
+    "export_header_task_state",
+    "export_header_end_to_end",
+    "export_header_negotiation_rounds",
+    "export_header_negotiation_triggered",
+    "export_header_negotiation_succeeded",
+    "export_header_output_tokens",
+    "export_header_total_tokens",
+    "export_header_execution_status",
+    "export_header_auto_score",
+    "export_header_final_score",
+    "export_header_summary_result",
+    "export_header_verdict_reason",
+    "export_header_arbitration_score",
+    "export_header_manual_mark",
+    "export_header_notes",
 )
 
 #: Excel's hard limit of one cell's text length.
 _MAX_CELL_CHARS: Final[int] = 32000
 
-#: Suffix of an interaction cell that did not fit one Excel cell.
-_WIRE_TRUNCATED_NOTE: Final[str] = "…（已截断，完整逐帧报文见「交互报文」工作表）"
-#: Suffix of a trajectory cell that did not fit one Excel cell.
-_TRAJECTORY_TRUNCATED_NOTE: Final[str] = "…（轨迹已截断，完整报文见「交互报文」列）"
-#: Note of an item that never started a run (a validate-only or intercepted-miss item).
-_NO_RUN_NOTE: Final[str] = "本用例未启动 run。"
-#: Note of an export asked for without the runs directory.
-_NO_RUNS_DIR_NOTE: Final[str] = "导出时未提供 run 目录，无法读取交互报文。"
-#: Note of a run whose wire logs are absent (capture off, or the run directory was cleaned up).
-_NO_WIRE_NOTE: Final[str] = "run {run_id} 无 wire 报文（未开启报文记录或文件已清理）。"
-#: Header of the interaction cell, naming the files it merges.
-_WIRE_HEADER: Final[str] = "run {run_id} | {frames} 帧 | wire.jsonl / wire-oss.jsonl / wire-error.jsonl"
 
-#: Note written when an item never produced a run answer (validate-only batch).
-_NO_ANSWER_NOTE: Final[str] = "未执行发送阶段"
-#: Note written when the downstream accepted the Task without returning its reading.
-_NO_SERVER_INTENT_NOTE: Final[str] = "下游未返回结构化意图"
-#: Note written when the SDK intent stage did not run (pure A2A has no SDK stages).
-_NO_SERVER_INTENT_PURE_NOTE: Final[str] = "纯 A2A 未采集服务端意图"
-#: Note written when an old batch has no intent data at all.
-_NO_INTENT_NOTE: Final[str] = "本批次未采集意图"
-#: Note written when the traceparent could not be read from the wire log.
-_REBUILT_TRACE_NOTE: Final[str] = "traceparent 为重建值"
+def _reference_headers(messages: TesterMessages) -> tuple[str, ...]:
+    """Return the arbitration column order in ``messages``' language."""
+    return tuple(messages.get(key) for key in _REFERENCE_HEADER_KEYS) + trace_column_headers(
+        messages
+    )
+
+
+def _resolve_messages(
+    batch: Mapping[str, Any], messages: TesterMessages | None
+) -> TesterMessages:
+    """Use the given messages, else the batch's generation language (D9), else Chinese."""
+    if messages is not None:
+        return messages
+    language = batch.get("language")
+    return TesterMessages(language if isinstance(language, str) and language else "")
 
 
 #: Per-run Langfuse cells (``runId -> (nine values, note)``). The route fills it before calling
@@ -128,6 +121,7 @@ def write_report(
     *,
     runs_dir: Path | None = None,
     trace_columns: TraceColumns | None = None,
+    messages: TesterMessages | None = None,
 ) -> bytes:
     """Build the XLSX report of one batch snapshot.
 
@@ -137,12 +131,16 @@ def write_report(
             ``None`` keeps the report exportable when only the snapshot is available.
         trace_columns: Langfuse metrics per run id. ``None`` leaves the nine columns blank, which
             keeps the workbook structure stable when observability is off or not requested.
+        messages: The batch's message set. ``None`` derives it from the batch's ``language``
+            (defaulting to Chinese), so a historical batch exports in the language it was created
+            in even under another process language (D9).
     """
+    messages = _resolve_messages(batch, messages)
     rounds = _rounds_of(batch)
     multi = rounds > 1
     workbook = Workbook()
     reference = workbook.active
-    reference.title = "仲裁格式"
+    reference.title = messages.get("export_sheet_arbitration")
     overflow: list[tuple[Mapping[str, Any], list[str]]] = []
     _write_reference_sheet(
         reference,
@@ -151,31 +149,32 @@ def write_report(
         runs_dir=runs_dir,
         overflow=overflow,
         trace_columns=trace_columns,
+        messages=messages,
     )
-    results = workbook.create_sheet("用例结果")
+    results = workbook.create_sheet(messages.get("export_sheet_results"))
     headers: list[str] = [
-        "用例编号",
-        "用例名称",
-        "协议",
-        "执行状态",
-        "判定原因",
-        "耗时(ms)",
-        "Token 总量",
-        "Run ID",
-        "基线状态",
-        "基线 Run ID",
-        "基线 taskId",
-        "基线 state",
-        "基线错误",
-        "传输",
-        "发现",
-        "拦截校验",
-        "拦截后补充信息",
-        *[f"{stage} 状态" for stage in _STAGE_ORDER],
-        "错误信息",
+        messages.get("export_header_case_id"),
+        messages.get("export_header_case_name"),
+        messages.get("export_header_protocol"),
+        messages.get("export_header_execution_status"),
+        messages.get("export_header_verdict_reason"),
+        messages.get("export_header_duration_ms"),
+        messages.get("export_header_total_token_count"),
+        messages.get("export_header_run_id"),
+        messages.get("export_header_baseline_status"),
+        messages.get("export_header_baseline_run_id"),
+        messages.get("export_header_baseline_task_id"),
+        messages.get("export_header_baseline_state"),
+        messages.get("export_header_baseline_error"),
+        messages.get("export_header_transport"),
+        messages.get("export_header_discovery"),
+        messages.get("export_header_interception_validation"),
+        messages.get("export_header_interception_followup"),
+        *[messages.get("export_header_stage_status", stage=stage) for stage in _STAGE_ORDER],
+        messages.get("export_header_error"),
     ]
     if multi:
-        headers.insert(3, "轮次")
+        headers.insert(3, messages.get("export_header_round"))
     results.append(list(headers))
     _style_header(results)
     items = batch.get("items")
@@ -193,7 +192,7 @@ def write_report(
             item.get("name", ""),
             item.get("protocol", ""),
             item.get("status", ""),
-            verdict_reason(item),
+            verdict_reason(item, messages),
             item.get("durationMs", ""),
             token_map.get("total", ""),
             item.get("runId", ""),
@@ -205,7 +204,7 @@ def write_report(
             batch.get("transport", ""),
             batch.get("discovery", ""),
             _interception_verdict(item),
-            _interception_followup(item),
+            _interception_followup(item, messages),
             *[
                 (stage_map.get(stage, {}).get("status", "") if isinstance(stage_map.get(stage), Mapping) else "")
                 for stage in _STAGE_ORDER
@@ -225,10 +224,19 @@ def write_report(
         widths.insert(3, 6)
     _set_widths(results, tuple(widths))
 
-    diffs = workbook.create_sheet("阶段差异")
-    diff_headers = ["用例编号", "协议", "阶段", "状态", "字段", "预期", "实际", "说明"]
+    diffs = workbook.create_sheet(messages.get("export_sheet_stage_diffs"))
+    diff_headers = [
+        messages.get("export_header_case_id"),
+        messages.get("export_header_protocol"),
+        messages.get("export_header_stage"),
+        messages.get("export_header_status"),
+        messages.get("export_header_field"),
+        messages.get("export_header_expected"),
+        messages.get("export_header_actual"),
+        messages.get("export_header_detail"),
+    ]
     if multi:
-        diff_headers.insert(2, "轮次")
+        diff_headers.insert(2, messages.get("export_header_round"))
     diffs.append(diff_headers)
     _style_header(diffs)
     for item in items if isinstance(items, list) else []:
@@ -240,7 +248,7 @@ def write_report(
         interception = item.get("interception")
         blocked = interception.get("stages") if isinstance(interception, Mapping) else None
         if isinstance(blocked, Mapping):
-            sources.append(("拦截/", blocked))
+            sources.append((messages.get("export_interception_stage_prefix"), blocked))
         sources.append(("", stage_map))
         for prefix, stage_source in sources:
             for stage_name, stage in stage_source.items():
@@ -284,8 +292,10 @@ def write_report(
         diff_widths.insert(2, 6)
     _set_widths(diffs, tuple(diff_widths))
 
-    summary = workbook.create_sheet("汇总")
-    summary.append(["指标", "值"])
+    summary = workbook.create_sheet(messages.get("export_sheet_summary"))
+    summary.append(
+        [messages.get("export_header_metric"), messages.get("export_header_value")]
+    )
     _style_header(summary)
     raw_summary = batch.get("summary")
     summary_map = raw_summary if isinstance(raw_summary, Mapping) else {}
@@ -304,33 +314,48 @@ def write_report(
     # An interaction transcript that does not fit one Excel cell keeps every frame here instead
     # of losing its tail: one row per wire frame, chunked only when a single frame is oversized.
     if overflow:
-        _write_wire_sheet(workbook.create_sheet("交互报文"), overflow)
+        _write_wire_sheet(
+            workbook.create_sheet(messages.get("export_sheet_wire")), overflow, messages
+        )
 
     if multi:
-        _write_round_sheet(workbook.create_sheet("轮次汇总"), batch, rounds)
+        _write_round_sheet(
+            workbook.create_sheet(messages.get("export_sheet_rounds")),
+            batch,
+            rounds,
+            messages,
+        )
 
     plan = batch.get("plan")
     if isinstance(plan, Mapping):
-        _write_plan_sheet(workbook.create_sheet("批次计划"), plan)
+        _write_plan_sheet(
+            workbook.create_sheet(messages.get("export_sheet_plan")), plan, messages
+        )
 
     # The decision-quality appendix is only meaningful when at least one agent-authored negotiation
     # produced it; a batch without it keeps exactly the four historical sheets.
     if _has_client_quality(batch):
-        _write_client_quality_sheet(workbook.create_sheet("client 决策质量"), batch)
+        _write_client_quality_sheet(
+            workbook.create_sheet(messages.get("export_sheet_client_quality")), batch, messages
+        )
 
     # The recorded A2A reply is reference text, not replayed; export it next to the case so a
     # reviewer can compare it with the agent's own decision without opening the YAML.
     if _has_client_replies(batch):
-        _write_client_replies_sheet(workbook.create_sheet("客户端答复参考"), batch)
+        _write_client_replies_sheet(
+            workbook.create_sheet(messages.get("export_sheet_client_replies")), batch, messages
+        )
 
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
 
 
-def _write_plan_sheet(sheet: Worksheet, plan: Mapping[str, Any]) -> None:
+def _write_plan_sheet(
+    sheet: Worksheet, plan: Mapping[str, Any], messages: TesterMessages
+) -> None:
     """Write the batch plan as key/value rows so a report names its own reproducibility context."""
-    sheet.append(["项目", "值"])
+    sheet.append([messages.get("export_header_item"), messages.get("export_header_value")])
     _style_header(sheet)
     environment = plan.get("environment")
     environment_text = ""
@@ -340,14 +365,19 @@ def _write_plan_sheet(sheet: Worksheet, plan: Mapping[str, Any]) -> None:
         )
     protocols = plan.get("protocols")
     rows = (
-        ("协议", " / ".join(str(value) for value in protocols) if isinstance(protocols, list) else protocols),
-        ("环境", environment_text),
-        ("协商模型", plan.get("negotiationModel", "")),
-        ("判定模型", plan.get("judgeModel", "")),
-        ("协商原则版本", plan.get("principlesVersion", "")),
-        ("NMS 版本", plan.get("nmsVersion", "")),
-        ("执行到", plan.get("stopAfter", "")),
-        ("轮次", plan.get("rounds", "")),
+        (
+            messages.get("export_header_protocol"),
+            " / ".join(str(value) for value in protocols)
+            if isinstance(protocols, list)
+            else protocols,
+        ),
+        (messages.get("export_plan_environment"), environment_text),
+        (messages.get("export_plan_negotiation_model"), plan.get("negotiationModel", "")),
+        (messages.get("export_plan_judge_model"), plan.get("judgeModel", "")),
+        (messages.get("export_plan_principles_version"), plan.get("principlesVersion", "")),
+        (messages.get("export_plan_nms_version"), plan.get("nmsVersion", "")),
+        (messages.get("export_plan_stop_after"), plan.get("stopAfter", "")),
+        (messages.get("export_plan_rounds"), plan.get("rounds", "")),
     )
     for key, value in rows:
         sheet.append([key, value])
@@ -367,9 +397,18 @@ def _has_client_replies(batch: Mapping[str, Any]) -> bool:
     return False
 
 
-def _write_client_replies_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> None:
+def _write_client_replies_sheet(
+    sheet: Worksheet, batch: Mapping[str, Any], messages: TesterMessages
+) -> None:
     """Write the recorded A2A (P-column) replies as reference text."""
-    sheet.append(["用例编号", "协议", "轮次", "记录答复"])
+    sheet.append(
+        [
+            messages.get("export_header_case_id"),
+            messages.get("export_header_protocol"),
+            messages.get("export_header_round"),
+            messages.get("export_header_recorded_replies"),
+        ]
+    )
     _style_header(sheet)
     items = batch.get("items")
     for item in items if isinstance(items, list) else []:
@@ -383,7 +422,7 @@ def _write_client_replies_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> N
                     item.get("caseId", ""),
                     item.get("protocol", ""),
                     index,
-                    _cell(reply),
+                    _cell(reply, messages),
                 ]
             )
     _set_widths(sheet, (12, 10, 8, 96))
@@ -398,25 +437,27 @@ def _has_client_quality(batch: Mapping[str, Any]) -> bool:
     return False
 
 
-def _write_client_quality_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> None:
+def _write_client_quality_sheet(
+    sheet: Worksheet, batch: Mapping[str, Any], messages: TesterMessages
+) -> None:
     """Write one row per ``(case, protocol, round)`` of the client decision-quality appendix."""
     sheet.append(
         [
-            "用例编号",
-            "协议",
-            "协商轮次",
-            "决策",
-            "提案",
-            "期望",
-            "动作",
-            "值",
-            "结构",
-            "复核",
-            "覆盖",
-            "质量",
-            "人工复核",
-            "判定方式",
-            "理由",
+            messages.get("export_header_case_id"),
+            messages.get("export_header_protocol"),
+            messages.get("export_header_negotiation_round"),
+            messages.get("export_header_decision"),
+            messages.get("export_header_proposal"),
+            messages.get("export_header_quality_expected"),
+            messages.get("export_header_action"),
+            messages.get("export_header_value"),
+            messages.get("export_header_structure"),
+            messages.get("export_header_review"),
+            messages.get("export_header_coverage"),
+            messages.get("export_header_quality"),
+            messages.get("export_header_human_review"),
+            messages.get("export_header_method"),
+            messages.get("export_header_reason"),
         ]
     )
     _style_header(sheet)
@@ -437,17 +478,19 @@ def _write_client_quality_sheet(sheet: Worksheet, batch: Mapping[str, Any]) -> N
                     item.get("protocol", ""),
                     row.get("round", ""),
                     row.get("decision", ""),
-                    _cell(row.get("proposal", "")),
-                    _cell(row.get("expected", "")),
+                    _cell(row.get("proposal", ""), messages),
+                    _cell(row.get("expected", ""), messages),
                     row.get("action", ""),
                     row.get("value", ""),
                     row.get("structure", ""),
                     row.get("review", ""),
                     row.get("coverage", ""),
                     row.get("quality", ""),
-                    "是" if quality.get("needsHumanReview") is True else "否",
+                    messages.get("export_yes")
+                    if quality.get("needsHumanReview") is True
+                    else messages.get("export_no"),
                     row.get("method", ""),
-                    _cell(row.get("reason", "")),
+                    _cell(row.get("reason", ""), messages),
                 ]
             )
     _set_widths(sheet, (12, 10, 10, 10, 48, 48, 10, 10, 10, 10, 10, 10, 10, 12, 48))
@@ -461,34 +504,38 @@ def _write_reference_sheet(
     runs_dir: Path | None,
     overflow: list[tuple[Mapping[str, Any], list[str]]],
     trace_columns: TraceColumns | None,
+    messages: TesterMessages,
 ) -> None:
     """Write the arbitration worksheet: one row per batch item, reference column order.
 
     An item whose interaction transcript exceeds one Excel cell is also appended to ``overflow``
     so the caller can give every frame its own row on the fallback sheet.
     """
-    headers = list(_REFERENCE_HEADERS)
+    headers = list(_reference_headers(messages))
     if multi:
-        headers.insert(2, "轮次")
+        headers.insert(2, messages.get("export_header_round"))
     sheet.append(headers)
     _style_header(sheet)
-    _annotate_trace_headers(sheet, headers)
+    _annotate_trace_headers(sheet, headers, messages)
     items = batch.get("items")
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, Mapping):
             continue
-        wire_text, frames, records = _wire_text(item, runs_dir)
+        wire_text, frames, records = _wire_text(item, runs_dir, messages)
         oversized = len(wire_text) > _MAX_CELL_CHARS
-        shown = _truncated_wire(wire_text) if oversized else wire_text
+        shown = _truncated_wire(wire_text, messages) if oversized else wire_text
         trajectory = render_wire_trajectory(records)
         if len(trajectory) > _MAX_CELL_CHARS:
-            keep = _MAX_CELL_CHARS - len(_TRAJECTORY_TRUNCATED_NOTE)
-            trajectory = trajectory[:keep] + _TRAJECTORY_TRUNCATED_NOTE
-        row = _reference_row(item, wire_text=shown, wire_trajectory=trajectory)
-        _append_trace_cells(row, item, trace_columns)
+            note = messages.get("export_trajectory_truncated_note")
+            keep = _MAX_CELL_CHARS - len(note)
+            trajectory = trajectory[:keep] + note
+        row = _reference_row(
+            item, wire_text=shown, wire_trajectory=trajectory, messages=messages
+        )
+        _append_trace_cells(row, item, trace_columns, messages)
         if multi:
             row.insert(2, item.get("round", 1))
-        sheet.append([_cell(value) for value in row])
+        sheet.append([_cell(value, messages) for value in row])
         if oversized:
             overflow.append((item, frames))
     widths = [
@@ -505,13 +552,14 @@ def _append_trace_cells(
     row: list[object],
     item: Mapping[str, Any],
     trace_columns: TraceColumns | None,
+    messages: TesterMessages,
 ) -> None:
     """Append the nine Langfuse cells after ``备注`` and merge their note into it.
 
     ``_reference_row`` always ends with ``备注``; the trace block stays after it so the existing
     column letters (A–AH) do not move. A per-run failure note joins the same cell.
     """
-    values: Sequence[object] = ("",) * len(TRACE_COLUMN_HEADERS)
+    values: Sequence[object] = ("",) * len(trace_column_headers(messages))
     note = ""
     if trace_columns is not None:
         run_id = str(item.get("runId") or "")
@@ -521,14 +569,17 @@ def _append_trace_cells(
     note_index = len(row) - 1
     if note:
         existing = str(row[note_index] or "")
-        row[note_index] = f"{existing}；{note}" if existing else note
+        separator = messages.get("export_note_separator")
+        row[note_index] = f"{existing}{separator}{note}" if existing else note
     row.extend(values)
 
 
-def _annotate_trace_headers(sheet: Worksheet, headers: list[str]) -> None:
+def _annotate_trace_headers(
+    sheet: Worksheet, headers: list[str], messages: TesterMessages
+) -> None:
     """Explain the Langfuse-specific number definitions where they differ from the sheet."""
-    start = headers.index(TRACE_COLUMN_HEADERS[0])
-    for offset, note in enumerate(TRACE_COLUMN_NOTES):
+    start = headers.index(trace_column_headers(messages)[0])
+    for offset, note in enumerate(trace_column_notes(messages)):
         if not note:
             continue
         comment = Comment(note, "tester")
@@ -545,20 +596,25 @@ def _rounds_of(batch: Mapping[str, Any]) -> int:
     return value
 
 
-def _write_round_sheet(sheet: Worksheet, batch: Mapping[str, Any], rounds: int) -> None:
+def _write_round_sheet(
+    sheet: Worksheet,
+    batch: Mapping[str, Any],
+    rounds: int,
+    messages: TesterMessages,
+) -> None:
     """Write the per-round counts and the case × round status matrix."""
     sheet.append(
         [
-            "轮次",
-            "总数",
-            "通过",
-            "待确认",
-            "失败",
-            "错误",
-            "取消",
-            "耗时(ms)",
-            "稳定通过",
-            "可比用例",
+            messages.get("export_header_round"),
+            messages.get("export_header_total"),
+            messages.get("export_header_passed"),
+            messages.get("export_header_pending"),
+            messages.get("export_header_failed"),
+            messages.get("export_header_error_count"),
+            messages.get("export_header_cancelled"),
+            messages.get("export_header_duration_ms"),
+            messages.get("export_header_stable_passes"),
+            messages.get("export_header_comparable_cases"),
         ]
     )
     _style_header(sheet)
@@ -583,7 +639,15 @@ def _write_round_sheet(sheet: Worksheet, batch: Mapping[str, Any], rounds: int) 
         )
     sheet.append([])
     sheet.append(
-        ["用例编号", "用例名称", "协议", *[f"第 {round_index} 轮" for round_index in range(1, rounds + 1)]]
+        [
+            messages.get("export_header_case_id"),
+            messages.get("export_header_case_name"),
+            messages.get("export_header_protocol"),
+            *[
+                messages.get("export_round_column", round=round_index)
+                for round_index in range(1, rounds + 1)
+            ],
+        ]
     )
     for row in _round_matrix(batch, rounds):
         sheet.append(row)
@@ -656,7 +720,11 @@ def _round_matrix(batch: Mapping[str, Any], rounds: int) -> list[list[object]]:
 
 
 def _reference_row(
-    item: Mapping[str, Any], *, wire_text: str, wire_trajectory: str = ""
+    item: Mapping[str, Any],
+    *,
+    wire_text: str,
+    wire_trajectory: str = "",
+    messages: TesterMessages,
 ) -> list[object]:
     """Build one arbitration row from the data collected while the item ran."""
     refs = _map_of(item.get("refs"))
@@ -699,6 +767,7 @@ def _reference_row(
         render_intent_diff(
             expected_intent if isinstance(expected_intent, Mapping) else None,
             server_intent,
+            messages,
         ),
         _json_cell(answer, indent=2),
         wire_text,
@@ -714,11 +783,13 @@ def _reference_row(
         status,
         _score_cell(status),
         _score_cell(status),
-        result_label(status),
-        verdict_reason(item),
+        result_label(status, messages),
+        verdict_reason(item, messages),
         "",
         "",
-        _reference_note(item, refs, intent_meta, answer, server_intent, sdk_intent),
+        _reference_note(
+            item, refs, intent_meta, answer, server_intent, sdk_intent, messages
+        ),
     ]
 
 
@@ -729,6 +800,7 @@ def _reference_note(
     answer: Mapping[str, Any],
     server_intent: Mapping[str, Any] | None,
     sdk_intent: object,
+    messages: TesterMessages,
 ) -> str:
     """Explain the empty arbitration cells of one item."""
     notes: list[str] = []
@@ -737,62 +809,82 @@ def _reference_note(
         detail = " ".join(
             str(part) for part in (baseline.get("state"), baseline.get("error")) if part
         )
-        notes.append(f"Modify 基线 Create 失败：{detail or '未记录原因'}")
+        notes.append(
+            messages.get(
+                "export_baseline_failed",
+                detail=detail or messages.get("export_baseline_failed_no_reason"),
+            )
+        )
     if item.get("scratch") is not None:
-        notes.append("临时请求")
+        notes.append(messages.get("export_scratch_item"))
     elif not refs:
-        notes.append("本批次未采集用例元数据")
+        notes.append(messages.get("export_no_case_metadata"))
     if item.get("scratch") is None:
         if not refs:
-            notes.append(_NO_INTENT_NOTE)
+            notes.append(messages.get("export_no_intent_note"))
         elif server_intent is None and answer:
-            # A validate-only batch never sent anything; ``_NO_ANSWER_NOTE`` says that instead of
+            # A validate-only batch never sent anything; the no-answer note says that instead of
             # blaming a downstream that was never asked.
             if str(item.get("protocol") or "") == "a2a":
-                notes.append(_NO_SERVER_INTENT_PURE_NOTE)
+                notes.append(messages.get("export_no_server_intent_pure_note"))
             else:
-                notes.append(_NO_SERVER_INTENT_NOTE)
+                notes.append(messages.get("export_no_server_intent_note"))
         if not isinstance(sdk_intent, Mapping):
-            notes.append("SDK 抽取意图未采集")
+            notes.append(messages.get("export_sdk_intent_missing"))
     if not answer:
-        notes.append(_NO_ANSWER_NOTE)
+        notes.append(messages.get("export_no_answer_note"))
     if intent_meta.get("traceparentSource") == "reconstructed":
-        notes.append(_REBUILT_TRACE_NOTE)
+        notes.append(messages.get("export_rebuilt_trace_note"))
     langfuse_warning = item.get("langfuseWarning")
     if isinstance(langfuse_warning, str) and langfuse_warning:
-        notes.append(f"Langfuse 导出失败：{langfuse_warning}")
-    return "；".join(notes)
+        notes.append(messages.get("export_langfuse_warning", warning=langfuse_warning))
+    return messages.get("export_note_separator").join(notes)
 
 
 def _wire_text(
-    item: Mapping[str, Any], runs_dir: Path | None
+    item: Mapping[str, Any], runs_dir: Path | None, messages: TesterMessages
 ) -> tuple[str, list[str], list[dict[str, object]]]:
     """Return the item's interaction transcript, its per-frame blocks and the raw records."""
     run_id = str(item.get("runId") or "")
     if not run_id:
-        return _NO_RUN_NOTE, [_NO_RUN_NOTE], []
+        note = messages.get("export_no_run_note")
+        return note, [note], []
     if runs_dir is None:
-        return _NO_RUNS_DIR_NOTE, [_NO_RUNS_DIR_NOTE], []
+        note = messages.get("export_no_runs_dir_note")
+        return note, [note], []
     records = read_wire_records(runs_dir, run_id, include_errors=True)
     if not records:
-        note = _NO_WIRE_NOTE.format(run_id=run_id)
+        note = messages.get("export_no_wire_note", run_id=run_id)
         return note, [note], []
-    frames = render_wire_frames(records)
-    header = _WIRE_HEADER.format(run_id=run_id, frames=len(frames))
+    frames = render_wire_frames(records, messages)
+    header = messages.get("export_wire_header", run_id=run_id, frames=len(frames))
     return f"{header}\n\n" + "\n\n".join(frames), frames, records
 
 
-def _truncated_wire(text: str) -> str:
+def _truncated_wire(text: str, messages: TesterMessages) -> str:
     """Cut the interaction cell to Excel's limit and point at the fallback sheet."""
-    keep = _MAX_CELL_CHARS - len(_WIRE_TRUNCATED_NOTE)
-    return text[:keep] + _WIRE_TRUNCATED_NOTE
+    note = messages.get("export_wire_truncated_note")
+    keep = _MAX_CELL_CHARS - len(note)
+    return text[:keep] + note
 
 
 def _write_wire_sheet(
-    sheet: Worksheet, overflow: Sequence[tuple[Mapping[str, Any], list[str]]]
+    sheet: Worksheet,
+    overflow: Sequence[tuple[Mapping[str, Any], list[str]]],
+    messages: TesterMessages,
 ) -> None:
     """Write every frame of an oversized interaction transcript, one row per frame."""
-    sheet.append(["用例编号", "协议", "轮次", "Run ID", "帧号", "分段", "交互报文"])
+    sheet.append(
+        [
+            messages.get("export_header_case_id"),
+            messages.get("export_header_protocol"),
+            messages.get("export_header_round"),
+            messages.get("export_header_run_id"),
+            messages.get("export_header_frame"),
+            messages.get("export_header_segment"),
+            messages.get("export_header_interaction"),
+        ]
+    )
     _style_header(sheet)
     for item, frames in overflow:
         for number, frame in enumerate(frames, start=1):
@@ -890,10 +982,10 @@ def _map_of(value: object) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()} if isinstance(value, Mapping) else {}
 
 
-def _cell(value: object) -> object:
+def _cell(value: object, messages: TesterMessages) -> object:
     """Truncate one cell to Excel's limit so an oversized origin_answer never fails the export."""
     if isinstance(value, str) and len(value) > _MAX_CELL_CHARS:
-        return value[:_MAX_CELL_CHARS] + "…（已截断）"
+        return value[:_MAX_CELL_CHARS] + messages.get("export_cell_truncated")
     return value
 
 
@@ -911,14 +1003,18 @@ def _interception_verdict(item: Mapping[str, Any]) -> str:
     return f"{status}: {detail}".strip(": ")
 
 
-def _interception_followup(item: Mapping[str, Any]) -> str:
+def _interception_followup(
+    item: Mapping[str, Any], messages: TesterMessages
+) -> str:
     """Return the replacement request a blocked case was continued with, if any."""
     record = item.get("interception")
     if not isinstance(record, Mapping):
         return ""
     text = str(record.get("followupInput") or "")
     # A failed interception never dispatches the replacement: name it without implying it ran.
-    return f"（未执行）{text}" if record.get("followupSkipped") is True and text else text
+    if record.get("followupSkipped") is True and text:
+        return messages.get("export_followup_skipped", text=text)
+    return text
 
 
 def _text(value: object) -> str:

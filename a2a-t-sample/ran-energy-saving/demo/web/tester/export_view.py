@@ -69,6 +69,14 @@ _LABEL_BY_STATUS: dict[str, str] = {
     "error": "错误",
     "cancelled": "取消",
 }
+#: Catalog key of each status label, used when a ``TesterMessages`` is supplied.
+_LABEL_KEY_BY_STATUS: dict[str, str] = {
+    "passed": "export_label_passed",
+    "failed": "export_label_failed",
+    "partial": "export_label_partial",
+    "error": "export_label_error",
+    "cancelled": "export_label_cancelled",
+}
 
 
 #: Terminal states that mean the request succeeded, for the workbook's ``code`` field.
@@ -119,6 +127,7 @@ def build_answer(
     *,
     refs: Mapping[str, object],
     traceparent: str,
+    messages: TesterMessages | None = None,
 ) -> dict[str, object]:
     """Build the reference-workbook answer object of one run.
 
@@ -127,6 +136,8 @@ def build_answer(
     and the transcript events, not a raw packet capture.
     """
     del refs  # The Task-T is already carried by the outbound message_sent span.
+    if messages is None:
+        messages = TesterMessages()
     result = run.result
     report = result.report if result is not None and isinstance(result.report, Mapping) else {}
     final_state = result.final_state if result is not None else ""
@@ -140,7 +151,7 @@ def build_answer(
         "message": str(message),
         "finalResult": final_result,
         "negotiationSummary": _negotiation_summary(run),
-        "exchanges": _collect_exchanges(run),
+        "exchanges": _collect_exchanges(run, messages),
         "traceparent": traceparent,
         "taskId": run.remote_task_id or (result.task_id if result is not None else None) or "",
     }
@@ -163,8 +174,12 @@ def _negotiation_summary(run: RunState) -> dict[str, object]:
     return {"missingItems": missing, "filledParams": filled, "negotiationRounds": rounds}
 
 
-def _collect_exchanges(run: RunState) -> list[dict[str, object]]:
+def _collect_exchanges(
+    run: RunState, messages: TesterMessages | None = None
+) -> list[dict[str, object]]:
     """Return the outbound and inbound exchanges of one run in sequence order."""
+    if messages is None:
+        messages = TesterMessages()
     pending: list[tuple[int, int, dict[str, object]]] = []
     position = 0
     first_outbound = True
@@ -185,7 +200,7 @@ def _collect_exchanges(run: RunState) -> list[dict[str, object]]:
                 position,
                 {
                     "round": round_number,
-                    "step": f"发送{message_type}请求",
+                    "step": messages.get("export_step_outbound", message_type=message_type),
                     "direction": "OUT",
                     "messageType": message_type,
                     "templateUri": detail_map.get("templateUri"),
@@ -211,7 +226,7 @@ def _collect_exchanges(run: RunState) -> list[dict[str, object]]:
                     # A status/artifact row has no negotiation round. ``None`` keeps it out of the
                     # milestone trajectory instead of pretending it is round 0.
                     "round": entry.get("round") if isinstance(entry.get("round"), int) else None,
-                    "step": f"接收{message_type}",
+                    "step": messages.get("export_step_inbound", message_type=message_type),
                     "direction": "IN",
                     "messageType": message_type,
                     "templateUri": entry.get("templateUri"),
@@ -290,6 +305,7 @@ def _number(value: object) -> float:
 def render_intent_diff(
     expected: Mapping[str, object] | None,
     actual: Mapping[str, object] | None,
+    messages: TesterMessages | None = None,
 ) -> str:
     """Render the difference between the reference and the answer intent.
 
@@ -298,22 +314,26 @@ def render_intent_diff(
     A document outside the OSP schema falls back to a structural walk. ``完全一致`` when both
     documents agree; ``""`` when the answer intent was not collected (pure A2A or a batch that
     stopped before the SDK stages).
+
+    ``messages`` localizes the difference labels; ``None`` keeps Chinese.
     """
+    if messages is None:
+        messages = TesterMessages()
     if not isinstance(expected, Mapping) or not isinstance(actual, Mapping):
         return ""
     if _is_osp_intent(expected) and _is_osp_intent(actual):
         lines = [
             line
             for row in flatten_intent(expected, actual)
-            if (line := _flattened_diff_line(row))
+            if (line := _flattened_diff_line(row, messages))
         ]
-        return "\n".join(lines) if lines else DIFF_IDENTICAL
+        return "\n".join(lines) if lines else messages.get("export_diff_identical")
     missing: list[str] = []
     added: list[str] = []
     changed: list[str] = []
-    _walk(expected, actual, "", missing, added, changed)
+    _walk(expected, actual, "", missing, added, changed, messages)
     lines = [*missing, *added, *changed]
-    return "\n".join(lines) if lines else DIFF_IDENTICAL
+    return "\n".join(lines) if lines else messages.get("export_diff_identical")
 
 
 def _is_osp_intent(document: Mapping[str, object]) -> bool:
@@ -321,19 +341,26 @@ def _is_osp_intent(document: Mapping[str, object]) -> bool:
     return set(document) <= set(OSP_INTENT_KEYS)
 
 
-def _flattened_diff_line(row: CompareRow) -> str:
+def _flattened_diff_line(row: CompareRow, messages: TesterMessages) -> str:
     """Render one normalized intent row in the workbook's diff notation."""
     path = row.path.removeprefix("intent.")
     if row.verdict == INTENT_ROW_MISSING:
-        return f"缺失: {path} (ref值为 {_json(row.expected)})"
+        return messages.get("export_diff_missing", path=path, value=_json(row.expected))
     if row.verdict == INTENT_ROW_ADDED:
-        return f"新增: {path} (ans值为 {_json(row.actual)})"
+        return messages.get("export_diff_added", path=path, value=_json(row.actual))
     if row.verdict == INTENT_ROW_CHANGED:
-        return f"值变更: {path} ({_plain(row.expected)} → {_plain(row.actual)})"
+        return messages.get(
+            "export_diff_changed",
+            path=path,
+            expected=_plain(row.expected),
+            actual=_plain(row.actual),
+        )
     if row.status != INTENT_ROW_SAME:
-        return (
-            f"表达差异（归一化后一致）: {path} "
-            f"({_plain(row.expected)} → {_plain(row.actual)})"
+        return messages.get(
+            "export_diff_expression",
+            path=path,
+            expected=_plain(row.expected),
+            actual=_plain(row.actual),
         )
     return ""
 
@@ -345,31 +372,55 @@ def _walk(
     missing: list[str],
     added: list[str],
     changed: list[str],
+    messages: TesterMessages,
 ) -> None:
     """Collect missing, added and changed leaves below ``path``."""
     if isinstance(expected, Mapping) and isinstance(actual, Mapping):
         for key, value in expected.items():
             child = _child_path(path, str(key))
             if key not in actual:
-                missing.append(f"缺失: {child} (ref值为 {_json(value)})")
+                missing.append(
+                    messages.get("export_diff_missing", path=child, value=_json(value))
+                )
             else:
-                _walk(value, actual[key], child, missing, added, changed)
+                _walk(value, actual[key], child, missing, added, changed, messages)
         for key, value in actual.items():
             if key not in expected:
-                added.append(f"新增: {_child_path(path, str(key))} (ans值为 {_json(value)})")
+                added.append(
+                    messages.get(
+                        "export_diff_added",
+                        path=_child_path(path, str(key)),
+                        value=_json(value),
+                    )
+                )
         return
     if isinstance(expected, list) and isinstance(actual, list):
         for index, value in enumerate(expected):
             child = f"{path}[{index}]"
             if index >= len(actual):
-                missing.append(f"缺失: {child} (ref值为 {_json(value)})")
+                missing.append(
+                    messages.get("export_diff_missing", path=child, value=_json(value))
+                )
             else:
-                _walk(value, actual[index], child, missing, added, changed)
+                _walk(value, actual[index], child, missing, added, changed, messages)
         for index in range(len(expected), len(actual)):
-            added.append(f"新增: {path}[{index}] (ans值为 {_json(actual[index])})")
+            added.append(
+                messages.get(
+                    "export_diff_added",
+                    path=f"{path}[{index}]",
+                    value=_json(actual[index]),
+                )
+            )
         return
     if expected != actual:
-        changed.append(f"值变更: {path or '<root>'} ({_plain(expected)} → {_plain(actual)})")
+        changed.append(
+            messages.get(
+                "export_diff_changed",
+                path=path or "<root>",
+                expected=_plain(expected),
+                actual=_plain(actual),
+            )
+        )
 
 
 def _child_path(path: str, key: str) -> str:
@@ -702,11 +753,10 @@ def _before_structured(text: str) -> str:
     return text.split("{", 1)[0].strip()
 
 
-#: Label of a blank SSE line in the interaction transcript (the frame separator).
-_SSE_BLANK_LINE: Final = "(空行)"
-
-
-def render_wire_frames(records: Sequence[Mapping[str, object]]) -> list[str]:
+def render_wire_frames(
+    records: Sequence[Mapping[str, object]],
+    messages: TesterMessages | None = None,
+) -> list[str]:
     """Render the raw wire records of one run as one text block per frame.
 
     This is the evidence the arbitration sheet's interaction column shows: the request line, its
@@ -714,17 +764,25 @@ def render_wire_frames(records: Sequence[Mapping[str, object]]) -> list[str]:
     and every frame the SDK rejected. A record is printed verbatim, one frame per block, so a
     reader (human or model) can follow the exchange in order; nothing is summarized.
     """
-    return [_wire_frame(index, record) for index, record in enumerate(records, start=1)]
+    if messages is None:
+        messages = TesterMessages()
+    return [
+        _wire_frame(index, record, messages)
+        for index, record in enumerate(records, start=1)
+    ]
 
 
-def _wire_frame(index: int, record: Mapping[str, object]) -> str:
+def _wire_frame(
+    index: int, record: Mapping[str, object], messages: TesterMessages
+) -> str:
     """Render one wire record as a headed block."""
     ts = str(record.get("ts") or "")
     if _is_wire_error(record):
         return _wire_error_frame(index, ts, record)
     if "line" in record:
         line = str(record.get("line") or "")
-        return f"[{index}] {ts} IN SSE\nline: {line or _SSE_BLANK_LINE}"
+        blank_line = messages.get("export_sse_blank_line")
+        return f"[{index}] {ts} IN SSE\nline: {line or blank_line}"
     source = record.get("source")
     if isinstance(source, str) and source:
         dropped = str(record.get("dropped") or "")
@@ -896,9 +954,12 @@ def score_for(status: str) -> int | None:
     return _SCORE_BY_STATUS.get(status)
 
 
-def result_label(status: str) -> str:
+def result_label(status: str, messages: TesterMessages | None = None) -> str:
     """Return the summary label of one item status."""
-    return _LABEL_BY_STATUS.get(status, "")
+    if messages is None:
+        return _LABEL_BY_STATUS.get(status, "")
+    key = _LABEL_KEY_BY_STATUS.get(status)
+    return messages.get(key) if key is not None else ""
 
 
 __all__ = [

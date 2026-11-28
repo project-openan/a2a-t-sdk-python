@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -27,6 +28,7 @@ from demo.web.tester.service import (
 )
 from eval.osp.intent_schema import OSP_INTENT_SCHEMA
 from eval.osp.runner import load_cases
+from openpyxl import load_workbook
 from protocol.client_flow import ClientFlowResult
 from shared.config import SampleConfig
 from shared.run_constants import (
@@ -687,6 +689,16 @@ async def test_a_batch_records_the_language_it_was_created_in(
     created = await _create_tester_batch(client)
 
     assert created["language"] == LANGUAGE_EN
+
+
+async def test_the_export_follows_the_batch_language(client: httpx.AsyncClient) -> None:
+    created = await _create_tester_batch(client)
+
+    response = await client.get(f"/api/tester/batches/{created['batchId']}/export.xlsx")
+
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.content))
+    assert workbook.sheetnames[0] == "Arbitration"
 
 
 def test_tester_copy_harness_runs_in_node() -> None:

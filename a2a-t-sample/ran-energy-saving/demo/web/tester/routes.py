@@ -379,14 +379,19 @@ def build_tester_routes(
                 },
                 status_code=400,
             )
+        # The export follows the batch's generation language, not the process language (D9).
+        batch_messages = TesterMessages(str(snapshot.get("language") or LANGUAGE_ZH))
         trace_columns = None
         if langfuse_columns == "1" or (langfuse_columns == "auto" and trace_config is not None):
-            trace_columns = await asyncio.to_thread(_trace_columns, snapshot, trace_config, runs_dir)
+            trace_columns = await asyncio.to_thread(
+                _trace_columns, snapshot, trace_config, runs_dir, batch_messages
+            )
         content = await asyncio.to_thread(
             write_report,
             snapshot,
             runs_dir=runs_dir,
             trace_columns=trace_columns,
+            messages=batch_messages,
         )
         return Response(
             content,
@@ -505,12 +510,15 @@ def _trace_columns(
     snapshot: Mapping[str, Any],
     config: LangfuseConfig | None,
     runs_dir: Path | None,
+    messages: TesterMessages | None = None,
 ) -> dict[str, tuple[list[object], str]]:
     """Fetch the Langfuse cells of every distinct run in one batch snapshot.
 
     Runs are de-duplicated by ``runId`` (a multi-round batch repeats one run on several rows).
     Every per-trace failure stays on that row; a failed fetch never aborts the workbook.
+    ``messages`` is the batch's message set (Chinese when omitted).
     """
+    resolved_messages = messages if messages is not None else TesterMessages()
     targets: dict[str, str] = {}
     items = snapshot.get("items")
     for item in items if isinstance(items, list) else []:
@@ -524,9 +532,17 @@ def _trace_columns(
         return {}
     if runs_dir is None:
         empty = [""] * len(TRACE_COLUMN_HEADERS)
-        note = "Langfuse 指标未取到：导出时未提供 run 目录"
+        note = resolved_messages.get(
+            "langfuse_unavailable",
+            text=resolved_messages.get("langfuse_runs_dir_missing"),
+        )
         return {run_id: (list(empty), note) for run_id in targets}
     with ThreadPoolExecutor(max_workers=min(TRACE_FETCH_WORKERS, len(targets))) as pool:
+        # Only forward the message set when the caller supplied one, so a direct call keeps the
+        # historical four-argument helper contract (used by tests and older callers).
+        message_kwargs: dict[str, TesterMessages] = (
+            {"messages": messages} if messages is not None else {}
+        )
         futures = {
             pool.submit(
                 _trace_columns_with_timeout,
@@ -534,6 +550,7 @@ def _trace_columns(
                 run_id,
                 trace_id,
                 runs_dir / run_id / "langfuse-export",
+                **message_kwargs,
             ): run_id
             for run_id, trace_id in targets.items()
         }
@@ -544,7 +561,10 @@ def _trace_columns(
             except Exception as exc:  # noqa: BLE001 - one bad trace must not fail the report
                 collected[run_id] = (
                     [""] * len(TRACE_COLUMN_HEADERS),
-                    f"Langfuse 指标未取到：{type(exc).__name__}: {exc}",
+                    resolved_messages.get(
+                        "langfuse_unavailable",
+                        text=f"{type(exc).__name__}: {exc}",
+                    ),
                 )
         return collected
 
@@ -554,8 +574,11 @@ def _trace_columns_with_timeout(
     run_id: str,
     trace_id: str,
     out_root: Path,
+    *,
+    messages: TesterMessages | None = None,
 ) -> tuple[list[object], str]:
     """Run one export under the per-trace budget, leaving a note instead of raising."""
+    resolved_messages = messages if messages is not None else TesterMessages()
     empty: list[object] = [""] * len(TRACE_COLUMN_HEADERS)
     pool = ThreadPoolExecutor(max_workers=1)
     future = pool.submit(
@@ -564,14 +587,22 @@ def _trace_columns_with_timeout(
         run_id=run_id,
         trace_id=trace_id,
         out_root=out_root,
+        messages=messages,
     )
     try:
         return future.result(timeout=TRACE_FETCH_TIMEOUT_SECONDS)
     except FuturesTimeoutError:
         future.cancel()
-        return empty, f"Langfuse 指标未取到：单条 trace {TRACE_FETCH_TIMEOUT_SECONDS:g} 秒内未完成"
+        return empty, resolved_messages.get(
+            "langfuse_unavailable",
+            text=resolved_messages.get(
+                "langfuse_timeout", seconds=TRACE_FETCH_TIMEOUT_SECONDS
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 - one bad trace must not fail the report
-        return empty, f"Langfuse 指标未取到：{type(exc).__name__}: {exc}"
+        return empty, resolved_messages.get(
+            "langfuse_unavailable", text=f"{type(exc).__name__}: {exc}"
+        )
     finally:
         # The export may still be blocked on a socket; do not hold the batch for it.
         pool.shutdown(wait=False, cancel_futures=True)

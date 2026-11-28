@@ -10,7 +10,9 @@ import pytest
 from demo.web.tester import langfuse_columns
 from demo.web.tester import routes as tester_routes
 from demo.web.tester.langfuse_columns import TRACE_COLUMN_HEADERS, build_trace_columns
+from demo.web.tester.messages import TesterMessages
 from langfuse_export.config import Config
+from shared.run_constants import LANGUAGE_EN
 
 TRACE_ID = "0123456789abcdef0123456789abcdef"
 RUN_ID = "run-1"
@@ -86,6 +88,25 @@ def test_missing_numbers_are_blank_not_zero(monkeypatch: pytest.MonkeyPatch, tmp
 
     assert note == ""
     assert values == [0, 0, 0, 0, "", "", "", "", 0]
+
+
+def test_an_english_catalog_renders_yes_no_and_failure_notes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        langfuse_columns,
+        "export_full",
+        lambda *args, **kwargs: {"metrics": {"negotiation": {"rounds": 0}}},
+    )
+    messages = TesterMessages(LANGUAGE_EN)
+
+    values, __ = build_trace_columns(
+        _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=tmp_path, messages=messages
+    )
+
+    assert values[4] == "no"
+    __, note = build_trace_columns(None, run_id=RUN_ID, trace_id=TRACE_ID, out_root=tmp_path, messages=messages)
+    assert note.startswith("Langfuse metrics unavailable: ")
 
 
 def test_an_untouched_run_reports_no_negotiation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

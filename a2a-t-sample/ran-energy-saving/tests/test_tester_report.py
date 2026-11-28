@@ -134,6 +134,21 @@ def _snapshot() -> dict[str, Any]:
     }
 
 
+def test_an_english_batch_writes_an_english_workbook() -> None:
+    batch = _snapshot()
+    batch["language"] = "en-US"
+
+    workbook = load_workbook(BytesIO(write_report(batch)))
+
+    assert workbook.sheetnames[0] == "Arbitration"
+    assert all(not any("一" <= char <= "鿿" for char in name) for name in workbook.sheetnames)
+    rows = list(workbook["Arbitration"].iter_rows(values_only=True))
+    assert rows[0][1] == "Protocol"
+    assert "协议" not in rows[0]
+    # The empty-interaction note is tester prose, so it follows the batch language too.
+    assert rows[1][17] == "The export was called without a runs directory."
+
+
 def _reference_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:
     workbook = load_workbook(BytesIO(write_report(batch)))
     assert workbook.sheetnames == ["仲裁格式", "用例结果", "阶段差异", "汇总"]
