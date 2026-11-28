@@ -483,6 +483,41 @@ async def test_accepted_waits_for_a_success_state_not_identity_alone(tmp_path: P
     assert result.status == STAGE_WAITING
 
 
+def test_client_interception_compares_the_block_with_the_original_expectation() -> None:
+    item = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A_T)
+    item.refs = {"validateExpected": "blocked"}
+    item.interception = {
+        "stages": {
+            "validate": {
+                "stage": "validate",
+                "status": "passed",
+                "actual": "blocked",
+                "detail": {"verdict": "blocked"},
+            }
+        }
+    }
+
+    assert item.client_interception() == {"observed": "blocked", "compare": "hit"}
+
+    item.interception = None
+    item.stages["validate"] = StageResult(
+        "validate", STAGE_PASSED, actual="pass", detail={"verdict": "pass"}
+    )
+    assert item.client_interception() == {"observed": "passed", "compare": "miss"}
+
+    item.refs = {"validateExpected": "pass"}
+    item.stages["validate"] = StageResult(
+        "validate", STAGE_FAILED, actual="blocked", detail={"verdict": "blocked"}
+    )
+    assert item.client_interception() == {"observed": "blocked", "compare": "false_block"}
+
+    pure = CaseItem(case_id=1, name="case", protocol=PROTOCOL_A2A)
+    assert pure.client_interception() == {
+        "observed": "not_applicable",
+        "compare": "not_applicable",
+    }
+
+
 async def test_pure_accepted_is_judged_by_the_outer_task_state(tmp_path: Path) -> None:
     """Pure A2A acceptance is the outer Task's first successful state, not a recording."""
     manager = _manager(tmp_path, _FakeRuns(_finish))

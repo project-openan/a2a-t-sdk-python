@@ -17,43 +17,33 @@ REFERENCE_HEADERS: tuple[str, ...] = (
     "用例编号",
     "用例名称",
     "任务类型",
-    "QA_ID",
-    "UID",
-    "设计人",
-    "问题",
+    "期望Task-T",
     "原始请求",
     "标准化请求",
+    "客户端是否拦截",
+    "拦截比对",
+    "SDK拦截报错",
     "意图理解结果(结构化JSON)",
     "SDK抽取意图",
     "意图来源",
     "期望意图",
+    "意图结构",
     "answer与reference差异点",
     "被测模型生成答案",
     "交互报文",
     "仲裁人-EVAL-额外结果-执行轨迹",
     "仲裁人-EVAL-额外结果-任务状态",
-    "仲裁人-EVAL-额外结果-端到端时延(ms)",
-    "协商轮次",
     "协商触发",
     "协商成功",
-    "仲裁人-EVAL-额外结果-输出token",
-    "仲裁人-EVAL-额外结果-总token",
     "执行状态",
     "自动评分",
-    "最终得分",
     "汇总结果",
     "判定原因",
-    "仲裁得分",
-    "人工标记结果",
     "备注",
     "输入token",
     "输入缓存token",
-    "输出token",
-    "总token",
     "是否触发协商",
     "协商时延(ms)",
-    "协商轮次",
-    "端到端时延(ms)",
     "客户端拦截次数",
 )
 
@@ -146,7 +136,7 @@ def test_an_english_batch_writes_an_english_workbook() -> None:
     assert rows[0][1] == "Protocol"
     assert "协议" not in rows[0]
     # The empty-interaction note is tester prose, so it follows the batch language too.
-    assert rows[1][17] == "The export was called without a runs directory."
+    assert rows[1][18] == "The export was called without a runs directory."
 
 
 def _reference_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:
@@ -168,32 +158,32 @@ def test_the_arbitration_row_carries_the_intent_diff_and_answer() -> None:
     assert row[0] == "b" * 32
     assert row[1] == "a2a-t"
     assert row[2] == 1
-    assert row[5] == "TC00000001"
-    assert row[7] == "徐峰"
-    assert json.loads(str(row[11]))["Energy saving region"] == "A2ATestRegion"
-    assert json.loads(str(row[12]))["Energy saving region"] == "SDKRegion"
+    assert row[5] == "## Operation Type\nCreate"
+    assert row[6] == "Implement energy-saving in A2ATestRegion"
+    assert row[11] and json.loads(str(row[11]))["Energy saving region"] == "A2ATestRegion"
+    assert row[12] and json.loads(str(row[12]))["Energy saving region"] == "SDKRegion"
     assert row[13] == "server"
-    assert json.loads(str(row[14]))["Operation type"] == "Create"
-    assert row[15] == "完全一致"
-    assert json.loads(str(row[16]))["code"] == "SUCCESS"
-    # Without a runs directory the interaction column says why it is empty; the answer stays in Q.
-    assert row[17] == "导出时未提供 run 目录，无法读取交互报文。"
-    assert row[18] == (
+    assert row[14] and json.loads(str(row[14]))["Operation type"] == "Create"
+    assert row[15] == "一致"
+    assert row[16] == "完全一致"
+    answer = json.loads(str(row[17]))
+    assert answer["code"] == "SUCCESS"
+    # The exchange list is carried by the interaction column and the trajectory, not repeated here.
+    assert "exchanges" not in answer
+    # Without a runs directory the interaction column says why it is empty.
+    assert row[18] == "导出时未提供 run 目录，无法读取交互报文。"
+    assert row[19] == (
         "### Round 1 | Client | Task-T\n\n"
         "### Round 0 | Server | TASK_STATE_SUBMITTED"
     )
-    assert row[19] == "SUCCESS"
-    assert row[20] == 60163
-    assert row[21] == 0
-    assert row[22] == "false"
-    assert row[23] == "true"
-    assert row[27] == 10
-    assert row[28] == 10
-    assert row[29] == "通过"
-    assert row[30] in (None, "")
-    assert row[31] in (None, "")
-    assert row[32] in (None, "")
-    assert row[33] in (None, "")
+    assert row[20] == "SUCCESS"
+    assert row[21] == "false"
+    assert row[22] == "true"
+    assert row[23] == "passed"
+    assert row[24] == 10
+    assert row[25] == "通过"
+    assert row[26] in (None, "")
+    assert row[27] in (None, "")
 
 
 def test_a_partial_row_names_the_stage_that_left_it_unproven() -> None:
@@ -249,7 +239,7 @@ def test_a_pure_a2a_row_leaves_the_intent_columns_blank_and_says_so() -> None:
     assert row[11] in (None, "")
     assert row[12] in (None, "")
     assert row[15] in (None, "")
-    assert "纯 A2A 未采集服务端意图" in str(row[33])
+    assert "纯 A2A 未采集服务端意图" in str(row[27])
 
 
 def test_a_row_without_a_server_payload_keeps_the_sdk_column_and_says_why() -> None:
@@ -263,7 +253,7 @@ def test_a_row_without_a_server_payload_keeps_the_sdk_column_and_says_why() -> N
     assert row[11] in (None, "")
     assert json.loads(str(row[12]))["Energy saving region"] == "SDKRegion"
     assert row[15] in (None, "")
-    assert "下游未返回结构化意图" in str(row[33])
+    assert "下游未返回结构化意图" in str(row[27])
 
 
 def test_a_validate_only_row_does_not_blame_the_downstream() -> None:
@@ -273,7 +263,7 @@ def test_a_validate_only_row_does_not_blame_the_downstream() -> None:
     item["answer"] = None
 
     rows = _reference_sheet(batch)
-    note = str(rows[1][33])
+    note = str(rows[1][27])
 
     assert "未执行发送阶段" in note
     assert "下游未返回结构化意图" not in note
@@ -291,8 +281,8 @@ def test_a_v2_item_without_export_fields_still_exports() -> None:
 
     assert row[0] in (None, "")
     assert row[11] in (None, "")
-    assert row[16] in (None, "")
-    assert "本批次未采集意图" in str(row[33])
+    assert row[17] in (None, "")
+    assert "本批次未采集意图" in str(row[27])
 
 
 def _write_wire(run_dir: Path, name: str, records: list[dict[str, Any]]) -> None:
@@ -306,7 +296,7 @@ def _write_wire(run_dir: Path, name: str, records: list[dict[str, Any]]) -> None
 def _wire_cell(tmp_path: Path, batch: dict[str, Any]) -> str:
     workbook = load_workbook(BytesIO(write_report(batch, runs_dir=tmp_path)))
     rows = list(workbook["仲裁格式"].iter_rows(values_only=True))
-    return str(rows[1][17])
+    return str(rows[1][18])
 
 
 def test_the_interaction_column_prints_every_raw_frame(tmp_path: Path) -> None:
@@ -351,14 +341,18 @@ def test_the_interaction_column_prints_every_raw_frame(tmp_path: Path) -> None:
     )
 
     cell = _wire_cell(tmp_path, batch)
+    document = json.loads(cell)
 
-    assert cell.startswith(f"run {run_id} | 4 帧 | wire.jsonl / wire-oss.jsonl / wire-error.jsonl")
-    assert "[1] 2026-11-26T01:00:00.000Z OUT POST http://nms.test/a2a/json/message:stream" in cell
-    assert '"messageId":"m-1"' in cell
-    assert "IN 200 POST http://nms.test/a2a/json/message:stream 12ms stream" in cell
-    assert 'line: data: {"kind": "status", "state": "TASK_STATE_SUBMITTED"}' in cell
-    assert "IN webhook (dropped: duplicate)" in cell
-    assert '"taskId":"t-1"' in cell
+    assert document["runId"] == run_id
+    assert document["frameCount"] == 4
+    frames = document["frames"]
+    assert frames[0]["dir"] == "out"
+    assert frames[0]["url"] == "http://nms.test/a2a/json/message:stream"
+    assert frames[0]["body"]["message"]["messageId"] == "m-1"
+    assert frames[1]["status"] == 200 and frames[1]["stream"] is True
+    assert frames[2]["line"] == 'data: {"kind": "status", "state": "TASK_STATE_SUBMITTED"}'
+    assert frames[3]["source"] == "webhook" and frames[3]["dropped"] == "duplicate"
+    assert frames[3]["body"]["taskId"] == "t-1"
 
 
 def test_the_trajectory_column_summarises_the_wire_frames(tmp_path: Path) -> None:
@@ -404,7 +398,7 @@ def test_the_trajectory_column_summarises_the_wire_frames(tmp_path: Path) -> Non
     workbook = load_workbook(BytesIO(write_report(batch, runs_dir=tmp_path)))
     rows = list(workbook["仲裁格式"].iter_rows(values_only=True))
 
-    assert rows[1][18] == (
+    assert rows[1][19] == (
         "R1 Client Task-T | ## Operation Type Create\n"
         "R1 Server SUBMITTED | Task creation succeeded"
     )
@@ -433,12 +427,17 @@ def test_a_rejected_frame_is_included_from_the_error_log(tmp_path: Path) -> None
         }],
     )
 
-    cell = _wire_cell(tmp_path, batch)
+    frames = json.loads(_wire_cell(tmp_path, batch))["frames"]
 
-    assert "[2] 2026-11-26T01:00:02.000Z ERROR sdk_rejected: content.param_missing" in cell
-    assert "status: 400" in cell
-    assert 'headers: {"x-reason":"bad"}' in cell
-    assert 'frame: {"message":{"parts":[]}}' in cell
+    assert frames[1] == {
+        "i": 2,
+        "ts": "2026-11-26T01:00:02.000Z",
+        "type": "sdk_rejected",
+        "message": "content.param_missing",
+        "status": 400,
+        "headers": {"x-reason": "bad"},
+        "frame": {"message": {"parts": []}},
+    }
 
 
 def test_an_oversized_transcript_keeps_every_frame_on_the_fallback_sheet(tmp_path: Path) -> None:
@@ -460,15 +459,19 @@ def test_an_oversized_transcript_keeps_every_frame_on_the_fallback_sheet(tmp_pat
 
     workbook = load_workbook(BytesIO(write_report(batch, runs_dir=tmp_path)))
     rows = list(workbook["仲裁格式"].iter_rows(values_only=True))
-    cell = str(rows[1][17])
+    cell = str(rows[1][18])
 
     assert len(cell) <= 32000
-    assert "已截断" in cell and "「交互报文」工作表" in cell
+    pointer = json.loads(cell)
+    assert pointer["frameCount"] == 2
+    assert "「交互报文」工作表" in pointer["note"]
     wire_rows = list(workbook["交互报文"].iter_rows(values_only=True))
     assert wire_rows[0] == ("用例编号", "协议", "轮次", "Run ID", "帧号", "分段", "交互报文")
+    # Each overflow row is still one valid JSON frame, split only when a single frame is too big.
     assert wire_rows[1][4] == 1 and wire_rows[1][5] == "1/2"
     assert wire_rows[2][5] == "2/2"
     assert wire_rows[3][4] == 2
+    assert json.loads(str(wire_rows[3][6]))["body"] == {"ok": True}
     assert body in "".join(str(row[6]) for row in wire_rows[1:])
 
 
@@ -480,6 +483,7 @@ def _results_sheet(batch: dict[str, Any]) -> list[tuple[object, ...]]:
 def _with_interception() -> dict[str, Any]:
     batch = _snapshot()
     item = batch["items"][0]
+    item["refs"]["validateExpected"] = "blocked"
     item["interception"] = {
         "input": "ambiguous request",
         "followupInput": "clarified request",
@@ -491,6 +495,17 @@ def _with_interception() -> dict[str, Any]:
                 "status": "passed",
                 "expected": "blocked",
                 "actual": "blocked",
+                "detail": {
+                    "verdict": "blocked",
+                    "code": "content.param_missing",
+                    "slotErrors": [
+                        {
+                            "slotName": "Guaranteed throughput target",
+                            "code": "content.param_missing",
+                            "message": "缺少速率目标",
+                        }
+                    ],
+                },
             },
         },
     }
@@ -504,6 +519,35 @@ def test_the_results_sheet_carries_the_interception_columns() -> None:
 
     assert row[headers.index("拦截校验")] == "passed: blocked"
     assert row[headers.index("拦截后补充信息")] == "clarified request"
+    assert row[headers.index("客户端是否拦截")] == "是"
+    assert row[headers.index("拦截比对")] == "命中"
+    errors = str(row[headers.index("SDK拦截报错")])
+    assert "原请求：blocked（content.param_missing）" in errors
+    assert "Guaranteed throughput target、content.param_missing：缺少速率目标" in errors
+
+
+def test_the_interception_comparison_separates_a_miss_from_a_false_block() -> None:
+    batch = _with_interception()
+    item = batch["items"][0]
+    item["refs"]["validateExpected"] = "pass"
+    rows = _results_sheet(batch)
+    headers = rows[0]
+    assert rows[1][headers.index("拦截比对")] == "误拦"
+
+    batch = _with_interception()
+    item = batch["items"][0]
+    item["interception"] = None
+    item["stages"]["validate"] = {
+        "stage": "validate",
+        "status": "failed",
+        "expected": "blocked",
+        "actual": "pass",
+        "detail": {"verdict": "pass"},
+    }
+    rows = _results_sheet(batch)
+    headers = rows[0]
+    assert rows[1][headers.index("客户端是否拦截")] == "否"
+    assert rows[1][headers.index("拦截比对")] == "漏拦"
 
 
 def test_the_results_sheet_marks_a_skipped_followup() -> None:
@@ -557,15 +601,15 @@ def test_the_arbitration_note_names_a_langfuse_export_failure() -> None:
 
     rows = _reference_sheet(batch)
 
-    assert "Langfuse 导出失败" in str(rows[1][33])
-    assert "HTTP 403" in str(rows[1][33])
+    assert "Langfuse 导出失败" in str(rows[1][27])
+    assert "HTTP 403" in str(rows[1][27])
 
 
 def test_the_arbitration_note_names_a_failed_baseline() -> None:
     """The arbitration sheet is the comparison view; a baseline failure must not look silent."""
     rows = _reference_sheet(_with_baseline())
 
-    assert "Modify 基线 Create 失败" in str(rows[1][33])
+    assert "Modify 基线 Create 失败" in str(rows[1][27])
 
 
 def test_the_stage_diff_sheet_labels_interception_stages() -> None:
@@ -761,56 +805,56 @@ def _trace_sheet(
 
 
 def test_the_langfuse_columns_follow_the_note_column() -> None:
-    values: list[object] = [1261, 630, 2035, 3296, "是", 4200, 2, 9000, 1]
+    values: list[object] = [1261, 630, "是", 4200, 1]
     rows, sheet = _trace_sheet(_snapshot(), {"a" * 32: (values, "")})
 
     row = rows[1]
     assert len(row) == len(REFERENCE_HEADERS)
-    assert row[-9:] == tuple(values)
-    assert rows[0][-9:] == REFERENCE_HEADERS[-9:]
+    assert row[-5:] == tuple(values)
+    assert rows[0][-5:] == REFERENCE_HEADERS[-5:]
     # The existing columns keep their letters and the note stays before the new block.
-    assert row[33] is None
-    assert sheet.cell(row=1, column=35).comment is not None
-    assert "Gross" in str(sheet.cell(row=1, column=35).comment.text)
+    assert row[27] is None
+    assert sheet.cell(row=1, column=29).comment is not None
+    assert "Gross" in str(sheet.cell(row=1, column=29).comment.text)
 
 
 def test_a_trace_failure_joins_the_note_cell() -> None:
-    values: list[object] = [""] * 9
+    values: list[object] = [""] * 5
     rows, __ = _trace_sheet(_snapshot(), {"a" * 32: (values, "Langfuse 指标未取到：boom")})
 
-    assert rows[1][33] == "Langfuse 指标未取到：boom"
-    assert rows[1][-9:] == (None,) * 9
+    assert rows[1][27] == "Langfuse 指标未取到：boom"
+    assert rows[1][-5:] == (None,) * 5
 
 
 def test_a_run_without_trace_columns_keeps_blank_cells() -> None:
     rows = _reference_sheet(_snapshot())
 
-    assert rows[1][-9:] == (None,) * 9
-    assert rows[1][33] is None
+    assert rows[1][-5:] == (None,) * 5
+    assert rows[1][27] is None
 
 
 def test_the_old_columns_are_unchanged_when_langfuse_is_not_requested() -> None:
     plain = _reference_sheet(_snapshot())
-    rows, __ = _trace_sheet(_snapshot(), {"a" * 32: ([""] * 9, "")})
+    rows, __ = _trace_sheet(_snapshot(), {"a" * 32: ([""] * 5, "")})
 
-    assert rows[1][:34] == plain[1][:34]
+    assert rows[1][:28] == plain[1][:28]
 
 
 def test_a_multi_round_report_keeps_round_second_and_langfuse_last() -> None:
-    values: list[object] = [1, 2, 3, 4, "否", "", 0, 5, 0]
+    values: list[object] = [1, 2, "否", 5, 0]
     batch = _multi_round_snapshot()
-    rows, __ = _trace_sheet(batch, {"a" * 32: (values, ""), "d" * 32: ([""] * 9, "缺失")})
+    rows, __ = _trace_sheet(batch, {"a" * 32: (values, ""), "d" * 32: ([""] * 5, "缺失")})
 
     assert rows[0][:3] == ("traceId", "协议", "轮次")
-    assert rows[0][-9:] == REFERENCE_HEADERS[-9:]
+    assert rows[0][-5:] == REFERENCE_HEADERS[-5:]
     assert [row[2] for row in rows[1:]] == [1, 2]
-    assert rows[1][-9:] == (1, 2, 3, 4, "否", None, 0, 5, 0)
-    assert rows[2][-10] == "缺失"
+    assert rows[1][-5:] == (1, 2, "否", 5, 0)
+    assert rows[2][-6] == "缺失"
 
 
 def test_every_langfuse_header_carries_its_definition() -> None:
     __, sheet = _trace_sheet(_snapshot(), {})
 
-    commented = [cell.comment is not None for cell in sheet[1][-9:]]
-    assert commented == [True] * 9
-    assert "S3 + S4" in str(sheet.cell(row=1, column=40).comment.text)
+    commented = [cell.comment is not None for cell in sheet[1][-5:]]
+    assert commented == [True] * 5
+    assert "S3 + S4" in str(sheet.cell(row=1, column=32).comment.text)

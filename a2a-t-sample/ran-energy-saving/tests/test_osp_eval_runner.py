@@ -23,6 +23,9 @@ from eval.osp.compare import (
     compare_task_t,
     flatten_intent,
     flatten_task_t,
+    intent_shape,
+    structure_diffs,
+    structure_equal,
 )
 from eval.osp.followup import followup_input
 from eval.osp.runner import (
@@ -381,6 +384,38 @@ def test_flatten_intent_marks_normalized_equality_with_a_reason() -> None:
     assert rows["intent.Gain target"].status == INTENT_ROW_CHANGED
     assert rows["intent.Gain target"].verdict == INTENT_ROW_SAME
     assert compare_intent(expected, actual) == []
+
+
+def test_structure_equal_ignores_values_order_and_array_order() -> None:
+    expected = {"Operation type": "Create", "Site list": ["NE 1", "NE 2"]}
+    actual = {"Site list": ["NE 2", "NE 1"], "Operation type": "Modify"}
+
+    assert structure_equal(expected, actual)
+    assert structure_diffs(expected, actual) == []
+    assert intent_shape(expected) == intent_shape(actual)
+
+
+def test_structure_diffs_names_every_missing_added_and_retyped_node() -> None:
+    expected = {
+        "Operation type": "Create",
+        "Guaranteed throughput target by zone": [{"Guaranteed throughput target": "10Mbps"}],
+    }
+    actual = {
+        "Operation type": {"value": "Create"},
+        "Guaranteed throughput target by zone": [{"Guaranteed throughput target": 10}],
+        "Diagnostics": {"model": "x"},
+    }
+
+    assert structure_diffs(expected, actual) == [
+        {"path": "Operation type", "kind": "type", "expected": "string", "actual": "object"},
+        {
+            "path": "Guaranteed throughput target by zone[0].Guaranteed throughput target",
+            "kind": "type",
+            "expected": "string",
+            "actual": "number",
+        },
+        {"path": "Diagnostics", "kind": "field", "expected": "missing", "actual": "present"},
+    ]
 
 
 def test_flatten_intent_pairs_scenario_entries_by_site_list() -> None:

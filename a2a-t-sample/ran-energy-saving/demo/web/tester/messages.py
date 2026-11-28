@@ -171,34 +171,28 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "export_header_case_id": "用例编号",
         "export_header_case_name": "用例名称",
         "export_header_task_type": "任务类型",
-        "export_header_qa_id": "QA_ID",
-        "export_header_uid": "UID",
-        "export_header_designer": "设计人",
-        "export_header_issue": "问题",
+        "export_header_expected_task_t": "期望Task-T",
         "export_header_raw_request": "原始请求",
         "export_header_normalized_request": "标准化请求",
+        "export_header_client_blocked": "客户端是否拦截",
+        "export_header_interception_compare": "拦截比对",
+        "export_header_sdk_errors": "SDK拦截报错",
         "export_header_server_intent": "意图理解结果(结构化JSON)",
         "export_header_sdk_intent": "SDK抽取意图",
         "export_header_intent_source": "意图来源",
         "export_header_expected_intent": "期望意图",
+        "export_header_intent_structure": "意图结构",
         "export_header_intent_diff": "answer与reference差异点",
         "export_header_model_answer": "被测模型生成答案",
         "export_header_interaction": "交互报文",
         "export_header_trajectory": "仲裁人-EVAL-额外结果-执行轨迹",
         "export_header_task_state": "仲裁人-EVAL-额外结果-任务状态",
-        "export_header_end_to_end": "仲裁人-EVAL-额外结果-端到端时延(ms)",
-        "export_header_negotiation_rounds": "协商轮次",
         "export_header_negotiation_triggered": "协商触发",
         "export_header_negotiation_succeeded": "协商成功",
-        "export_header_output_tokens": "仲裁人-EVAL-额外结果-输出token",
-        "export_header_total_tokens": "仲裁人-EVAL-额外结果-总token",
         "export_header_execution_status": "执行状态",
         "export_header_auto_score": "自动评分",
-        "export_header_final_score": "最终得分",
         "export_header_summary_result": "汇总结果",
         "export_header_verdict_reason": "判定原因",
-        "export_header_arbitration_score": "仲裁得分",
-        "export_header_manual_mark": "人工标记结果",
         "export_header_notes": "备注",
         "export_header_duration_ms": "耗时(ms)",
         "export_header_total_token_count": "Token 总量",
@@ -261,10 +255,7 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "export_no_run_note": "本用例未启动 run。",
         "export_no_runs_dir_note": "导出时未提供 run 目录，无法读取交互报文。",
         "export_no_wire_note": "run {run_id} 无 wire 报文（未开启报文记录或文件已清理）。",
-        "export_wire_header": (
-            "run {run_id} | {frames} 帧 | wire.jsonl / wire-oss.jsonl / wire-error.jsonl"
-        ),
-        "export_wire_truncated_note": "…（已截断，完整逐帧报文见「交互报文」工作表）",
+        "export_wire_overflow_note": "完整逐帧 JSON 见「交互报文」工作表",
         "export_trajectory_truncated_note": "…（轨迹已截断，完整报文见「交互报文」列）",
         "export_no_answer_note": "未执行发送阶段",
         "export_no_server_intent_note": "下游未返回结构化意图",
@@ -280,6 +271,28 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "export_note_separator": "；",
         "export_followup_skipped": "（未执行）{text}",
         "export_interception_stage_prefix": "拦截/",
+        "export_interception_hit": "命中",
+        "export_interception_miss": "漏拦",
+        "export_interception_false_block": "误拦",
+        "export_interception_undefined": "未定义期望",
+        "export_interception_not_executed": "未执行",
+        "export_interception_not_applicable": "不适用",
+        "export_structure_kind_field": "字段",
+        "export_structure_kind_array": "数组元素",
+        "export_structure_kind_type": "类型",
+        "export_structure_present": "存在",
+        "export_structure_missing": "缺失",
+        "export_structure_empty": "空数组",
+        "export_structure_same": "一致",
+        "export_structure_different": "不一致",
+        "export_structure_semantic_only": "语义一致·结构不同",
+        "export_gate_original": "原请求",
+        "export_gate_dispatched": "下发请求",
+        "export_gate_validation": "校验",
+        "export_gate_head": "{label}：{verdict}",
+        "export_gate_head_code": "{label}：{verdict}（{code}）",
+        "export_gate_slot_separator": "、",
+        "export_gate_slot_line": "- {head}：{message}",
         "export_cell_truncated": "…（已截断）",
         "export_label_passed": "通过",
         "export_label_failed": "失败",
@@ -296,33 +309,20 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         ),
         "export_step_outbound": "发送{message_type}请求",
         "export_step_inbound": "接收{message_type}",
-        "export_sse_blank_line": "(空行)",
         # Langfuse cells
         "langfuse_header_input_tokens": "输入token",
         "langfuse_header_cached_input_tokens": "输入缓存token",
-        "langfuse_header_output_tokens": "输出token",
-        "langfuse_header_total_tokens": "总token",
         "langfuse_header_negotiation_triggered": "是否触发协商",
         "langfuse_header_negotiation_latency": "协商时延(ms)",
-        "langfuse_header_negotiation_rounds": "协商轮次",
-        "langfuse_header_end_to_end_latency": "端到端时延(ms)",
         "langfuse_header_client_interceptions": "客户端拦截次数",
         "langfuse_note_input_tokens": "Langfuse tokens.input（Gross：含缓存；含 a2a-t-server 侧用量）",
         "langfuse_note_cached_input_tokens": "Langfuse tokens.cachedInput（输入 token 的子集，不重复相加）",
-        "langfuse_note_output_tokens": "Langfuse tokens.output（客户端与服务端合计）",
-        "langfuse_note_total_tokens": (
-            "Langfuse tokens.total = input + output；与 sheet 中客户端口径的「总token」不同源"
-        ),
         "langfuse_note_negotiation_triggered": (
             "服务端 INPUT_REQUIRED、客户端协商事件或 run 元数据任一存在即为「是」"
         ),
         "langfuse_note_negotiation_latency": (
             "Σ(S3 + S4 + S8 + S7)，只统计完整轮次；纯 A2A 用服务端 SendMessage 时长和"
         ),
-        "langfuse_note_negotiation_rounds": (
-            "Langfuse 协商轮次（服务端 INPUT_REQUIRED 与客户端事件取最大值）"
-        ),
-        "langfuse_note_end_to_end_latency": "taskCreatedAt − receivedAt；只到建任务，不是整条用例耗时",
         "langfuse_note_client_interceptions": (
             "每个「Task-T validation blocked」span 计一次；同一 run 纠正后重试不合并"
         ),
@@ -517,34 +517,28 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "export_header_case_id": "Case ID",
         "export_header_case_name": "Case name",
         "export_header_task_type": "Task type",
-        "export_header_qa_id": "QA_ID",
-        "export_header_uid": "UID",
-        "export_header_designer": "Designer",
-        "export_header_issue": "Issue",
+        "export_header_expected_task_t": "Expected Task-T",
         "export_header_raw_request": "Original request",
         "export_header_normalized_request": "Normalized request",
+        "export_header_client_blocked": "Client blocked",
+        "export_header_interception_compare": "Interception check",
+        "export_header_sdk_errors": "SDK interception errors",
         "export_header_server_intent": "Intent reading (structured JSON)",
         "export_header_sdk_intent": "SDK-extracted intent",
         "export_header_intent_source": "Intent source",
         "export_header_expected_intent": "Expected intent",
+        "export_header_intent_structure": "Intent structure",
         "export_header_intent_diff": "answer vs reference diff",
         "export_header_model_answer": "Model answer",
         "export_header_interaction": "Interaction messages",
         "export_header_trajectory": "Arbitrator-EVAL-extra-result-trajectory",
         "export_header_task_state": "Arbitrator-EVAL-extra-result-task state",
-        "export_header_end_to_end": "Arbitrator-EVAL-extra-result-end-to-end latency(ms)",
-        "export_header_negotiation_rounds": "Negotiation rounds",
         "export_header_negotiation_triggered": "Negotiation triggered",
         "export_header_negotiation_succeeded": "Negotiation succeeded",
-        "export_header_output_tokens": "Arbitrator-EVAL-extra-result-output token",
-        "export_header_total_tokens": "Arbitrator-EVAL-extra-result-total token",
         "export_header_execution_status": "Execution status",
         "export_header_auto_score": "Automatic score",
-        "export_header_final_score": "Final score",
         "export_header_summary_result": "Summary result",
         "export_header_verdict_reason": "Verdict reason",
-        "export_header_arbitration_score": "Arbitration score",
-        "export_header_manual_mark": "Manual mark",
         "export_header_notes": "Notes",
         "export_header_duration_ms": "Duration(ms)",
         "export_header_total_token_count": "Total tokens",
@@ -609,11 +603,8 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "export_no_wire_note": (
             "run {run_id} has no wire messages (capture is off or the files were cleaned up)."
         ),
-        "export_wire_header": (
-            "run {run_id} | {frames} frames | wire.jsonl / wire-oss.jsonl / wire-error.jsonl"
-        ),
-        "export_wire_truncated_note": (
-            "… (truncated; see the Interaction messages sheet for every frame)"
+        "export_wire_overflow_note": (
+            "The complete per-frame JSON is on the Interaction messages sheet"
         ),
         "export_trajectory_truncated_note": (
             "… (trajectory truncated; see the Interaction messages column for the full frames)"
@@ -632,6 +623,28 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "export_note_separator": "; ",
         "export_followup_skipped": "(not executed) {text}",
         "export_interception_stage_prefix": "Interception/",
+        "export_interception_hit": "hit",
+        "export_interception_miss": "missed",
+        "export_interception_false_block": "false block",
+        "export_interception_undefined": "no expected verdict",
+        "export_interception_not_executed": "not executed",
+        "export_interception_not_applicable": "not applicable",
+        "export_structure_kind_field": "field",
+        "export_structure_kind_array": "array element",
+        "export_structure_kind_type": "type",
+        "export_structure_present": "present",
+        "export_structure_missing": "missing",
+        "export_structure_empty": "empty array",
+        "export_structure_same": "match",
+        "export_structure_different": "mismatch",
+        "export_structure_semantic_only": "same meaning, different structure",
+        "export_gate_original": "Original request",
+        "export_gate_dispatched": "Dispatched request",
+        "export_gate_validation": "Validation",
+        "export_gate_head": "{label}: {verdict}",
+        "export_gate_head_code": "{label}: {verdict} ({code})",
+        "export_gate_slot_separator": " ",
+        "export_gate_slot_line": "- {head}: {message}",
         "export_cell_truncated": "… (truncated)",
         "export_label_passed": "passed",
         "export_label_failed": "failed",
@@ -649,29 +662,17 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         ),
         "export_step_outbound": "Sent {message_type} request",
         "export_step_inbound": "Received {message_type}",
-        "export_sse_blank_line": "(blank line)",
         # Langfuse cells
         "langfuse_header_input_tokens": "input tokens",
         "langfuse_header_cached_input_tokens": "cached input tokens",
-        "langfuse_header_output_tokens": "output tokens",
-        "langfuse_header_total_tokens": "total tokens",
         "langfuse_header_negotiation_triggered": "negotiation triggered",
         "langfuse_header_negotiation_latency": "negotiation latency(ms)",
-        "langfuse_header_negotiation_rounds": "negotiation rounds",
-        "langfuse_header_end_to_end_latency": "end-to-end latency(ms)",
         "langfuse_header_client_interceptions": "client interceptions",
         "langfuse_note_input_tokens": (
             "Langfuse tokens.input (gross: includes cache; includes a2a-t-server usage)"
         ),
         "langfuse_note_cached_input_tokens": (
             "Langfuse tokens.cachedInput (a subset of input tokens, not added again)"
-        ),
-        "langfuse_note_output_tokens": (
-            "Langfuse tokens.output (client and server combined)"
-        ),
-        "langfuse_note_total_tokens": (
-            "Langfuse tokens.total = input + output; a different source from the "
-            "client-side total tokens column"
         ),
         "langfuse_note_negotiation_triggered": (
             "yes when any of server INPUT_REQUIRED, a client negotiation event or run "
@@ -680,12 +681,6 @@ MESSAGE_CATALOG: Final[Mapping[str, Mapping[str, str]]] = {
         "langfuse_note_negotiation_latency": (
             "Σ(S3 + S4 + S8 + S7), complete rounds only; pure A2A uses the server "
             "SendMessage duration sum"
-        ),
-        "langfuse_note_negotiation_rounds": (
-            "Langfuse negotiation rounds (the max of server INPUT_REQUIRED and client events)"
-        ),
-        "langfuse_note_end_to_end_latency": (
-            "taskCreatedAt − receivedAt; task creation only, not the whole case duration"
         ),
         "langfuse_note_client_interceptions": (
             "one per 'Task-T validation blocked' span; a correction retry in the same run "

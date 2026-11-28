@@ -11,10 +11,13 @@ from pathlib import Path
 
 from demo.web.tester.export_view import (
     build_answer,
+    intent_structure,
+    intent_structure_label,
     read_traceparent,
     render_intent_diff,
     render_trajectory,
-    render_wire_frames,
+    render_wire_frame_json,
+    render_wire_json,
     render_wire_trajectory,
     result_label,
     score_for,
@@ -498,42 +501,90 @@ def _answer_run() -> RunState:
     return run
 
 
-def test_wire_frames_render_the_request_headers_and_body() -> None:
-    frames = render_wire_frames(
-        [
-            {
-                "ts": "2026-11-26T01:00:00.000Z",
-                "dir": "out",
-                "method": "POST",
-                "url": "http://nms.test/a2a/json/message:send",
-                "headers": {"Content-Type": "application/json", "Authorization": "***"},
-                "body": {"message": {"messageId": "m-1"}},
-            }
-        ]
-    )
+def test_the_interaction_column_is_one_json_document_with_every_frame() -> None:
+    records = [
+        {
+            "ts": "2026-11-26T01:00:00.000Z",
+            "dir": "out",
+            "method": "POST",
+            "url": "http://nms.test/a2a/json/message:send",
+            "headers": {"Content-Type": "application/json", "Authorization": "***"},
+            "body": {"message": {"messageId": "m-1"}},
+        },
+        {"ts": "t1", "dir": "in", "line": ""},
+        {"ts": "t3", "type": "sdk_rejected", "message": "bad frame", "frame": {"a": 1}},
+    ]
 
-    assert frames == [
-        "[1] 2026-11-26T01:00:00.000Z OUT POST http://nms.test/a2a/json/message:send\n"
-        'headers: {"Content-Type":"application/json","Authorization":"***"}\n'
-        'body: {"message":{"messageId":"m-1"}}'
+    document = json.loads(render_wire_json(records, run_id="run-1"))
+
+    assert document["runId"] == "run-1"
+    assert document["frameCount"] == 3
+    assert document["frames"] == [
+        {
+            "i": 1,
+            "ts": "2026-11-26T01:00:00.000Z",
+            "dir": "out",
+            "method": "POST",
+            "url": "http://nms.test/a2a/json/message:send",
+            "headers": {"Content-Type": "application/json", "Authorization": "***"},
+            "body": {"message": {"messageId": "m-1"}},
+        },
+        {"i": 2, "ts": "t1", "dir": "in", "line": ""},
+        {"i": 3, "ts": "t3", "type": "sdk_rejected", "message": "bad frame", "frame": {"a": 1}},
     ]
 
 
-def test_wire_frames_mark_sse_lines_webhook_pushes_and_rejected_frames() -> None:
-    frames = render_wire_frames(
-        [
-            {"ts": "t1", "dir": "in", "line": ""},
-            {
-                "ts": "t2",
-                "dir": "in",
-                "source": "webhook",
-                "dropped": "duplicate",
-                "body": {"ok": True},
-            },
-            {"ts": "t3", "type": "sdk_rejected", "message": "bad frame", "frame": {"a": 1}},
-        ]
+def test_one_overflow_frame_is_itself_valid_json() -> None:
+    assert json.loads(
+        render_wire_frame_json({"ts": "t2", "dir": "in", "body": {"ok": True}}, 2)
+    ) == {"i": 2, "ts": "t2", "dir": "in", "body": {"ok": True}}
+
+
+def test_a_semantically_equal_intent_with_a_different_shape_is_flagged() -> None:
+    expected = {"Operation type": "Create", "Energy saving region": "A2ATestRegion"}
+    actual = {
+        "Operation type": "Create",
+        "Energy saving region": "A2ATestRegion",
+        "Diagnostics": {"model": "x"},
+    }
+
+    document = intent_structure(expected, actual)
+
+    assert document["semantic"] == "same"
+    assert document["structure"] == "different"
+    assert document["diffs"] == [
+        {"path": "Diagnostics", "kind": "字段", "expected": "缺失", "actual": "存在"}
+    ]
+    assert intent_structure_label(document) == "语义一致·结构不同"
+
+
+def test_the_structure_report_renders_in_the_english_catalog() -> None:
+    expected = {"Operation type": "Create"}
+    actual = {"Operation type": "Create", "Diagnostics": {"model": "x"}}
+
+    document = intent_structure(expected, actual, TesterMessages(LANGUAGE_EN))
+
+    assert document["diffs"] == [
+        {"path": "Diagnostics", "kind": "field", "expected": "missing", "actual": "present"}
+    ]
+    assert intent_structure_label(document, TesterMessages(LANGUAGE_EN)) == (
+        "same meaning, different structure"
     )
 
-    assert frames[0] == "[1] t1 IN SSE\nline: (空行)"
-    assert frames[1] == '[2] t2 IN webhook (dropped: duplicate)\nbody: {"ok":true}'
-    assert frames[2] == '[3] t3 ERROR sdk_rejected: bad frame\nframe: {"a":1}'
+
+def test_a_semantically_different_intent_is_flagged_as_different() -> None:
+    expected = {"Operation type": "Create"}
+    actual = {"Operation type": "Modify"}
+
+    assert intent_structure_label(intent_structure(expected, actual)) == "不一致"
+
+
+def test_an_identical_intent_is_a_full_structural_match() -> None:
+    expected = {"Operation type": "Create", "Energy saving region": "A2ATestRegion"}
+    actual = {"Energy saving region": "A2ATestRegion", "Operation type": "Create"}
+
+    document = intent_structure(expected, actual)
+
+    assert document["semantic"] == "same"
+    assert document["structure"] == "same"
+    assert intent_structure_label(document) == "一致"

@@ -88,7 +88,12 @@ from shared.run_constants import (
 from shared.trace import reset_task_sink, set_task_sink
 
 from demo.web.tester.decisions import pure_answers
-from demo.web.tester.export_view import build_answer, read_traceparent, verdict_reason
+from demo.web.tester.export_view import (
+    build_answer,
+    intent_structure,
+    read_traceparent,
+    verdict_reason,
+)
 from demo.web.tester.langfuse_columns import build_trace_columns
 from demo.web.tester.messages import TesterMessages
 
@@ -344,6 +349,38 @@ class CaseItem:
             return []
         return [row.to_dict() for row in flatten_intent(expected, self.server_intent)]
 
+    def intent_structure(self, messages: TesterMessages | None = None) -> dict[str, object]:
+        """Return the semantic/structural verdict of the expected-vs-server intent pair."""
+        expected = self.refs.get("expectedIntent")
+        return intent_structure(
+            expected if isinstance(expected, Mapping) else None,
+            self.server_intent,
+            messages,
+        )
+
+    def client_interception(self) -> dict[str, object]:
+        """Return whether the client gate blocked this item and whether the case expected it.
+
+        ``observed`` is read from the run's ``task_validation`` evidence (or the SDK-only
+        ``validate`` stage); ``expected`` is the *original* case's A2A-T validation verdict. A
+        blocked original with a replacement request therefore counts as a hit, not as a block of
+        the dispatched replacement.
+        """
+        if self.protocol == PROTOCOL_A2A:
+            return {"observed": "not_applicable", "compare": "not_applicable"}
+        observed = _observed_gate_verdict(self)
+        expected = self.refs.get("validateExpected")
+        if not observed:
+            return {"observed": "not_executed", "compare": "not_executed"}
+        blocked = observed == "blocked"
+        if expected is None:
+            compare = "undefined"
+        elif expected == "blocked":
+            compare = "hit" if blocked else "miss"
+        else:
+            compare = "false_block" if blocked else "hit"
+        return {"observed": "blocked" if blocked else "passed", "compare": compare}
+
     def to_dict(self, messages: TesterMessages | None = None) -> dict[str, object]:
         """Return the JSON-friendly representation.
 
@@ -371,10 +408,12 @@ class CaseItem:
             "intent": self.intent,
             "serverIntent": self.server_intent,
             "intentCompare": self.intent_comparison(),
+            "intentStructure": self.intent_structure(messages),
             "intentMeta": dict(self.intent_meta),
             "refs": dict(self.refs),
             "answer": self.answer,
             "interception": self.interception,
+            "clientInterception": self.client_interception(),
             "clientQuality": self.client_quality,
             "intentVerdict": self.intent_verdict,
             "needsReview": self.needs_review,
@@ -2468,6 +2507,9 @@ class EvalBatchManager:
         negotiation = block.get("negotiation")
         negotiation_block = negotiation if isinstance(negotiation, Mapping) else {}
         raw_intent = expect.get("intent") if isinstance(expect, Mapping) else None
+        # The interception accuracy is judged against the *original* case: a blocked case's
+        # replacement request is allowed to pass the gate, but the original must be blocked.
+        original = self._catalog.get(item.case_id)
         item.refs = {
             "caseName": str(case.get("name") or ""),
             "operation": str(case.get("operation") or ""),
@@ -2487,6 +2529,11 @@ class EvalBatchManager:
             "expectedRounds": int(negotiation_block.get("expected_rounds") or 0),
             "expectedKinds": list(negotiation_block.get("kinds") or []),
             "expectedFinalState": block.get("final_state"),
+            "validateExpected": (
+                _case_validation_expectation(original)
+                if isinstance(original, Mapping)
+                else None
+            ),
             # The recorded A2A client reply (P column) is reference text, not replayed; it stays
             # in the export as the reply the agent's own answer is reviewed against.
             "clientReplies": (
@@ -4206,6 +4253,39 @@ def _first_validation_detail(run: RunState) -> dict[str, object] | None:
         if isinstance(verdict, str) and verdict:
             return dict(detail)
     return None
+
+
+def _observed_gate_verdict(item: CaseItem) -> str:
+    """Return the client gate verdict observed for one item, empty when none was recorded.
+
+    The intercepted original comes first: for a case whose replacement request was dispatched,
+    the item's own ``validate`` stage judges that replacement, not the request the case expects
+    to be blocked.
+    """
+    records: list[Mapping[str, object]] = []
+    interception = item.interception
+    if isinstance(interception, Mapping):
+        stages = interception.get("stages")
+        validate = stages.get("validate") if isinstance(stages, Mapping) else None
+        if isinstance(validate, Mapping):
+            records.append(validate)
+    stage = item.stages.get("validate")
+    if stage is not None:
+        records.append(stage.to_dict())
+    for record in records:
+        verdict = _gate_verdict(record)
+        if verdict:
+            return verdict
+    return ""
+
+
+def _gate_verdict(record: Mapping[str, object]) -> str:
+    """Return the normalized verdict of one validate-stage record."""
+    detail = record.get("detail")
+    value: object = detail.get("verdict") if isinstance(detail, Mapping) else None
+    if not isinstance(value, str) or not value:
+        value = record.get("actual")
+    return _normalize_validation_verdict(value) if isinstance(value, str) and value else ""
 
 
 def _correction_detail(run: RunState) -> dict[str, object] | None:

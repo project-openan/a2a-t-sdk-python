@@ -565,6 +565,73 @@ function acceptedNote(item) {
   return t(copy, "result.received", { state, recorded });
 }
 
+//: Badge text of the structural comparison of the final structured intent.
+const INTENT_STRUCTURE_LABELS = {
+  same: "result.intentStructureSame",
+  semanticOnly: "result.intentStructureSemanticOnly",
+  different: "result.intentStructureDifferent",
+};
+
+function intentStructureBadge(document) {
+  if (!document || document.semantic === "unavailable") return null;
+  if (document.semantic !== "same") {
+    return badge("failed", t(copy, INTENT_STRUCTURE_LABELS.different));
+  }
+  if (document.structure === "same") {
+    return badge("passed", t(copy, INTENT_STRUCTURE_LABELS.same));
+  }
+  return badge("waiting", t(copy, INTENT_STRUCTURE_LABELS.semanticOnly));
+}
+
+function intentStructureCell(item) {
+  const node = intentStructureBadge(item.intentStructure);
+  if (!node) return el("td", "metric", "—");
+  node.title = t(copy, "result.intentStructureHint");
+  return el("td", "", node);
+}
+
+function appendIntentStructureBlock(body, item) {
+  const document = item.intentStructure;
+  const node = intentStructureBadge(document);
+  if (!node) return;
+  const block = el("section", "diff-block");
+  const head = el("div", "diff-head");
+  head.append(el("strong", "", t(copy, "result.intentStructure")), node);
+  block.append(head);
+  const diffs = Array.isArray(document.diffs) ? document.diffs : [];
+  if (!diffs.length) {
+    block.append(el("p", "summary", t(copy, "result.intentStructureSameSummary")));
+    body.append(block);
+    return;
+  }
+  const table = el("table", "grid diff-table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const title of [
+    t(copy, "table.field"),
+    t(copy, "table.kind"),
+    t(copy, "table.expected"),
+    t(copy, "table.actual"),
+  ]) {
+    headRow.append(el("th", "", title));
+  }
+  thead.append(headRow);
+  const tbody = document.createElement("tbody");
+  for (const diff of diffs) {
+    const row = document.createElement("tr");
+    row.append(
+      el("td", "mono", diff.path || ""),
+      el("td", "", diff.kind || ""),
+      el("td", "mono", String(diff.expected ?? "")),
+      el("td", "mono", String(diff.actual ?? "")),
+    );
+    tbody.append(row);
+  }
+  table.append(thead, tbody);
+  block.append(table);
+  body.append(block);
+}
+
 function resultText(item) {
   if (item.error) return item.error;
   const blocked = Object.entries(item.interception?.stages || {}).map(([stage, value]) => [
@@ -707,6 +774,7 @@ function renderResults() {
     const status = document.createElement("td");
     status.append(badge(item.status));
     if (queued) status.append(document.createTextNode(" "), badge("waiting", t(copy, "status.queued")));
+    const structure = intentStructureCell(item);
     const duration = el("td", "metric", durationText(item.durationMs));
     const tokens = el("td", "metric", tokenText(item.tokens));
     const runs = document.createElement("td");
@@ -779,7 +847,7 @@ function renderResults() {
     actions.append(document.createTextNode(" · "), rerun);
     row.append(
       number, id, name, protocol, ...(round ? [round] : []),
-      stages, status, duration, tokens, runs, result, actions,
+      stages, status, structure, duration, tokens, runs, result, actions,
     );
     body.append(row);
   });
@@ -1160,6 +1228,7 @@ function renderResultTab(item, body) {
   appendBaselineBlock(body, item);
   appendContextBlock(body, item);
   appendServerReplyBlock(body, item);
+  appendIntentStructureBlock(body, item);
   const stages = item.stages || {};
   if (!Object.keys(stages).length) {
     body.append(el("p", "status-line", t(copy, "result.noStages")));

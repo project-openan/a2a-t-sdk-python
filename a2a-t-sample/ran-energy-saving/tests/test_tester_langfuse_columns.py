@@ -42,7 +42,7 @@ def _metrics() -> dict[str, Any]:
     }
 
 
-def test_the_nine_columns_map_the_metrics_document(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_columns_map_the_metrics_document(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[dict[str, Any]] = []
 
     def fake_export(config: Config, trace_id: str, out_root: Path, **kwargs: Any) -> dict[str, Any]:
@@ -56,7 +56,7 @@ def test_the_nine_columns_map_the_metrics_document(monkeypatch: pytest.MonkeyPat
     )
 
     assert note == ""
-    assert values == [1261, 630, 2035, 3296, "是", 4200, 2, 9000, 1]
+    assert values == [1261, 630, "是", 4200, 1]
     assert calls == [
         {
             "config": _config(),
@@ -87,7 +87,7 @@ def test_missing_numbers_are_blank_not_zero(monkeypatch: pytest.MonkeyPatch, tmp
     )
 
     assert note == ""
-    assert values == [0, 0, 0, 0, "", "", "", "", 0]
+    assert values == [0, 0, "", "", 0]
 
 
 def test_an_english_catalog_renders_yes_no_and_failure_notes(
@@ -104,7 +104,7 @@ def test_an_english_catalog_renders_yes_no_and_failure_notes(
         _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=tmp_path, messages=messages
     )
 
-    assert values[4] == "no"
+    assert values[2] == "no"
     __, note = build_trace_columns(None, run_id=RUN_ID, trace_id=TRACE_ID, out_root=tmp_path, messages=messages)
     assert note.startswith("Langfuse metrics unavailable: ")
 
@@ -116,8 +116,8 @@ def test_an_untouched_run_reports_no_negotiation(monkeypatch: pytest.MonkeyPatch
         lambda *args, **kwargs: {"metrics": {"negotiation": {"rounds": 0}}},
     )
     values, __ = build_trace_columns(_config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=tmp_path)
-    assert values[4] == "否"
-    assert values[6] == 0
+    assert values[2] == "否"
+    assert values[4] == 0
 
 
 def test_no_config_skips_the_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -147,7 +147,7 @@ def test_a_missing_or_malformed_trace_id_is_reported(
     assert malformed == "Langfuse 指标未取到：Langfuse trace id 格式无效"
 
 
-def test_an_export_exception_leaves_nine_blanks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_an_export_exception_leaves_blank_cells(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def fail(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("boom")
 
@@ -232,7 +232,7 @@ def test_a_settled_cache_serves_the_cells_without_a_request(
         _config(), run_id=RUN_ID, trace_id=TRACE_ID, out_root=out_root
     )
 
-    assert first == second == ([1261, 630, 2035, 3296, "是", 4200, 2, 9000, 1], "")
+    assert first == second == ([1261, 630, "是", 4200, 1], "")
     assert len(calls) == 1
 
 

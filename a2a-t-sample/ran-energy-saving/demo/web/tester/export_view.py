@@ -27,6 +27,8 @@ from eval.osp.compare import (
     INTENT_ROW_SAME,
     CompareRow,
     flatten_intent,
+    structure_diffs,
+    structure_equal,
 )
 from eval.osp.intent_schema import OSP_INTENT_KEYS
 from protocol.client_service import RunState
@@ -336,6 +338,97 @@ def render_intent_diff(
     return "\n".join(lines) if lines else messages.get("export_diff_identical")
 
 
+def intent_structure(
+    expected: Mapping[str, object] | None,
+    actual: Mapping[str, object] | None,
+    messages: TesterMessages | None = None,
+) -> dict[str, object]:
+    """Return the semantic and structural verdict of one expected-vs-actual intent pair.
+
+    ``semantic`` reuses the same normalization the pass/fail decision uses; ``structure`` asks
+    whether both documents carry the same keys, nesting and value types. The test team judges the
+    field structure, so a reading that means the same thing in a different shape must not read as
+    a full match. ``diffs`` names the keys/types that differ, in ``messages``' language.
+    """
+    if messages is None:
+        messages = TesterMessages()
+    if (
+        not isinstance(expected, Mapping)
+        or not isinstance(actual, Mapping)
+        or not expected
+        or not actual
+    ):
+        return {"semantic": "unavailable", "structure": "unavailable", "diffs": []}
+    rows = flatten_intent(expected, actual)
+    # A document outside the OSP schema has no normalizer: exact equality is the only semantic
+    # reading available, and it still keeps a structure-only difference visible below.
+    semantic_same = (
+        all(row.verdict == INTENT_ROW_SAME for row in rows) if rows else expected == actual
+    )
+    structure_same = structure_equal(expected, actual)
+    return {
+        "semantic": "same" if semantic_same else "different",
+        "structure": "same" if structure_same else "different",
+        "diffs": (
+            [] if structure_same else _localized_structure_diffs(expected, actual, messages)
+        ),
+    }
+
+
+def _localized_structure_diffs(
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+    messages: TesterMessages,
+) -> list[dict[str, object]]:
+    """Render the structure difference codes of :func:`structure_diffs` as prose."""
+    kind_labels = {
+        "field": messages.get("export_structure_kind_field"),
+        "array": messages.get("export_structure_kind_array"),
+        "type": messages.get("export_structure_kind_type"),
+    }
+    value_labels = {
+        "present": messages.get("export_structure_present"),
+        "missing": messages.get("export_structure_missing"),
+        "empty": messages.get("export_structure_empty"),
+    }
+    rows: list[dict[str, object]] = []
+    for row in structure_diffs(expected, actual):
+        rows.append(
+            {
+                "path": row.get("path", ""),
+                "kind": kind_labels.get(str(row.get("kind") or ""), str(row.get("kind") or "")),
+                "expected": value_labels.get(
+                    str(row.get("expected") or ""), str(row.get("expected") or "")
+                ),
+                "actual": value_labels.get(
+                    str(row.get("actual") or ""), str(row.get("actual") or "")
+                ),
+            }
+        )
+    return rows
+
+
+def intent_structure_label(
+    document: Mapping[str, object] | None,
+    messages: TesterMessages | None = None,
+) -> str:
+    """Render one :func:`intent_structure` document as the short workbook label."""
+    if not isinstance(document, Mapping):
+        return ""
+    if messages is None:
+        messages = TesterMessages()
+    semantic = str(document.get("semantic") or "")
+    if semantic == "unavailable":
+        return ""
+    if semantic != "same":
+        return messages.get("export_structure_different")
+    return (
+        messages.get("export_structure_same")
+        if document.get("structure") == "same"
+        else messages.get("export_structure_semantic_only")
+    )
+
+
 def _is_osp_intent(document: Mapping[str, object]) -> bool:
     """Return whether every key of one document belongs to the OSP intent schema."""
     return set(document) <= set(OSP_INTENT_KEYS)
@@ -492,6 +585,11 @@ def render_wire_trajectory(records: Sequence[Mapping[str, object]]) -> str:
         record_lines, current_round = _wire_trajectory_lines(record, current_round)
         lines.extend(record_lines)
     return "\n".join(lines)
+
+
+def _is_wire_error(record: Mapping[str, object]) -> bool:
+    """Return whether one record comes from ``wire-error.jsonl``."""
+    return "type" in record and "message" in record and "dir" not in record
 
 
 def _wire_trajectory_lines(
@@ -753,100 +851,39 @@ def _before_structured(text: str) -> str:
     return text.split("{", 1)[0].strip()
 
 
-def render_wire_frames(
+def wire_frame_documents(
     records: Sequence[Mapping[str, object]],
-    messages: TesterMessages | None = None,
-) -> list[str]:
-    """Render the raw wire records of one run as one text block per frame.
+) -> list[dict[str, object]]:
+    """Return every raw wire record as one numbered JSON object.
 
-    This is the evidence the arbitration sheet's interaction column shows: the request line, its
-    headers and body, every SSE ``data`` line, every webhook push (including a dropped duplicate)
-    and every frame the SDK rejected. A record is printed verbatim, one frame per block, so a
-    reader (human or model) can follow the exchange in order; nothing is summarized.
+    Every field of the record is kept verbatim (unknown fields included); only the frame number
+    is added. Nothing is summarized, so the documents are the complete evidence.
     """
-    if messages is None:
-        messages = TesterMessages()
-    return [
-        _wire_frame(index, record, messages)
-        for index, record in enumerate(records, start=1)
-    ]
+    return [{**dict(record), "i": index} for index, record in enumerate(records, start=1)]
 
 
-def _wire_frame(
-    index: int, record: Mapping[str, object], messages: TesterMessages
+def render_wire_json(
+    records: Sequence[Mapping[str, object]],
+    *,
+    run_id: str = "",
 ) -> str:
-    """Render one wire record as a headed block."""
-    ts = str(record.get("ts") or "")
-    if _is_wire_error(record):
-        return _wire_error_frame(index, ts, record)
-    if "line" in record:
-        line = str(record.get("line") or "")
-        blank_line = messages.get("export_sse_blank_line")
-        return f"[{index}] {ts} IN SSE\nline: {line or blank_line}"
-    source = record.get("source")
-    if isinstance(source, str) and source:
-        dropped = str(record.get("dropped") or "")
-        suffix = f" (dropped: {dropped})" if dropped else ""
-        lines = [f"[{index}] {ts} IN {source}{suffix}"]
-        _append_wire_value(lines, "body", record.get("body"))
-        return "\n".join(lines)
-    lines = [f"[{index}] {ts} {_wire_heading(record)}"]
-    _append_wire_value(lines, "headers", record.get("headers"))
-    _append_wire_value(lines, "body", record.get("body"))
-    return "\n".join(lines)
+    """Render one run's wire records as a single compact JSON document.
+
+    The whole interaction column is one JSON value, so a reader can format it once instead of
+    formatting each frame separately. Every frame is kept verbatim inside ``frames``.
+    """
+    document = {
+        "runId": run_id,
+        "frameCount": len(records),
+        "sources": ["wire.jsonl", "wire-oss.jsonl", "wire-error.jsonl"],
+        "frames": wire_frame_documents(records),
+    }
+    return json.dumps(document, ensure_ascii=False, separators=(",", ":"))
 
 
-def _wire_heading(record: Mapping[str, object]) -> str:
-    """Return the direction line of one HTTP wire record."""
-    parts: list[str] = [str(record.get("dir") or "").upper() or "?"]
-    status = record.get("status")
-    if status is not None:
-        parts.append(str(status))
-    method = str(record.get("method") or "")
-    if method:
-        parts.append(method)
-    url = str(record.get("url") or "")
-    if url:
-        parts.append(url)
-    elapsed = record.get("elapsedMs")
-    if isinstance(elapsed, int | float) and not isinstance(elapsed, bool):
-        parts.append(f"{elapsed}ms")
-    if record.get("stream") is True:
-        parts.append("stream")
-    return " ".join(parts)
-
-
-def _is_wire_error(record: Mapping[str, object]) -> bool:
-    """Return whether one record comes from ``wire-error.jsonl``."""
-    return "type" in record and "message" in record and "dir" not in record
-
-
-def _wire_error_frame(index: int, ts: str, record: Mapping[str, object]) -> str:
-    """Render one rejected frame kept in ``wire-error.jsonl``."""
-    label = str(record.get("type") or "")
-    message = str(record.get("message") or "")
-    detail = f"{label}: {message}" if label and message else (label or message)
-    head = " ".join(part for part in (f"[{index}]", ts, "ERROR", detail) if part)
-    lines = [head]
-    status = record.get("status")
-    if status is not None:
-        lines.append(f"status: {status}")
-    _append_wire_value(lines, "headers", record.get("headers"))
-    _append_wire_value(lines, "frame", record.get("frame"))
-    return "\n".join(lines)
-
-
-def _append_wire_value(lines: list[str], key: str, value: object) -> None:
-    """Append one ``key: value`` line, JSON-encoding structured values on a single line."""
-    if value is None:
-        return
-    if isinstance(value, str):
-        if value:
-            lines.append(f"{key}: {value}")
-        return
-    if isinstance(value, Mapping | list) and not value:
-        return
-    lines.append(f"{key}: {json.dumps(value, ensure_ascii=False, separators=(',', ':'))}")
+def render_wire_frame_json(record: Mapping[str, object], index: int) -> str:
+    """Render one frame as compact JSON for the overflow worksheet."""
+    return json.dumps({**dict(record), "i": index}, ensure_ascii=False, separators=(",", ":"))
 
 
 #: Stage names in execution order, used to name the first unexplained stage of a row.
@@ -964,9 +1001,12 @@ def result_label(status: str, messages: TesterMessages | None = None) -> str:
 
 __all__ = [
     "DIFF_IDENTICAL",
+    "intent_structure",
+    "intent_structure_label",
     "render_intent_diff",
     "render_trajectory",
-    "render_wire_frames",
+    "render_wire_frame_json",
+    "render_wire_json",
     "result_label",
     "score_for",
     "verdict_reason",

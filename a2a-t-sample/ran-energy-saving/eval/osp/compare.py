@@ -274,6 +274,126 @@ def _normalize_site_text(value: str) -> str:
     return text
 
 
+def intent_shape(value: object) -> object:
+    """Return the structure of one intent document: keys, nesting and value types.
+
+    Values are not part of the shape, so ``10 Mbps`` and ``10Mbps`` share it. Mapping keys are
+    sorted and array elements are sorted, because JSON object order and list order are not
+    structure: the comparison asks whether the same fields are present at the same depth with the
+    same kinds of values.
+    """
+    if isinstance(value, Mapping):
+        return ("object", tuple(sorted((str(key), intent_shape(item)) for key, item in value.items())))
+    if isinstance(value, list | tuple):
+        return ("array", tuple(sorted((intent_shape(item) for item in value), key=repr)))
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int | float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if value is None:
+        return "null"
+    return "string"
+
+
+def structure_equal(expected: object, actual: object) -> bool:
+    """Return whether two JSON documents share keys, nesting and value types."""
+    return intent_shape(expected) == intent_shape(actual)
+
+
+def structure_diffs(expected: object, actual: object) -> list[dict[str, object]]:
+    """Return one row per key/type difference between two JSON documents.
+
+    Used next to the semantic diff so a reading that says the same thing in a different shape is
+    visible instead of being folded into an "everything matches" verdict. Array order is not a
+    structure difference; only a differing element shape is reported.
+    """
+    rows: list[dict[str, object]] = []
+    _walk_structure(expected, actual, "", rows)
+    return rows
+
+
+def _walk_structure(
+    expected: object,
+    actual: object,
+    path: str,
+    rows: list[dict[str, object]],
+) -> None:
+    """Collect the missing, added and retyped nodes below ``path``.
+
+    The row carries machine codes (``field`` / ``array`` / ``type``, ``present`` / ``missing``)
+    rather than prose; the exporter renders them in the batch's language.
+    """
+    if isinstance(expected, Mapping) and isinstance(actual, Mapping):
+        for key, value in expected.items():
+            child = _structure_path(path, str(key))
+            if key not in actual:
+                rows.append(_structure_row(child, "field", "present", "missing"))
+            else:
+                _walk_structure(value, actual[key], child, rows)
+        for key in actual:
+            if key not in expected:
+                rows.append(_structure_row(_structure_path(path, str(key)), "field", "missing", "present"))
+        return
+    if isinstance(expected, list | tuple) and isinstance(actual, list | tuple):
+        expected_shapes = sorted((intent_shape(item) for item in expected), key=repr)
+        actual_shapes = sorted((intent_shape(item) for item in actual), key=repr)
+        if expected_shapes != actual_shapes:
+            if len(expected) == len(actual):
+                # Equal length: name the nested difference instead of a kind-count summary that
+                # would read the same on both sides when only a nested value type changed.
+                for index, (expected_item, actual_item) in enumerate(zip(expected, actual, strict=True)):
+                    _walk_structure(
+                        expected_item, actual_item, f"{path or '<root>'}[{index}]", rows
+                    )
+            else:
+                rows.append(
+                    _structure_row(
+                        path or "<root>",
+                        "array",
+                        _shape_summary(expected_shapes),
+                        _shape_summary(actual_shapes),
+                    )
+                )
+        return
+    expected_kind = _shape_kind(expected)
+    actual_kind = _shape_kind(actual)
+    if expected_kind != actual_kind:
+        rows.append(_structure_row(path or "<root>", "type", expected_kind, actual_kind))
+
+
+def _structure_path(path: str, key: str) -> str:
+    """Append one mapping key to a JSON path."""
+    return f"{path}.{key}" if path else key
+
+
+def _structure_row(path: str, kind: str, expected: str, actual: str) -> dict[str, object]:
+    """Build one structure difference row in the shared diff shape."""
+    return {"path": path, "kind": kind, "expected": expected, "actual": actual}
+
+
+def _shape_kind(value: object) -> str:
+    """Return the type name of one JSON value."""
+    shape = intent_shape(value)
+    if isinstance(shape, tuple):
+        return str(shape[0])
+    return str(shape)
+
+
+def _shape_summary(shapes: Sequence[object]) -> str:
+    """Summarize a sorted list of element shapes as counts by kind.
+
+    The string uses JSON type names and language-neutral punctuation; an empty array is the
+    ``empty`` code the exporter renders as a word.
+    """
+    counts: dict[str, int] = {}
+    for shape in shapes:
+        kind = str(shape[0]) if isinstance(shape, tuple) else str(shape)
+        counts[kind] = counts.get(kind, 0) + 1
+    return ", ".join(f"{kind}×{count}" for kind, count in sorted(counts.items())) or "empty"
+
+
 def flatten_intent(
     expected: Mapping[str, object],
     actual: Mapping[str, object],

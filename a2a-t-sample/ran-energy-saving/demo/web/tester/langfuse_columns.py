@@ -1,9 +1,9 @@
 """Langfuse-derived columns of the tester arbitration sheet.
 
-Each run's nine cells come from the vendored ``langfuse_export`` package: ``export_full``
+Each run's cells come from the vendored ``langfuse_export`` package: ``export_full``
 fetches the trace observations and derives the token and cache metrics. The
 export is fail-open — a missing trace id, an unavailable project, a network error or an
-unreadable metrics document yields nine empty cells plus one note on the report row, never an
+unreadable metrics document yields empty cells plus one note on the report row, never an
 exception that would abort the workbook.
 
 A settled result is cached under ``runs/<runId>/langfuse-export/metrics.json`` so a second
@@ -38,32 +38,27 @@ RATE_LIMIT_COOLDOWN_SECONDS: Final[float] = 60.0
 _cooldown_until: float = 0.0
 _cooldown_lock: Final = threading.Lock()
 
-#: The nine columns appended after ``备注`` in the arbitration worksheet.
+#: The columns appended after ``备注`` in the arbitration worksheet.
+#:
+#: The duplicates of columns already in the sheet (输出token / 总token / 协商轮次 / 端到端时延)
+#: are gone; the remaining ones carry a number the sheet has no other source for.
 TRACE_COLUMN_HEADERS: Final[tuple[str, ...]] = (
     "输入token",
     "输入缓存token",
-    "输出token",
-    "总token",
     "是否触发协商",
     "协商时延(ms)",
-    "协商轮次",
-    "端到端时延(ms)",
     "客户端拦截次数",
 )
 
-TRACE_COLUMN_WIDTHS: Final[tuple[int, ...]] = (12, 14, 12, 12, 12, 14, 12, 14, 14)
+TRACE_COLUMN_WIDTHS: Final[tuple[int, ...]] = (12, 14, 12, 14, 14)
 
 #: Header comments explaining a column whose number has a second, different definition elsewhere
 #: in the sheet. ``None`` leaves the header without a comment.
 TRACE_COLUMN_NOTES: Final[tuple[str | None, ...]] = (
     "Langfuse tokens.input（Gross：含缓存；含 a2a-t-server 侧用量）",
     "Langfuse tokens.cachedInput（输入 token 的子集，不重复相加）",
-    "Langfuse tokens.output（客户端与服务端合计）",
-    "Langfuse tokens.total = input + output；与 sheet 中客户端口径的「总token」不同源",
     "服务端 INPUT_REQUIRED、客户端协商事件或 run 元数据任一存在即为「是」",
     "Σ(S3 + S4 + S8 + S7)，只统计完整轮次；纯 A2A 用服务端 SendMessage 时长和",
-    "Langfuse 协商轮次（服务端 INPUT_REQUIRED 与客户端事件取最大值）",
-    "taskCreatedAt − receivedAt；只到建任务，不是整条用例耗时",
     "每个「Task-T validation blocked」span 计一次；同一 run 纠正后重试不合并",
 )
 
@@ -71,16 +66,12 @@ _TRACE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{32}$")
 
 _EMPTY_ROW: Final[tuple[str, ...]] = ("",) * len(TRACE_COLUMN_HEADERS)
 
-#: Message-catalog keys of the nine headers, in column order.
+#: Message-catalog keys of the headers, in column order.
 _TRACE_HEADER_KEYS: Final[tuple[str, ...]] = (
     "langfuse_header_input_tokens",
     "langfuse_header_cached_input_tokens",
-    "langfuse_header_output_tokens",
-    "langfuse_header_total_tokens",
     "langfuse_header_negotiation_triggered",
     "langfuse_header_negotiation_latency",
-    "langfuse_header_negotiation_rounds",
-    "langfuse_header_end_to_end_latency",
     "langfuse_header_client_interceptions",
 )
 
@@ -88,18 +79,14 @@ _TRACE_HEADER_KEYS: Final[tuple[str, ...]] = (
 _TRACE_NOTE_KEYS: Final[tuple[str | None, ...]] = (
     "langfuse_note_input_tokens",
     "langfuse_note_cached_input_tokens",
-    "langfuse_note_output_tokens",
-    "langfuse_note_total_tokens",
     "langfuse_note_negotiation_triggered",
     "langfuse_note_negotiation_latency",
-    "langfuse_note_negotiation_rounds",
-    "langfuse_note_end_to_end_latency",
     "langfuse_note_client_interceptions",
 )
 
 
 def trace_column_headers(messages: TesterMessages | None = None) -> tuple[str, ...]:
-    """Return the nine headers in ``messages``' language (Chinese by default)."""
+    """Return the headers in ``messages``' language (Chinese by default)."""
     if messages is None:
         return TRACE_COLUMN_HEADERS
     return tuple(messages.get(key) for key in _TRACE_HEADER_KEYS)
@@ -123,10 +110,10 @@ def build_trace_columns(
     settled: bool = True,
     messages: TesterMessages | None = None,
 ) -> tuple[list[object], str]:
-    """Return the nine Langfuse cells of one run plus an explanatory note.
+    """Return the Langfuse cells of one run plus an explanatory note.
 
     ``trace_id`` is the OTel/Langfuse trace id (``run.langfuse["traceId"]``), not the
-    vendor-facing trace id of the first report column. A failure returns nine empty cells and
+    vendor-facing trace id of the first report column. A failure returns empty cells and
     the reason to append to the row's ``备注``; this function never raises.
 
     A settled cache under ``out_root`` is served without a request. ``settled`` marks whether
@@ -250,10 +237,9 @@ def _note_rate_limit(note: str) -> None:
 
 
 def _values(metrics: Mapping[str, Any], messages: TesterMessages | None = None) -> list[object]:
-    """Map one metrics document onto the nine cells; a missing number is blank, not zero."""
+    """Map one metrics document onto the cells; a missing number is blank, not zero."""
     tokens = _map(metrics.get("tokens"))
     negotiation = _map(metrics.get("negotiation"))
-    latency = _map(metrics.get("latency"))
     interception = _map(metrics.get("clientInterception"))
     rounds = _int(negotiation.get("rounds"))
     if messages is None:
@@ -264,12 +250,8 @@ def _values(metrics: Mapping[str, Any], messages: TesterMessages | None = None) 
     return [
         _int(tokens.get("input"), 0),
         _int(tokens.get("cachedInput"), 0),
-        _int(tokens.get("output"), 0),
-        _int(tokens.get("total"), 0),
         yes_no,
         _or_blank(_int(negotiation.get("latencyMs"))),
-        _or_blank(rounds),
-        _or_blank(_int(latency.get("endToEndMs"))),
         _int(interception.get("count"), 0),
     ]
 

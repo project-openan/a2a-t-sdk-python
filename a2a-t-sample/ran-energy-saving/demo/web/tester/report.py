@@ -25,9 +25,12 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from demo.web.tester.export_view import (
+    intent_structure,
+    intent_structure_label,
     render_intent_diff,
     render_trajectory,
-    render_wire_frames,
+    render_wire_frame_json,
+    render_wire_json,
     render_wire_trajectory,
     result_label,
     score_for,
@@ -53,40 +56,39 @@ _STAGE_ORDER: Final[tuple[str, ...]] = (
 )
 
 #: Message-catalog keys of the arbitration worksheet's fixed columns.
+#:
+#: The reference workbook's authoring bookmarks (QA_ID / UID / 设计人), the duplicate score
+#: columns (最终得分 is 自动评分; 仲裁得分 / 人工标记结果 stay empty without a manual arbitration)
+#: and the four Langfuse duplicates (输出token / 总token / 协商轮次 / 端到端时延) are gone: the
+#: test team does not use them, and they made the live-run columns hard to read.
 _REFERENCE_HEADER_KEYS: Final[tuple[str, ...]] = (
     "export_header_trace_id",
     "export_header_protocol",
     "export_header_case_id",
     "export_header_case_name",
     "export_header_task_type",
-    "export_header_qa_id",
-    "export_header_uid",
-    "export_header_designer",
-    "export_header_issue",
+    "export_header_expected_task_t",
     "export_header_raw_request",
     "export_header_normalized_request",
+    "export_header_client_blocked",
+    "export_header_interception_compare",
+    "export_header_sdk_errors",
     "export_header_server_intent",
     "export_header_sdk_intent",
     "export_header_intent_source",
     "export_header_expected_intent",
+    "export_header_intent_structure",
     "export_header_intent_diff",
     "export_header_model_answer",
     "export_header_interaction",
     "export_header_trajectory",
     "export_header_task_state",
-    "export_header_end_to_end",
-    "export_header_negotiation_rounds",
     "export_header_negotiation_triggered",
     "export_header_negotiation_succeeded",
-    "export_header_output_tokens",
-    "export_header_total_tokens",
     "export_header_execution_status",
     "export_header_auto_score",
-    "export_header_final_score",
     "export_header_summary_result",
     "export_header_verdict_reason",
-    "export_header_arbitration_score",
-    "export_header_manual_mark",
     "export_header_notes",
 )
 
@@ -111,7 +113,7 @@ def _resolve_messages(
     return TesterMessages(language if isinstance(language, str) and language else "")
 
 
-#: Per-run Langfuse cells (``runId -> (nine values, note)``). The route fills it before calling
+#: Per-run Langfuse cells (``runId -> (values, note)``). The route fills it before calling
 #: ``write_report``; keeping it outside this module keeps the report a pure function of its input.
 TraceColumns = Mapping[str, tuple[Sequence[object], str]]
 
@@ -129,7 +131,7 @@ def write_report(
         batch: The batch snapshot served to the UI.
         runs_dir: Directory holding ``<runId>/wire*.jsonl``, used for the interaction column.
             ``None`` keeps the report exportable when only the snapshot is available.
-        trace_columns: Langfuse metrics per run id. ``None`` leaves the nine columns blank, which
+        trace_columns: Langfuse metrics per run id. ``None`` leaves the Langfuse columns blank, which
             keeps the workbook structure stable when observability is off or not requested.
         messages: The batch's message set. ``None`` derives it from the batch's ``language``
             (defaulting to Chinese), so a historical batch exports in the language it was created
@@ -170,6 +172,9 @@ def write_report(
         messages.get("export_header_discovery"),
         messages.get("export_header_interception_validation"),
         messages.get("export_header_interception_followup"),
+        messages.get("export_header_client_blocked"),
+        messages.get("export_header_interception_compare"),
+        messages.get("export_header_sdk_errors"),
         *[messages.get("export_header_stage_status", stage=stage) for stage in _STAGE_ORDER],
         messages.get("export_header_error"),
     ]
@@ -187,6 +192,7 @@ def write_report(
         token_map = tokens if isinstance(tokens, Mapping) else {}
         baseline = item.get("baseline")
         baseline_map = baseline if isinstance(baseline, Mapping) else {}
+        interception = _client_interception(item)
         row: list[object] = [
             item.get("caseId", ""),
             item.get("name", ""),
@@ -205,6 +211,9 @@ def write_report(
             batch.get("discovery", ""),
             _interception_verdict(item),
             _interception_followup(item, messages),
+            _interception_observed_cell(interception, messages),
+            _interception_compare_cell(interception, messages),
+            _sdk_interception_errors(item, messages),
             *[
                 (stage_map.get(stage, {}).get("status", "") if isinstance(stage_map.get(stage), Mapping) else "")
                 for stage in _STAGE_ORDER
@@ -217,7 +226,7 @@ def write_report(
     widths = [
         12, 42, 10, 10, 40, 12, 12, 34,
         10, 34, 34, 18, 40,
-        10, 10, 10, 14, 48,
+        10, 10, 10, 14, 48, 14, 14, 60,
         12, 12, 12, 12, 14, 12, 12, 12, 40,
     ]
     if multi:
@@ -523,7 +532,7 @@ def _write_reference_sheet(
             continue
         wire_text, frames, records = _wire_text(item, runs_dir, messages)
         oversized = len(wire_text) > _MAX_CELL_CHARS
-        shown = _truncated_wire(wire_text, messages) if oversized else wire_text
+        shown = _oversized_wire_cell(item, len(frames), messages) if oversized else wire_text
         trajectory = render_wire_trajectory(records)
         if len(trajectory) > _MAX_CELL_CHARS:
             note = messages.get("export_trajectory_truncated_note")
@@ -539,8 +548,8 @@ def _write_reference_sheet(
         if oversized:
             overflow.append((item, frames))
     widths = [
-        34, 8, 10, 42, 10, 12, 36, 10, 60, 48, 48, 60, 60, 10, 60, 60, 60, 90, 50,
-        16, 14, 10, 10, 10, 12, 12, 10, 10, 10, 10, 10, 12, 40,
+        34, 8, 10, 42, 10, 60, 48, 48, 14, 14, 60, 60, 60, 10, 60, 20, 60, 90, 50,
+        50, 16, 14, 10, 10, 10, 12, 40, 40,
         *TRACE_COLUMN_WIDTHS,
     ]
     if multi:
@@ -554,10 +563,11 @@ def _append_trace_cells(
     trace_columns: TraceColumns | None,
     messages: TesterMessages,
 ) -> None:
-    """Append the nine Langfuse cells after ``备注`` and merge their note into it.
+    """Append the Langfuse cells after ``备注`` and merge their note into it.
 
-    ``_reference_row`` always ends with ``备注``; the trace block stays after it so the existing
-    column letters (A–AH) do not move. A per-run failure note joins the same cell.
+    ``_reference_row`` always ends with ``备注``; the trace block stays after it so a change to
+    the trace metrics never shifts the columns the review already references. A per-run failure
+    note joins the same cell.
     """
     values: Sequence[object] = ("",) * len(trace_column_headers(messages))
     note = ""
@@ -744,49 +754,44 @@ def _reference_row(
         expected_intent = intent_stage.get("expected")
     answer = _map_of(item.get("answer"))
     exchanges = answer.get("exchanges")
-    token_map = _map_of(item.get("tokens"))
     status = str(item.get("status") or "")
     raw_request = intent_meta.get("rawRequest") or refs.get("userInput") or ""
     case_id = item.get("caseId")
+    structure = _intent_structure(item, expected_intent, server_intent, messages)
+    interception = _client_interception(item)
     return [
         str(item.get("traceId") or ""),
         str(item.get("protocol") or ""),
         case_id if case_id != 0 else "",
         refs.get("caseName") or item.get("name", ""),
         refs.get("operation", ""),
-        refs.get("qaId", ""),
-        refs.get("uid", ""),
-        refs.get("designer", ""),
         refs.get("taskT", ""),
         raw_request,
         intent_meta.get("normalizedText") or raw_request,
+        _interception_observed_cell(interception, messages),
+        _interception_compare_cell(interception, messages),
+        _sdk_interception_errors(item, messages),
         _json_cell(server_intent, indent=2),
         _json_cell(sdk_intent, indent=2),
         intent_meta.get("source", ""),
         _json_cell(expected_intent, indent=2),
+        intent_structure_label(structure, messages),
         render_intent_diff(
             expected_intent if isinstance(expected_intent, Mapping) else None,
             server_intent,
             messages,
         ),
-        _json_cell(answer, indent=2),
+        _json_cell(_slim_answer(answer), indent=2),
         wire_text,
         wire_trajectory
         or render_trajectory(exchanges if isinstance(exchanges, list) else []),
         _task_state(item, answer),
-        item.get("durationMs", ""),
-        _negotiation_rounds(answer, stages),
         _bool_cell(refs.get("negotiationExpected")),
         _negotiation_success(item, refs, answer),
-        token_map.get("output", ""),
-        token_map.get("total", ""),
         status,
-        _score_cell(status),
         _score_cell(status),
         result_label(status, messages),
         verdict_reason(item, messages),
-        "",
-        "",
         _reference_note(
             item, refs, intent_meta, answer, server_intent, sdk_intent, messages
         ),
@@ -844,7 +849,7 @@ def _reference_note(
 def _wire_text(
     item: Mapping[str, Any], runs_dir: Path | None, messages: TesterMessages
 ) -> tuple[str, list[str], list[dict[str, object]]]:
-    """Return the item's interaction transcript, its per-frame blocks and the raw records."""
+    """Return the interaction JSON, its per-frame JSON documents and the raw records."""
     run_id = str(item.get("runId") or "")
     if not run_id:
         note = messages.get("export_no_run_note")
@@ -856,16 +861,26 @@ def _wire_text(
     if not records:
         note = messages.get("export_no_wire_note", run_id=run_id)
         return note, [note], []
-    frames = render_wire_frames(records, messages)
-    header = messages.get("export_wire_header", run_id=run_id, frames=len(frames))
-    return f"{header}\n\n" + "\n\n".join(frames), frames, records
+    frames = [
+        render_wire_frame_json(record, index)
+        for index, record in enumerate(records, start=1)
+    ]
+    return render_wire_json(records, run_id=run_id), frames, records
 
 
-def _truncated_wire(text: str, messages: TesterMessages) -> str:
-    """Cut the interaction cell to Excel's limit and point at the fallback sheet."""
-    note = messages.get("export_wire_truncated_note")
-    keep = _MAX_CELL_CHARS - len(note)
-    return text[:keep] + note
+def _oversized_wire_cell(
+    item: Mapping[str, Any], frame_count: int, messages: TesterMessages
+) -> str:
+    """Return a valid-JSON pointer for a cell that cannot hold the whole transcript."""
+    return json.dumps(
+        {
+            "runId": str(item.get("runId") or ""),
+            "frameCount": frame_count,
+            "note": messages.get("export_wire_overflow_note"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _write_wire_sheet(
@@ -930,17 +945,6 @@ def _task_state(item: Mapping[str, Any], answer: Mapping[str, Any]) -> str:
     return str(item.get("status") or "")
 
 
-def _negotiation_rounds(answer: Mapping[str, Any], stages: Mapping[str, Any]) -> object:
-    """Return the observed negotiation round count."""
-    summary = _map_of(answer.get("negotiationSummary"))
-    rounds = summary.get("negotiationRounds")
-    if isinstance(rounds, int):
-        return rounds
-    negotiate = _map_of(stages.get("negotiate"))
-    actual = _map_of(negotiate.get("actual"))
-    return actual.get("rounds", "")
-
-
 def _negotiation_success(
     item: Mapping[str, Any],
     refs: Mapping[str, Any],
@@ -987,6 +991,166 @@ def _cell(value: object, messages: TesterMessages) -> object:
     if isinstance(value, str) and len(value) > _MAX_CELL_CHARS:
         return value[:_MAX_CELL_CHARS] + messages.get("export_cell_truncated")
     return value
+
+
+def _intent_structure(
+    item: Mapping[str, Any],
+    expected: object,
+    actual: Mapping[str, Any] | None,
+    messages: TesterMessages,
+) -> dict[str, object]:
+    """Return the item's intent-structure verdict, recomputed for older batch snapshots."""
+    document = item.get("intentStructure")
+    if isinstance(document, Mapping):
+        return dict(document)
+    return intent_structure(
+        expected if isinstance(expected, Mapping) else None,
+        actual,
+        messages,
+    )
+
+
+#: Message-catalog keys of the observed client gate.
+_INTERCEPTION_OBSERVED_KEYS: Final[dict[str, str]] = {
+    "blocked": "export_yes",
+    "passed": "export_no",
+    "pass": "export_no",
+    "not_executed": "export_interception_not_executed",
+    "not_applicable": "export_interception_not_applicable",
+}
+#: Message-catalog keys of the observed-vs-expected interception comparison.
+_INTERCEPTION_COMPARE_KEYS: Final[dict[str, str]] = {
+    "hit": "export_interception_hit",
+    "miss": "export_interception_miss",
+    "false_block": "export_interception_false_block",
+    "undefined": "export_interception_undefined",
+    "not_executed": "export_interception_not_executed",
+    "not_applicable": "export_interception_not_applicable",
+}
+
+
+def _client_interception(item: Mapping[str, Any]) -> dict[str, object]:
+    """Return the item's client-interception record, derived for older snapshots."""
+    record = item.get("clientInterception")
+    if isinstance(record, Mapping):
+        return dict(record)
+    if str(item.get("protocol") or "") == "a2a":
+        return {"observed": "not_applicable", "compare": "not_applicable"}
+    observed = ""
+    interception = item.get("interception")
+    stages = interception.get("stages") if isinstance(interception, Mapping) else None
+    for candidate in (
+        stages.get("validate") if isinstance(stages, Mapping) else None,
+        _map_of(item.get("stages")).get("validate"),
+    ):
+        if not isinstance(candidate, Mapping):
+            continue
+        detail = candidate.get("detail")
+        verdict = detail.get("verdict") if isinstance(detail, Mapping) else candidate.get("actual")
+        if isinstance(verdict, str) and verdict:
+            observed = verdict
+            break
+    if not observed:
+        return {"observed": "not_executed", "compare": "not_executed"}
+    blocked = observed == "blocked"
+    expected = _map_of(item.get("refs")).get("validateExpected")
+    if expected is None:
+        compare = "undefined"
+    elif expected == "blocked":
+        compare = "hit" if blocked else "miss"
+    else:
+        compare = "false_block" if blocked else "hit"
+    return {"observed": "blocked" if blocked else "passed", "compare": compare}
+
+
+def _interception_observed_cell(
+    record: Mapping[str, object], messages: TesterMessages
+) -> str:
+    """Return 是/否/未执行/不适用 for the observed client gate."""
+    key = _INTERCEPTION_OBSERVED_KEYS.get(str(record.get("observed") or ""))
+    return messages.get(key) if key is not None else ""
+
+
+def _interception_compare_cell(
+    record: Mapping[str, object], messages: TesterMessages
+) -> str:
+    """Return 命中/漏拦/误拦/未定义期望 for the observed-vs-expected gate."""
+    key = _INTERCEPTION_COMPARE_KEYS.get(str(record.get("compare") or ""))
+    return messages.get(key) if key is not None else ""
+
+
+def _sdk_interception_errors(item: Mapping[str, Any], messages: TesterMessages) -> str:
+    """Return the SDK's own validation errors, one block per gate attempt.
+
+    A blocked case has two attempts: the original request the case expects to be blocked, and
+    the replacement it dispatches. Both are printed so the error can be read against the request
+    rewrite instead of trusting the stage verdict alone. A clean pass leaves the cell empty.
+    """
+    entries: list[tuple[str, Mapping[str, object]]] = []
+    interception = item.get("interception")
+    stages = interception.get("stages") if isinstance(interception, Mapping) else None
+    original = stages.get("validate") if isinstance(stages, Mapping) else None
+    if isinstance(original, Mapping):
+        entries.append((messages.get("export_gate_original"), original))
+    validate = _map_of(item.get("stages")).get("validate")
+    if isinstance(validate, Mapping):
+        entries.append(
+            (
+                messages.get("export_gate_dispatched" if entries else "export_gate_validation"),
+                validate,
+            )
+        )
+    texts = [text for label, stage in entries if (text := _gate_error_text(label, stage, messages))]
+    return "\n".join(texts)
+
+
+def _gate_error_text(
+    label: str, stage: Mapping[str, object], messages: TesterMessages
+) -> str:
+    """Render one gate attempt's verdict, code and per-slot errors."""
+    detail = _map_of(stage.get("detail"))
+    verdict = str(detail.get("verdict") or stage.get("actual") or "")
+    if not verdict:
+        return ""
+    if verdict == "pass":
+        return ""
+    code = str(detail.get("code") or "")
+    if code:
+        lines = [messages.get("export_gate_head_code", label=label, verdict=verdict, code=code)]
+    else:
+        lines = [messages.get("export_gate_head", label=label, verdict=verdict)]
+    errors = detail.get("slotErrors")
+    for error in errors if isinstance(errors, list) else []:
+        if not isinstance(error, Mapping):
+            continue
+        slot = str(error.get("slotName") or "")
+        error_code = str(error.get("code") or "")
+        message = str(error.get("message") or "")
+        head = messages.get("export_gate_slot_separator").join(
+            part for part in (slot, error_code) if part
+        )
+        if head and message:
+            lines.append(messages.get("export_gate_slot_line", head=head, message=message))
+        else:
+            lines.append(f"- {head or message}")
+    if len(lines) == 1 and stage.get("message"):
+        lines.append(f"- {stage['message']}")
+    return "\n".join(lines)
+
+
+#: Keys of the model answer kept in the arbitration cell. ``exchanges`` is dropped because the
+#: interaction column and the trajectory already carry every frame.
+_SLIM_ANSWER_KEYS: Final[tuple[str, ...]] = (
+    "code",
+    "message",
+    "finalResult",
+    "negotiationSummary",
+)
+
+
+def _slim_answer(answer: Mapping[str, Any]) -> dict[str, object]:
+    """Return the answer object without the exchange list the other columns already carry."""
+    return {key: answer[key] for key in _SLIM_ANSWER_KEYS if key in answer}
 
 
 def _interception_verdict(item: Mapping[str, Any]) -> str:
