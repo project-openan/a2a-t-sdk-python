@@ -742,6 +742,9 @@ class NmsClient:
                 "X-Auth-Token": token,
                 **self._traceparent_headers(span),
             }
+            # A cancel is issued after the run's observation window, often from another task; the
+            # request itself is the only place its traceparent can be verified afterwards.
+            self._write_wire("out", method="POST", url=url, headers=headers, body={"id": task_id})
             try:
                 # The NMS answers 500 INTERNAL for an empty or ``{"taskId": …}`` body.
                 response = await self._http.post(

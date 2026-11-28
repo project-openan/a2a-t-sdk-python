@@ -1431,6 +1431,30 @@ async def test_cancel_posts_the_body_the_nms_requires() -> None:
     await client.aclose()
 
 
+async def test_a_cancel_is_written_to_the_wire_log_with_its_traceparent(tmp_path: Path) -> None:
+    """A cancel is issued after the run's observation window; the wire log is its only evidence."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={"accessSession": "token-1", "expires": 1800})
+        return httpx.Response(503, text="cancel unsupported")
+
+    client = _client(httpx.MockTransport(handle))
+    wire_path = tmp_path / "run" / "wire.jsonl"
+    client.set_wire_path(wire_path)
+    run_id = "fedcba9876543210fedcba9876543210"
+
+    with propagated_trace(run_id=run_id, downstream_trace_id=run_id):
+        assert await client.cancel_task("task-1") is False
+
+    records = [json.loads(line) for line in wire_path.read_text(encoding="utf-8").splitlines()]
+    outbound = [record for record in records if record["dir"] == "out"][-1]
+    assert outbound["url"] == f"{A2A_BASE}/tasks/task-1:cancel"
+    assert outbound["body"] == {"id": "task-1"}
+    assert outbound["headers"]["traceparent"].startswith(f"00-{run_id}-")
+    await client.aclose()
+
+
 async def test_webhook_transport_registers_the_push_config_the_vendor_accepts() -> None:
     """The NMS answers 500 INTERNAL unless the inline config carries an id and authentication."""
     queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()

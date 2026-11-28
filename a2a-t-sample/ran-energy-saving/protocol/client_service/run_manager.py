@@ -9,8 +9,8 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -628,14 +628,46 @@ class RunManager:
         if run.remote_task_id is None or not callable(cancel):
             return
         try:
-            await asyncio.wait_for(
-                cancel(run.remote_task_id),
-                timeout=REMOTE_CANCEL_TIMEOUT_SECONDS,
-            )
+            # The cancel is issued from the caller's task (a batch worker or an HTTP handler),
+            # not from the run task that owns the correlation contextvars. Re-bind the run here
+            # or both the local a2a-sdk hop and the vendor NMS leave without a traceparent.
+            with self._bound_run_trace(run):
+                await asyncio.wait_for(
+                    cancel(run.remote_task_id),
+                    timeout=REMOTE_CANCEL_TIMEOUT_SECONDS,
+                )
         except asyncio.TimeoutError:
             _LOGGER.warning("remote cancel timed out for task %s", run.remote_task_id)
         except Exception:  # noqa: BLE001 - cancel must never block the local stop
             _LOGGER.warning("remote cancel failed for task %s", run.remote_task_id, exc_info=True)
+
+    @staticmethod
+    @contextmanager
+    def _bound_run_trace(run: RunState) -> Generator[None, None, None]:
+        """Bind one run's correlation for work issued outside the run's own task.
+
+        ``_execute_in_context`` binds the same values for the run task; a remote cancel runs in
+        another task, whose contextvars are empty, so an unbound cancel would carry no
+        ``traceparent`` and no sample correlation headers.
+        """
+        exporter = run.langfuse_exporter
+        trace_tokens = set_active_trace(
+            trace_id=getattr(exporter, "trace_id", "") if exporter is not None else "",
+            parent_span_id=(getattr(exporter, "root_span_id", "") if exporter is not None else ""),
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            user_id=run.user_id,
+            downstream_trace_id=run.trace_id,
+            workflow_trace=bool(run.workflow_root_span_id),
+            decision_mode=run.mode,
+        )
+        span_starter = getattr(exporter, "start_vendor_span", None)
+        vendor_span_tokens = set_vendor_span_starter(span_starter)
+        try:
+            yield
+        finally:
+            reset_vendor_span_starter(vendor_span_tokens)
+            reset_active_trace(trace_tokens)
 
     def active_runs_for_task(self, task_id: str) -> list[RunState]:
         """Return the live runs whose remote or target Task is ``task_id``.

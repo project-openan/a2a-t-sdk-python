@@ -35,7 +35,12 @@ from shared.run_constants import (
     PROTOCOL_A2A_T,
     PROTOCOL_PURE,
 )
-from shared.trace_propagation import current_downstream_trace_id, current_trace_id
+from shared.trace_propagation import (
+    current_downstream_trace_id,
+    current_run_id,
+    current_trace_id,
+    current_traceparent,
+)
 
 
 class FakeRuntime:
@@ -634,6 +639,42 @@ async def test_cancel_asks_the_remote_side_and_stops_the_run(
     assert stored.status == "interrupted"
     assert stored.error == "The run was cancelled by the operator."
     assert await manager.cancel(run.run_id) is False
+
+
+async def test_cancel_carries_the_run_trace_context(
+    tmp_path: Path,
+    offline_config: SampleConfig,
+) -> None:
+    """The remote cancel runs in the caller's task, so it must re-bind the run's correlation.
+
+    Without the binding the local a2a-sdk hop and the vendor NMS receive no ``traceparent`` (and
+    no sample correlation headers), which is what the test team saw on the tester cancel frame.
+    """
+    wait = asyncio.Event()
+    manager, _, runtimes = _manager(tmp_path, offline_config, wait=wait)
+    run = await manager.start("information", "auto", "sse", user_request="slow")
+    while not runtimes or not runtimes[0].entered.is_set():
+        await asyncio.sleep(0.01)
+
+    seen: dict[str, str] = {}
+
+    async def cancel_remote(task_id: str) -> None:
+        seen["run_id"] = current_run_id()
+        seen["downstream"] = current_downstream_trace_id()
+        seen["traceparent"] = current_traceparent()
+
+    runtime = run.runtime
+    assert runtime is not None
+    runtime.transport = SimpleNamespace(cancel=cancel_remote)  # type: ignore[attr-defined]
+    run.remote_task_id = "task-1"
+
+    assert await manager.cancel(run.run_id) is True
+
+    assert seen["run_id"] == run.run_id
+    assert seen["downstream"] == run.trace_id
+    assert seen["traceparent"].startswith(f"00-{run.trace_id}-")
+    # The caller's context is restored, not left pointing at the finished run.
+    assert current_run_id() == ""
 
 
 async def test_release_finishes_the_run_without_an_operator_cancel_label(
